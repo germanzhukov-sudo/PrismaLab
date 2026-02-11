@@ -530,6 +530,26 @@ class PrismaLabStore:
 
     # --- Логирование платежей ---
 
+    def is_payment_processed(self, payment_id: str) -> bool:
+        """Проверяет, был ли платёж уже обработан (защита от дублирования)."""
+        if not payment_id:
+            return False
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT 1 FROM public.payments WHERE payment_id = %s LIMIT 1",
+                        (payment_id,),
+                    )
+                    return cur.fetchone() is not None
+            else:
+                cur = conn.execute(
+                    "SELECT 1 FROM payments WHERE payment_id = ? LIMIT 1",
+                    (payment_id,),
+                )
+                return cur.fetchone() is not None
+
     def log_payment(
         self,
         user_id: int,

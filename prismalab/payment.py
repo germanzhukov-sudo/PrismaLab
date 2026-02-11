@@ -160,9 +160,12 @@ async def poll_payment_status(
         status = get_payment_status(payment_id)
 
         if status == "succeeded":
-            logger.info("Платёж %s успешен, начисляем кредиты", payment_id)
+            # Защита от дублирования: проверяем, не обработан ли уже
+            if store.is_payment_processed(payment_id):
+                logger.info("Платёж %s уже обработан ранее, пропускаем", payment_id)
+                return
 
-            # Логируем платёж
+            logger.info("Платёж %s успешен, начисляем кредиты", payment_id)
             try:
                 store.log_payment(
                     user_id=user_id,
@@ -248,6 +251,11 @@ async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
         user_id = int(user_id_str)
         credits = int(credits_str)
     except ValueError:
+        return 200, "OK"
+
+    # Защита от дублирования: проверяем, не обработан ли уже
+    if store.is_payment_processed(payment_id):
+        logger.info("Webhook: платёж %s уже обработан ранее, пропускаем", payment_id)
         return 200, "OK"
 
     # Логируем платёж для аналитики
