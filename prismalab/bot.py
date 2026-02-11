@@ -1422,6 +1422,13 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
     )
 
 
+def _examples_intro_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура под intro: кнопка «Смотреть примеры»."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Смотреть примеры", callback_data="pl_examples_show_albums")],
+    ])
+
+
 def _examples_nav_keyboard(page: int, total: int) -> InlineKeyboardMarkup:
     """Клавиатура навигации по альбомам примеров."""
     channel_url = (os.getenv("PRISMALAB_EXAMPLES_CHANNEL_URL") or "https://t.me/prismalab_styles/8").strip()
@@ -1494,7 +1501,6 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
     if to_delete:
         await asyncio.gather(*[bot.delete_message(chat_id=chat_id, message_id=mid) for mid in to_delete], return_exceptions=True)
 
-    channel_url = (os.getenv("PRISMALAB_EXAMPLES_CHANNEL_URL") or "https://t.me/prismalab_styles/8").strip()
     intro = (
         "<b>Примеры персональных фотосессий</b>\n\n"
         "Ниже – результаты работы <b>Персоны</b> ✨\n"
@@ -1503,15 +1509,8 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
         "Мы не делаем абстрактную «красивую картинку»\n"
         "Мы усиливаем внешний вид: на снимках – вы, просто <b>спокойнее, смелее и свободнее</b>\n\n"
         "Если вы тоже решите поделиться результатами, мы <b>с радостью подарим приятный бонус</b> 🤍\n\n"
-        f'В <a href="{channel_url}">нашем канале</a> вы можете посмотреть больше образов – и для <b>Экспресс-фото</b>, и для <b>Персоны</b>, '
-        "чтобы лучше понять стили и атмосферу\n\n"
         "<b>Листайте, присматривайтесь и представляйте себя. Всё остальное сделаем мы</b>"
     )
-    await query.edit_message_text(
-        intro, reply_markup=None, parse_mode="HTML", disable_web_page_preview=True
-    )
-    context.user_data[USERDATA_EXAMPLES_INTRO_MSG_ID] = query.message.message_id
-
     albums = [a for a in _load_examples_albums() if (a.get("file_ids") or [])]
     if not albums:
         empty_kb = InlineKeyboardMarkup([
@@ -1521,15 +1520,37 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
             ],
             [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
         ])
-        await bot.send_message(
-            chat_id=chat_id,
-            text="Хотите попробовать?",
+        await query.edit_message_text(
+            intro + "\n\n<b>Хотите попробовать?</b>",
             reply_markup=empty_kb,
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
+    else:
+        await query.edit_message_text(
+            intro,
+            reply_markup=_examples_intro_keyboard(),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    context.user_data[USERDATA_EXAMPLES_INTRO_MSG_ID] = query.message.message_id
+
+
+async def handle_examples_show_albums_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «Смотреть примеры»: показываем альбомы и навигацию под intro."""
+    query = update.callback_query
+    if not query:
         return
+    await query.answer()
+    chat_id = query.message.chat_id if query.message else 0
+    bot = context.bot
     saved_page = context.user_data.get(USERDATA_EXAMPLES_PAGE, 0)
-    await _show_examples_page(bot, chat_id, context, saved_page)
+    nav_msg_id = context.user_data.get(USERDATA_EXAMPLES_NAV_MSG_ID)
+    await _show_examples_page(
+        bot, chat_id, context, saved_page,
+        delete_previous=True,
+        nav_msg_id_to_delete=nav_msg_id,
+    )
 
 
 async def handle_examples_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1948,8 +1969,9 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             text,
             reply_markup=_persona_styles_keyboard(gender, page=0),
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
-    context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
+        context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
 
 
@@ -2062,11 +2084,12 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
     else:
         text = f"<b>Оплата получена</b> ✅\n\n<b>Выберите стиль</b> 👇\n\n{_format_balance_persona(new_total)}\n\n{STYLE_EXAMPLES_FOOTER}"
         await query.edit_message_text(
-        text,
-        reply_markup=_persona_styles_keyboard(gender, page=0),
-        parse_mode="HTML",
-    )
-    context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
+            text,
+            reply_markup=_persona_styles_keyboard(gender, page=0),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
 
 
@@ -2299,6 +2322,7 @@ async def handle_persona_page_callback(update: Update, context: ContextTypes.DEF
         text,
         reply_markup=_persona_styles_keyboard(gender, page),
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
     context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = page
@@ -2410,7 +2434,7 @@ async def handle_fast_gender_callback(update: Update, context: ContextTypes.DEFA
     context.user_data[USERDATA_MODE] = "fast"
     has_photo = bool(context.user_data.get(USERDATA_PHOTO_FILE_IDS))
     text, reply_markup = _fast_after_gender_content(profile, gender=gender, has_photo=has_photo)
-    extra = {"parse_mode": "HTML"} if "<b>" in text else {}
+    extra = {"parse_mode": "HTML", "disable_web_page_preview": True} if "<b>" in text else {}
     await query.edit_message_text(text, reply_markup=reply_markup, **extra)
     context.user_data[USERDATA_FAST_STYLE_MSG_ID] = query.message.message_id
 
@@ -2568,6 +2592,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             text,
             reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=page),
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
         context.user_data[USERDATA_FAST_STYLE_MSG_ID] = query.message.message_id
     else:
@@ -2650,6 +2675,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
                 text,
                 reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=0),
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
             context.user_data[USERDATA_FAST_STYLE_MSG_ID] = reply_msg.message_id
             context.user_data[USERDATA_FAST_STYLE_PAGE] = 0
@@ -2664,6 +2690,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
                 text,
                 reply_markup=_persona_styles_keyboard(gender, page=0),
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
         elif product_type == "persona_create":
             context.user_data[USERDATA_MODE] = "persona"
@@ -2713,6 +2740,7 @@ async def handle_fast_change_style_callback(update: Update, context: ContextType
         text,
         reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=page),
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
     context.user_data[USERDATA_FAST_STYLE_MSG_ID] = query.message.message_id
 
@@ -2861,6 +2889,7 @@ async def _run_fast_generation_impl(
             text=text,
             reply_markup=reply_markup,
             parse_mode="HTML",
+            disable_web_page_preview=True,
         )
         await _update_fast_style_message(context, chat_id, msg)
 
@@ -3243,6 +3272,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 text,
                 reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, page=page),
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
             chat_id = update.effective_chat.id if update.effective_chat else 0
             await _update_fast_style_message(context, chat_id, msg)
@@ -3405,6 +3435,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 text,
                 reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, page=page),
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
             chat_id = update.effective_chat.id if update.effective_chat else 0
             await _update_fast_style_message(context, chat_id, msg)
@@ -3634,6 +3665,8 @@ async def _start_astria_lora(
                 chat_id=chat_id,
                 text=text,
                 reply_markup=_persona_styles_keyboard(gender),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
             )
         else:
             context.user_data[USERDATA_MODE] = "normal"
@@ -5252,6 +5285,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_persona_style_callback, pattern="^pl_persona_style:"))
     application.add_handler(CallbackQueryHandler(handle_persona_back_callback, pattern="^pl_persona_back$"))
     application.add_handler(CallbackQueryHandler(handle_start_examples_callback, pattern="^pl_start_examples$"))
+    application.add_handler(CallbackQueryHandler(handle_examples_show_albums_callback, pattern="^pl_examples_show_albums$"))
     application.add_handler(CallbackQueryHandler(handle_examples_page_callback, pattern="^pl_examples_page:"))
     application.add_handler(CallbackQueryHandler(handle_start_faq_callback, pattern="^pl_start_faq$"))
     application.add_handler(CallbackQueryHandler(handle_help_callback, pattern="^pl_help$"))
