@@ -1,0 +1,1 @@
+"""PrismaLab Admin Panel."""

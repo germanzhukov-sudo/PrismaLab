@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+.env
+.DS_Store
+*.log
+*.db
+*.bak
+*.bak2
+README.md

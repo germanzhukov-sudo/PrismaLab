@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Дашборд — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-graph-up me-2"></i>Дашборд</h2>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+        <div class="period-selector btn-group">
+            <a href="?period=today" class="btn btn-outline-primary btn-sm {% if period == 'today' %}active{% endif %}">Сегодня</a>
+            <a href="?period=yesterday" class="btn btn-outline-primary btn-sm {% if period == 'yesterday' %}active{% endif %}">Вчера</a>
+            <a href="?period=week" class="btn btn-outline-primary btn-sm {% if period == 'week' %}active{% endif %}">Неделя</a>
+            <a href="?period=month" class="btn btn-outline-primary btn-sm {% if period == 'month' %}active{% endif %}">Месяц</a>
+        </div>
+        <form method="GET" class="d-flex gap-2 align-items-center">
+            <input type="hidden" name="period" value="custom">
+            <input type="date" name="date_from" class="form-control form-control-sm" style="width: 140px;" value="{{ date_from }}">
+            <span class="text-muted">—</span>
+            <input type="date" name="date_to" class="form-control form-control-sm" style="width: 140px;" value="{{ date_to }}">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel"></i></button>
+        </form>
+        <a href="{{ admin_base }}/export?type=payments&date_from={{ date_from }}&date_to={{ date_to }}" class="btn btn-success btn-sm">
+            <i class="bi bi-download"></i> CSV
+        </a>
+    </div>
+</div>
+
+<!-- Статистика -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.users.total }}</div>
+            <div class="stat-label"><i class="bi bi-people"></i> Всего пользователей</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card primary">
+            <div class="stat-value">₽{{ "%.0f"|format(stats.payments.total_revenue) }}</div>
+            <div class="stat-label"><i class="bi bi-currency-dollar"></i> Выручка за период</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">₽{{ "%.0f"|format(stats.payments.avg_check) }}</div>
+            <div class="stat-label"><i class="bi bi-receipt"></i> Средний чек</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.conversion }}%</div>
+            <div class="stat-label"><i class="bi bi-funnel"></i> Конверсия в покупку</div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.users.new }}</div>
+            <div class="stat-label"><i class="bi bi-person-plus"></i> Новых за период</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.payments.express.count }}</div>
+            <div class="stat-label"><i class="bi bi-lightning"></i> Покупок Экспресс (₽{{ "%.0f"|format(stats.payments.express.revenue) }})</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.payments.persona.count }}</div>
+            <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона (₽{{ "%.0f"|format(stats.payments.persona.revenue) }})</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.generations.free }}</div>
+            <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
+        </div>
+    </div>
+</div>
+
+<!-- Себестоимость и маржа -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="stat-card {% if stats.margin.amount >= 0 %}success{% else %}danger{% endif %}">
+            <div class="stat-value">₽{{ "%.0f"|format(stats.margin.amount) }}</div>
+            <div class="stat-label"><i class="bi bi-graph-up-arrow"></i> Маржа ({{ stats.margin.percent }}%)</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card warning">
+            <div class="stat-value">₽{{ "%.0f"|format(stats.costs.total) }}</div>
+            <div class="stat-label"><i class="bi bi-calculator"></i> Себестоимость</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.generations.fast }}</div>
+            <div class="stat-label"><i class="bi bi-lightning"></i> Фото Экспресс (₽{{ "%.0f"|format(stats.costs.fast_photos) }})</div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ stats.generations.persona }}</div>
+            <div class="stat-label"><i class="bi bi-person-badge"></i> Фото Персона (₽{{ "%.0f"|format(stats.costs.persona_photos) }})</div>
+        </div>
+    </div>
+</div>
+
+<!-- Графики -->
+<div class="row">
+    <div class="col-md-8 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-bar-chart me-2"></i>Выручка по дням
+            </div>
+            <div class="card-body">
+                <canvas id="revenueChart" height="100"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-pie-chart me-2"></i>Продукты
+            </div>
+            <div class="card-body">
+                <canvas id="productsChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-people me-2"></i>Новые пользователи по дням
+            </div>
+            <div class="card-body">
+                <canvas id="usersChart" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-image me-2"></i>Генерации по дням
+            </div>
+            <div class="card-body">
+                <canvas id="genChart" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const chartData = {{ chart_data | tojson }};
+    const stats = {{ stats | tojson }};
+
+    // График выручки
+    new Chart(document.getElementById('revenueChart'), {
+        type: 'bar',
+        data: {
+            labels: chartData.dates.map(d => d.slice(5)),
+            datasets: [{
+                label: 'Выручка ₽',
+                data: chartData.revenue,
+                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // Круговая диаграмма продуктов
+    new Chart(document.getElementById('productsChart'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Экспресс', 'Персона'],
+            datasets: [{
+                data: [stats.payments.express.revenue, stats.payments.persona.revenue],
+                backgroundColor: ['#28a745', '#667eea']
+            }]
+        },
+        options: { responsive: true }
+    });
+
+    // График пользователей
+    new Chart(document.getElementById('usersChart'), {
+        type: 'line',
+        data: {
+            labels: chartData.dates.map(d => d.slice(5)),
+            datasets: [{
+                label: 'Новые пользователи',
+                data: chartData.users,
+                borderColor: '#667eea',
+                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // График генераций
+    new Chart(document.getElementById('genChart'), {
+        type: 'line',
+        data: {
+            labels: chartData.dates.map(d => d.slice(5)),
+            datasets: [{
+                label: 'Генерации',
+                data: chartData.generations,
+                borderColor: '#28a745',
+                backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+</script>
+{% endblock %}

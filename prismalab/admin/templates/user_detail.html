@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Пользователь {{ profile.user_id }} — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ admin_base }}/users" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left"></i> Назад
+    </a>
+</div>
+
+<div class="row">
+    <!-- Профиль -->
+    <div class="col-md-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-person me-2"></i>Пользователь
+            </div>
+            <div class="card-body">
+                <h3 class="mb-3">{{ profile.user_id }}</h3>
+
+                <div class="mb-3">
+                    <span class="text-muted">Пол:</span>
+                    {% if profile.subject_gender == 'male' %}
+                    <i class="bi bi-gender-male text-primary"></i> Мужской
+                    {% elif profile.subject_gender == 'female' %}
+                    <i class="bi bi-gender-female text-danger"></i> Женский
+                    {% else %}
+                    <span class="text-muted">Не указан</span>
+                    {% endif %}
+                </div>
+
+                <hr>
+
+                <div class="row text-center">
+                    <div class="col-6">
+                        <div class="h4 mb-0 text-success">{{ profile.paid_generations_remaining }}</div>
+                        <small class="text-muted">Экспресс</small>
+                    </div>
+                    <div class="col-6">
+                        <div class="h4 mb-0" style="color: #667eea;">{{ profile.persona_credits_remaining }}</div>
+                        <small class="text-muted">Персона</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Начисление кредитов -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <i class="bi bi-plus-circle me-2"></i>Начислить кредиты
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ admin_base }}/users/{{ profile.user_id }}/credits">
+                    <div class="mb-3">
+                        <label class="form-label">Тип</label>
+                        <select name="credit_type" class="form-select">
+                            <option value="fast">Экспресс (fast)</option>
+                            <option value="persona">Персона</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Количество</label>
+                        <input type="number" name="delta" class="form-control" value="10" min="-1000" max="1000">
+                        <small class="text-muted">Положительное = добавить, отрицательное = списать</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-check"></i> Применить
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- История -->
+    <div class="col-md-8">
+        <!-- Платежи -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-credit-card me-2"></i>История платежей
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Тип</th>
+                            <th>Кредитов</th>
+                            <th>Сумма</th>
+                            <th>Способ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in history.payments %}
+                        <tr>
+                            <td>{{ p.created_at|fmt_dt }}</td>
+                            <td>
+                                {% if p.product_type == 'fast' %}
+                                <span class="badge bg-success">Экспресс</span>
+                                {% else %}
+                                <span class="badge" style="background: #667eea;">Персона</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ p.credits }}</td>
+                            <td>₽{{ p.amount_rub }}</td>
+                            <td>
+                                {% if p.payment_method == 'telegram' %}
+                                <i class="bi bi-telegram"></i>
+                                {% else %}
+                                <i class="bi bi-credit-card-2-front"></i>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-3">Нет платежей</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- События -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-list-ul me-2"></i>Последние события
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Событие</th>
+                            <th>Детали</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for e in history.events[:50] %}
+                        <tr>
+                            <td>{{ e.created_at|fmt_dt }}</td>
+                            <td>
+                                {% if e.event_type == 'start' %}
+                                <span class="badge bg-info">Старт</span>
+                                {% elif e.event_type == 'generation' %}
+                                <span class="badge bg-primary">Генерация</span>
+                                {% elif e.event_type == 'payment' %}
+                                <span class="badge bg-success">Платёж</span>
+                                {% elif e.event_type == 'admin_credits' %}
+                                <span class="badge bg-warning">Админ</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ e.event_type }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <small class="text-muted">
+                                    {{ e.event_data | format_event }}
+                                </small>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="text-center text-muted py-3">Нет событий</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

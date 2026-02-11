@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Платежи — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-credit-card me-2"></i>Платежи</h2>
+    <a href="{{ admin_base }}/export?type=payments{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}" class="btn btn-success">
+        <i class="bi bi-download"></i> Скачать CSV
+    </a>
+</div>
+
+<!-- Фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="GET" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">Тип продукта</label>
+                <select name="product_type" class="form-select">
+                    <option value="">Все</option>
+                    <option value="fast" {% if product_type == 'fast' %}selected{% endif %}>Экспресс</option>
+                    <option value="persona_topup" {% if product_type == 'persona_topup' %}selected{% endif %}>Персона (пополнение)</option>
+                    <option value="persona_create" {% if product_type == 'persona_create' %}selected{% endif %}>Персона (создание)</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Дата от</label>
+                <input type="date" name="date_from" class="form-control" value="{{ date_from }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Дата до</label>
+                <input type="date" name="date_to" class="form-control" value="{{ date_to }}">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary me-2"><i class="bi bi-funnel"></i> Фильтр</button>
+                <a href="{{ admin_base }}/payments" class="btn btn-outline-secondary">Сброс</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Всего: {{ total }}
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User ID</th>
+                    <th>Тип</th>
+                    <th>Кредитов</th>
+                    <th>Сумма</th>
+                    <th>Способ</th>
+                    <th>Дата</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in payments %}
+                <tr>
+                    <td>{{ p.id }}</td>
+                    <td>
+                        <a href="{{ admin_base }}/users/{{ p.user_id }}">{{ p.user_id }}</a>
+                    </td>
+                    <td>
+                        {% if p.product_type == 'fast' %}
+                        <span class="badge bg-success">Экспресс</span>
+                        {% elif p.product_type == 'persona_topup' %}
+                        <span class="badge" style="background: #667eea;">Персона+</span>
+                        {% elif p.product_type == 'persona_create' %}
+                        <span class="badge" style="background: #764ba2;">Персона New</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ p.product_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ p.credits }}</td>
+                    <td><strong>₽{{ p.amount_rub }}</strong></td>
+                    <td>
+                        {% if p.payment_method == 'telegram' %}
+                        <i class="bi bi-telegram text-primary" title="Telegram Payments"></i>
+                        {% else %}
+                        <i class="bi bi-credit-card-2-front text-secondary" title="ЮKassa"></i>
+                        {% endif %}
+                    </td>
+                    <td>{{ p.created_at|fmt_dt }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">Нет платежей</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Пагинация -->
+{% if total_pages > 1 %}
+<nav class="mt-4">
+    <ul class="pagination justify-content-center">
+        {% if page > 1 %}
+        <li class="page-item">
+            <a class="page-link" href="?page={{ page - 1 }}{% if product_type %}&product_type={{ product_type }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}">←</a>
+        </li>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ p }}{% if product_type %}&product_type={{ product_type }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}">{{ p }}</a>
+            </li>
+            {% elif p == 4 or p == total_pages - 3 %}
+            <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+
+        {% if page < total_pages %}
+        <li class="page-item">
+            <a class="page-link" href="?page={{ page + 1 }}{% if product_type %}&product_type={{ product_type }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}">→</a>
+        </li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}
