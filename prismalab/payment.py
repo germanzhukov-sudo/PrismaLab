@@ -52,7 +52,7 @@ async def send_payment_alert(user_id: int, amount_rub: float, credits: int, prod
         f"Сумма: {amount_rub:.0f} ₽\n"
         f"Продукт: {product_name}\n"
         f"Кредиты: {credits}\n"
-        f"User ID: {user_id}"
+        f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>"
     )
 
     try:
