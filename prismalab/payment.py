@@ -30,38 +30,8 @@ YOOKASSA_RETURN_URL = (os.getenv("YOOKASSA_RETURN_URL") or "https://t.me/your_bo
 # Telegram Payments (инвойс в Telegram, без webhook)
 TELEGRAM_PROVIDER_TOKEN = (os.getenv("TELEGRAM_PROVIDER_TOKEN") or "").strip()
 
-# Алерты админу о платежах
-ALERT_ADMIN_ID = int(os.getenv("PRISMALAB_SUPPORT_ADMIN_ID") or "0")
-SUPPORT_BOT_TOKEN = (os.getenv("PRISMALAB_SUPPORT_BOT_TOKEN") or "").strip()
-
-
-async def send_payment_alert(user_id: int, amount_rub: float, credits: int, product_type: str) -> None:
-    """Отправляет алерт админу о новом платеже через support-бота."""
-    if not ALERT_ADMIN_ID or not SUPPORT_BOT_TOKEN:
-        return
-
-    product_names = {
-        "fast": "Экспресс",
-        "persona_topup": "Персона (пополнение)",
-        "persona_create": "Создание Персоны",
-    }
-    product_name = product_names.get(product_type, product_type)
-
-    text = (
-        f"💰 <b>Новый платёж!</b>\n\n"
-        f"Сумма: {amount_rub:.0f} ₽\n"
-        f"Продукт: {product_name}\n"
-        f"Кредиты: {credits}\n"
-        f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>"
-    )
-
-    try:
-        from telegram import Bot
-        bot = Bot(token=SUPPORT_BOT_TOKEN)
-        await bot.send_message(chat_id=ALERT_ADMIN_ID, text=text, parse_mode="HTML")
-        logger.info("Алерт о платеже отправлен админу")
-    except Exception as e:
-        logger.warning("Не удалось отправить алерт о платеже: %s", e)
+# Алерт о платеже — используем модуль alerts
+from prismalab.alerts import alert_payment as send_payment_alert
 
 
 def use_yookassa() -> bool:

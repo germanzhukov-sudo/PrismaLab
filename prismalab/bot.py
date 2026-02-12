@@ -65,6 +65,7 @@ from prismalab.payment import (
 from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
 from prismalab.styles import STYLES, get_style
 from prismalab.storage import PrismaLabStore
+from prismalab.alerts import alert_bot_started, alert_generation_error, alert_slow_generation, alert_daily_report
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -823,7 +824,6 @@ PERSONA_STYLES_MALE = [
     ("Улицы Нью-Йорка", "nyc_streets"),
     ("На рыбалке", "fishing"),
     ("Стильная лестница", "stylish_stairs"),
-    ("Джазовый бар", "jazz_bar"),
 ]
 
 
@@ -2915,9 +2915,15 @@ async def _run_fast_generation_impl(
         await _update_fast_style_message(context, chat_id, msg)
 
     try:
+        start_time = time.time()
         await asyncio.wait_for(_do_generation(), timeout=float(total_timeout))
+        duration = time.time() - start_time
+        # Алерт о медленной генерации (> 5 минут)
+        if duration > 300:
+            await alert_slow_generation(user_id, duration, "express")
     except asyncio.TimeoutError:
         logger.warning("Быстрое фото: таймаут %sс (стиль %s)", total_timeout, style_id)
+        await alert_generation_error(user_id, f"Таймаут {total_timeout}с", "express")
         try:
             await bot.edit_message_text(
                 chat_id=chat_id, message_id=status_message_id,
@@ -2927,12 +2933,14 @@ async def _run_fast_generation_impl(
             await bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
     except KieError as e:
         logger.error("Быстрое фото KIE: %s", e)
+        await alert_generation_error(user_id, str(e), "express")
         try:
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=f"{prefix}{USER_FRIENDLY_ERROR}")
         except Exception:
             await bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
     except Exception as e:
         logger.exception("Быстрое фото (стиль %s): %s", style_id, e)
+        await alert_generation_error(user_id, str(e), "express")
         try:
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=f"{prefix}{USER_FRIENDLY_ERROR}")
         except Exception:
@@ -4690,6 +4698,8 @@ async def _run_style_job(
 
     except AstriaError as e:
         logger.warning("Astria error: %s", e)
+        gen_type = "persona" if is_persona_style else "express"
+        await alert_generation_error(user_id, str(e), gen_type)
         err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else USER_FRIENDLY_ERROR
         if is_persona_style and context:
             profile = store.get_user(user_id)
@@ -4703,6 +4713,8 @@ async def _run_style_job(
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg)
     except Exception as e:
         logger.error("Ошибка PrismaLab job: %s", e, exc_info=True)
+        gen_type = "persona" if is_persona_style else "express"
+        await alert_generation_error(user_id, str(e), gen_type)
         try:
             if is_persona_style:
                 err_text = PERSONA_ERROR_MESSAGE
@@ -5345,6 +5357,21 @@ def main() -> None:
         loop.set_default_executor(executor)
 
         run_webhook_server(app.bot, store)
+
+        # Алерт о запуске бота
+        await alert_bot_started()
+
+        # Дневной отчёт в 21:00 по Москве (UTC+3)
+        async def daily_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await alert_daily_report(store)
+
+        from datetime import time as dt_time
+        job_queue = app.job_queue
+        if job_queue:
+            # 21:00 MSK = 18:00 UTC
+            job_queue.run_daily(daily_report_job, time=dt_time(hour=18, minute=0, second=0))
+            logger.info("Дневной отчёт запланирован на 21:00 MSK")
+
         default_commands = [
             BotCommand("menu", "Главное меню"),
             BotCommand("profile", "Профиль"),
