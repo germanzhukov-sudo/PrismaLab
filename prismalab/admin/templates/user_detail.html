@@ -17,7 +17,12 @@
                 <i class="bi bi-person me-2"></i>Пользователь
             </div>
             <div class="card-body">
-                <h3 class="mb-3">{{ profile.user_id }}</h3>
+                <h3 class="mb-3">
+                    <a href="tg://user?id={{ profile.user_id }}" class="text-decoration-none text-dark">
+                        {{ profile.user_id }}
+                        <i class="bi bi-telegram text-primary"></i>
+                    </a>
+                </h3>
 
                 <div class="mb-3">
                     <span class="text-muted">Пол:</span>

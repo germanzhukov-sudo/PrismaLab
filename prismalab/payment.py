@@ -164,6 +164,55 @@ def get_payment_status(payment_id: str) -> str | None:
         return None
 
 
+def _yookassa_success_content(
+    bot: Any, store: Any, user_id: int, product_type: str, credits: int
+) -> tuple[str, Any]:
+    """Текст и клавиатура после успешной оплаты ЮKassa — как в Telegram Payments."""
+    if product_type == "fast":
+        from prismalab.bot import (
+            _format_balance_express,
+            _fast_style_choice_keyboard,
+            _generations_count_fast,
+            STYLE_EXAMPLES_FOOTER,
+        )
+        profile = store.get_user(user_id)
+        credits_now = _generations_count_fast(profile)
+        gender = getattr(profile, "subject_gender", None) or "female"
+        text = (
+            f"Оплата получена ✅\n\n"
+            f"{_format_balance_express(credits_now)}\n\n"
+            f"<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n"
+            f"{STYLE_EXAMPLES_FOOTER}"
+        )
+        kb = _fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=0)
+        return text, kb
+
+    if product_type == "persona_topup":
+        from prismalab.bot import (
+            _format_balance_persona,
+            _persona_styles_keyboard,
+            STYLE_EXAMPLES_FOOTER,
+        )
+        profile = store.get_user(user_id)
+        new_total = profile.persona_credits_remaining
+        gender = getattr(profile, "subject_gender", None) or "female"
+        text = (
+            f"Оплата получена ✅\n\n"
+            f"<b>Выберите стиль</b> 👇\n\n"
+            f"{_format_balance_persona(new_total)}\n\n"
+            f"{STYLE_EXAMPLES_FOOTER}"
+        )
+        kb = _persona_styles_keyboard(gender, page=0)
+        return text, kb
+
+    if product_type == "persona_create":
+        from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
+        return PERSONA_RULES_MESSAGE, _persona_rules_keyboard()
+
+    # fallback
+    return "✅ Оплата получена!", None
+
+
 async def poll_payment_status(
     payment_id: str,
     bot: Any,
@@ -216,22 +265,26 @@ async def poll_payment_status(
                 profile = store.get_user(user_id)
                 new_total = profile.paid_generations_remaining + credits
                 store.set_paid_generations_remaining(user_id, new_total)
-                msg_text = f"✅ Оплата получена!\n\nДобавлено {credits} кредитов Экспресс-фото."
             elif product_type == "persona_topup":
                 profile = store.get_user(user_id)
                 new_total = profile.persona_credits_remaining + credits
                 store.set_persona_credits(user_id, new_total)
-                msg_text = f"✅ Оплата получена!\n\nДобавлено {credits} кредитов Персоны."
             elif product_type == "persona_create":
                 store.set_persona_credits(user_id, credits)
                 store.set_astria_lora_tune(user_id=user_id, tune_id=None)
-                msg_text = f"✅ Оплата получена!\n\n{credits} кредитов Персоны. Загрузите 10 фото для обучения модели."
-            else:
-                msg_text = "✅ Оплата получена!"
+
+            # Текст и клавиатура как в Telegram Payments (bot.handle_successful_payment)
+            msg_text, reply_markup = _yookassa_success_content(bot, store, user_id, product_type, credits)
 
             # Отправляем сообщение
             try:
-                await bot.send_message(chat_id=chat_id, text=msg_text, parse_mode="HTML")
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=msg_text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True,
+                )
             except Exception as e:
                 logger.warning("Не удалось отправить сообщение об оплате: %s", e)
 
@@ -312,26 +365,31 @@ async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
         profile = store.get_user(user_id)
         new_total = profile.paid_generations_remaining + credits
         store.set_paid_generations_remaining(user_id, new_total)
-        msg_text = f"Оплата получена ✅\n\nДобавлено {credits} кредитов Экспресс-фото. Можете выбирать стиль и загружать фото."
     elif product_type in ("persona_topup", "persona_create"):
         profile = store.get_user(user_id)
         if product_type == "persona_create":
             store.set_persona_credits(user_id, credits)
             store.set_astria_lora_tune(user_id=user_id, tune_id=None)  # пересоздание
-            msg_text = f"Оплата получена ✅\n\n{credits} кредитов Персоны. Загрузите 10 фото для обучения модели."
         else:
             new_total = profile.persona_credits_remaining + credits
             store.set_persona_credits(user_id, new_total)
-            msg_text = f"Оплата получена ✅\n\nДобавлено {credits} кредитов Персоны."
     else:
         logger.warning("Неизвестный product_type в платеже %s: %s", payment_id, product_type)
         return 200, "OK"
+
+    msg_text, reply_markup = _yookassa_success_content(bot, store, user_id, product_type, credits)
 
     chat_id = metadata.get("chat_id")
     if chat_id:
         try:
             chat_id_int = int(chat_id)
-            await bot.send_message(chat_id=chat_id_int, text=msg_text, parse_mode="HTML")
+            await bot.send_message(
+                chat_id=chat_id_int,
+                text=msg_text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
         except Exception as e:
             logger.warning("Не удалось отправить сообщение об оплате: %s", e)
 

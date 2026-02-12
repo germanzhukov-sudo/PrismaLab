@@ -35,7 +35,12 @@
             <tbody>
                 {% for user in users %}
                 <tr>
-                    <td><strong>{{ user.user_id }}</strong></td>
+                    <td>
+                        <a href="tg://user?id={{ user.user_id }}" class="text-decoration-none">
+                            <strong>{{ user.user_id }}</strong>
+                            <i class="bi bi-telegram text-primary ms-1"></i>
+                        </a>
+                    </td>
                     <td>
                         {% if user.paid_generations_remaining %}
                         <span class="badge bg-success">{{ user.paid_generations_remaining }}</span>
