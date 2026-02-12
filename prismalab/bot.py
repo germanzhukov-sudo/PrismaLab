@@ -887,6 +887,14 @@ FAST_TARIFFS_AFTER_GENERATION_MESSAGE = """<b>Баланс Экспресс-фо
 Или переходите на <b>Персону</b> для шикарных фотосессий ✨"""
 
 
+def _payment_yookassa_keyboard(url: str, back_callback: str) -> InlineKeyboardMarkup:
+    """Клавиатура экрана оплаты ЮKassa: Оплатить + Назад."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить", url=url)],
+        [InlineKeyboardButton("Назад", callback_data=back_callback)],
+    ])
+
+
 def _fast_tariff_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура «тарифы»: пакеты генераций + Персона + Назад."""
     return InlineKeyboardMarkup([
@@ -1769,7 +1777,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
             await query.edit_message_text(
                 f"<b>Создание Персоны + {credits} кредитов за {amount:.0f} ₽</b>\n\nОплатите удобным способом, после оплаты загрузите 10 фото",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатить", url=url)]]),
+                reply_markup=_payment_yookassa_keyboard(url, "pl_persona_back"),
             )
             asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
@@ -1887,7 +1895,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             await query.edit_message_text(
                 f"<b>{credits} кредитов Персона за {amount:.0f} ₽</b>\n\nОплатите удобным способом, кредиты зачислим моментально",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатить", url=url)]]),
+                reply_markup=_payment_yookassa_keyboard(url, "pl_persona_show_credits_out"),
             )
             asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
@@ -2005,7 +2013,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
             await query.edit_message_text(
                 f"<b>{credits} кредитов Персона за {amount:.0f} ₽</b>\n\nОплатите удобным способом, кредиты зачислим моментально",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатить", url=url)]]),
+                reply_markup=_payment_yookassa_keyboard(url, "pl_persona_show_credits_out"),
             )
             asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
@@ -2203,7 +2211,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
             await query.edit_message_text(
                 f"<b>Создание Персоны + {credits} кредитов за {amount:.0f} ₽</b>\n\nОплатите удобным способом, после оплаты загрузите 10 фото",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатить", url=url)]]),
+                reply_markup=_payment_yookassa_keyboard(url, "pl_persona_back"),
             )
             asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
@@ -2480,6 +2488,19 @@ async def handle_fast_back_callback(update: Update, context: ContextTypes.DEFAUL
             raise
 
 
+async def handle_fast_show_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «Назад» с экрана оплаты Экспресс: возврат к выбору тарифа."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    await query.edit_message_text(
+        FAST_TARIFFS_MESSAGE,
+        reply_markup=_fast_tariff_keyboard(),
+        parse_mode="HTML",
+    )
+
+
 async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Нажатие на пакет генераций (5/10/30/50). Telegram Payments (инвойс) или ЮKassa или симуляция."""
     query = update.callback_query
@@ -2515,7 +2536,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(
                 f"<b>{count} кредитов Экспресс за {amount:.0f} ₽</b>\n\nОплатите удобным способом, кредиты зачислим моментально",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатить", url=url)]]),
+                reply_markup=_payment_yookassa_keyboard(url, "pl_fast_show_tariffs"),
             )
             # Запускаем поллинг статуса в фоне
             asyncio.create_task(poll_payment_status(
@@ -5295,6 +5316,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_fast_gender_callback, pattern="^pl_fast_gender:"))
     application.add_handler(CallbackQueryHandler(handle_fast_page_callback, pattern="^pl_fast_page:"))
     application.add_handler(CallbackQueryHandler(handle_fast_back_callback, pattern="^pl_fast_back$"))
+    application.add_handler(CallbackQueryHandler(handle_fast_show_tariffs_callback, pattern="^pl_fast_show_tariffs$"))
     application.add_handler(CallbackQueryHandler(handle_fast_buy_callback, pattern="^pl_fast_buy:"))
     application.add_handler(PreCheckoutQueryHandler(handle_pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, handle_successful_payment))
