@@ -65,7 +65,7 @@ from prismalab.payment import (
 from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
 from prismalab.styles import STYLES, get_style
 from prismalab.storage import PrismaLabStore
-from prismalab.alerts import alert_bot_started, alert_generation_error, alert_slow_generation, alert_daily_report
+from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -5357,9 +5357,6 @@ def main() -> None:
         loop.set_default_executor(executor)
 
         run_webhook_server(app.bot, store)
-
-        # Алерт о запуске бота
-        await alert_bot_started()
 
         # Дневной отчёт в 21:00 по Москве (UTC+3)
         async def daily_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
