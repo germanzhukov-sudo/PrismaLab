@@ -29,8 +29,10 @@
 <div class="row mb-4">
     <div class="col-md-3 mb-3">
         <div class="stat-card">
+            <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+            <div class="help-tooltip">Всего пользователей в боте</div>
             <div class="stat-value">{{ stats.users.total }}</div>
-            <div class="stat-label"><i class="bi bi-people"></i> Всего пользователей <i class="bi bi-question-circle text-muted" style="cursor: help;" title="Всего пользователей в боте"></i></div>
+            <div class="stat-label"><i class="bi bi-people"></i> Всего пользователей</div>
         </div>
     </div>
     <div class="col-md-3 mb-3">
@@ -56,8 +58,10 @@
 <div class="row mb-4">
     <div class="col-md-3 mb-3">
         <div class="stat-card">
+            <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+            <div class="help-tooltip">Новых пользователей за выбранный период</div>
             <div class="stat-value">{{ stats.users.new }}</div>
-            <div class="stat-label"><i class="bi bi-person-plus"></i> Новых за период <i class="bi bi-question-circle text-muted" style="cursor: help;" title="Новых пользователей за выбранный период"></i></div>
+            <div class="stat-label"><i class="bi bi-person-plus"></i> Новых за период</div>
         </div>
     </div>
     <div class="col-md-3 mb-3">
@@ -158,6 +162,24 @@
 
 {% block extra_js %}
 <script>
+    // Тултипы по клику
+    function toggleTooltip(icon) {
+        const tooltip = icon.nextElementSibling;
+        const isVisible = tooltip.classList.contains('show');
+        // Закрыть все остальные
+        document.querySelectorAll('.help-tooltip.show').forEach(t => t.classList.remove('show'));
+        // Переключить текущий
+        if (!isVisible) {
+            tooltip.classList.add('show');
+        }
+    }
+    // Закрыть при клике вне
+    document.addEventListener('click', function(e) {
+        if (!e.target.classList.contains('help-icon')) {
+            document.querySelectorAll('.help-tooltip.show').forEach(t => t.classList.remove('show'));
+        }
+    });
+
     const chartData = {{ chart_data | tojson }};
     const stats = {{ stats | tojson }};
 
