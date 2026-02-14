@@ -1422,7 +1422,18 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
         context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
         return
 
-    # Персоны нет: если пол неизвестен — выбор пола, иначе — intro с тарифами
+    # Персоны нет, но кредиты есть — значит оплатил, но фото не загрузил
+    credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    if credits > 0:
+        # Показать экран загрузки фото (как после оплаты)
+        await query.edit_message_text(
+            PERSONA_RULES_MESSAGE,
+            reply_markup=_persona_rules_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    # Персоны нет и кредитов нет: если пол неизвестен — выбор пола, иначе — intro с тарифами
     known_gender = getattr(profile, "subject_gender", None) or context.user_data.get(USERDATA_SUBJECT_GENDER)
     if known_gender not in ("male", "female"):
         await query.edit_message_text(
