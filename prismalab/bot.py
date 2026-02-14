@@ -3399,6 +3399,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     user_id = int(update.effective_user.id) if update.effective_user else 0
     profile = store.get_user(user_id)
+
+    # Если оплатил персону, но не загрузил фото — напомнить про правила
+    persona_credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    if persona_credits > 0 and not profile.astria_lora_tune_id:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
+        ])
+        await update.message.reply_text("Правила прочитали? 🫶", reply_markup=kb)
+        return
+
     await update.message.reply_text(
         "Загрузите фото в разделе Экспресс-фото или Персона 👇",
         reply_markup=_start_keyboard(profile),
@@ -3562,6 +3572,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_id = int(update.effective_user.id) if update.effective_user else 0
     profile = store.get_user(user_id)
+
+    # Если оплатил персону, но не загрузил фото — напомнить про правила
+    persona_credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    if persona_credits > 0 and not profile.astria_lora_tune_id:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
+        ])
+        await update.message.reply_text("Правила прочитали? 🫶", reply_markup=kb)
+        return
+
     await update.message.reply_text(
         "Загрузите фото в разделе Экспресс-фото или Персона 👇",
         reply_markup=_start_keyboard(profile),
