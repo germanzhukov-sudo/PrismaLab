@@ -823,16 +823,24 @@ class PrismaLabStore:
                 row = cur.fetchone()
                 stats["users"]["total"] = int(row["cnt"]) if row else 0
 
-                # Новые юзеры за период (по событию start, т.к. created_at может быть некорректным)
+                # Новые юзеры за период: считаем по дате ПЕРВОГО события start для каждого юзера
                 if has_dates:
                     cur.execute(
-                        "SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start' AND created_at >= %s AND created_at <= %s",
+                        """
+                        SELECT COUNT(*) as cnt FROM (
+                            SELECT user_id, MIN(created_at) as first_start
+                            FROM public.user_events
+                            WHERE event_type = 'start'
+                            GROUP BY user_id
+                            HAVING MIN(created_at) >= %s AND MIN(created_at) <= %s
+                        ) t
+                        """,
                         (d_from, d_to),
                     )
                     row = cur.fetchone()
                     stats["users"]["new"] = int(row["cnt"]) if row else 0
                 else:
-                    # Без дат — все уникальные старты
+                    # Без дат — все уникальные юзеры с хотя бы одним start
                     cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
                     row = cur.fetchone()
                     stats["users"]["new"] = int(row["cnt"]) if row else 0
