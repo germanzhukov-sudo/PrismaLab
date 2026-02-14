@@ -620,14 +620,14 @@ def _persona_credits_out_content(profile: Any) -> tuple[str, InlineKeyboardMarku
     fast_credits = _generations_count_fast(profile)
     if fast_credits > 0:
         text = PERSONA_CREDITS_OUT_MESSAGE + f"\n\nИли перейдите в <b>Экспресс-фото</b>, там ещё есть <b>{fast_credits} {_fast_credits_word(fast_credits)}</b>"
-        kb = _persona_credits_out_keyboard(with_express=True)
+        kb = _persona_credits_out_keyboard(with_express=True, profile=profile)
     else:
         text = PERSONA_CREDITS_OUT_MESSAGE
         kb = _persona_credits_out_keyboard()
     return text, kb
 
 
-def _persona_credits_out_keyboard(*, with_express: bool = False) -> InlineKeyboardMarkup:
+def _persona_credits_out_keyboard(*, with_express: bool = False, profile: Any | None = None) -> InlineKeyboardMarkup:
     """Клавиатура при закончившихся кредитах: тарифы, [Экспресс-фото], Главное меню."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("✨ 5 кредитов – 269 руб", callback_data="pl_persona_topup_buy:5")],
@@ -635,7 +635,7 @@ def _persona_credits_out_keyboard(*, with_express: bool = False) -> InlineKeyboa
         [InlineKeyboardButton("✨ 20 кредитов – 899 руб", callback_data="pl_persona_topup_buy:20")],
     ]
     if with_express:
-        rows.append([InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")])
+        rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1101,11 +1101,19 @@ def _save_examples_albums(albums: list[dict[str, Any]]) -> None:
     _EXAMPLES_ALBUMS_PATH.write_text(json.dumps(albums, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _express_button_label(profile: Any | None) -> str:
+    """Подпись кнопки Экспресс-фото: «(1 фото бесплатно)» только если бесплатная генерация не потрачена."""
+    if profile and not getattr(profile, "free_generation_used", True):
+        return "⚡️ Экспресс-фото (1 фото бесплатно)"
+    return "⚡️ Экспресс-фото"
+
+
 def _start_keyboard(profile: Any | None = None) -> InlineKeyboardMarkup:
-    """Клавиатура экрана /start: Быстрое фото, Персона, Примеры, FAQ."""
+    """Клавиатура экрана /start: Быстрое фото, Персона, Тарифы, Примеры, FAQ."""
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
         [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
+        [InlineKeyboardButton("Тарифы", callback_data="pl_start_tariffs")],
         [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
         [InlineKeyboardButton("А точно ли получится круто?", callback_data="pl_start_faq")],
     ]
@@ -1131,7 +1139,7 @@ def _profile_keyboard(profile: Any) -> InlineKeyboardMarkup:
     """Клавиатура Профиля: Изменить пол, Экспресс-фото, Персона."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("Изменить пол", callback_data="pl_profile_toggle_gender")],
-        [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_profile_fast_tariffs")],
+        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_profile_fast_tariffs")],
         [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -1521,9 +1529,11 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
     )
     albums = [a for a in _load_examples_albums() if (a.get("file_ids") or [])]
     if not albums:
+        user_id = int(query.from_user.id) if query.from_user else 0
+        profile = store.get_user(user_id)
         empty_kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast"),
+                InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast"),
                 InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona"),
             ],
             [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
@@ -1577,12 +1587,69 @@ async def handle_examples_page_callback(update: Update, context: ContextTypes.DE
     await _show_examples_page(bot, chat_id, context, page, delete_previous=True, nav_msg_id_to_delete=nav_msg_id)
 
 
+TARIFFS_MESSAGE = """<b>Тарифы PrismaLab</b>
+
+Напомним: у нас два формата, и они разные: <b>Экспресс-фото</b> и <b>Персона</b>
+
+В каждом формате <b>1 кредит = 1 фото</b>
+
+⚡ <b>Экспресс-фото</b>
+
+Быстрый способ попробовать: <b>одно исходное фото → выбранный стиль → результат</b>
+
+Пакеты:
+
+• <b>5 кредитов – 169 ₽</b>
+• <b>10 кредитов – 309 ₽</b>
+• <b>30 кредитов – 690 ₽</b>
+• <b>50 кредитов – 990 ₽</b>
+
+✨ <b>Персона</b>
+
+Флагманский формат для тех, кто хочет <b>стабильный «вау»-результат с максимальным сходством</b>
+Вы загружаете 10 фото, мы создаём персональную модель, и дальше вы получаете <b>сильно и красиво – раз за разом</b>
+
+Создание Персоны оплачивается отдельно и уже включает кредиты:
+
+• <b>Персона + 10 кредитов – 599 ₽</b>
+• <b>Персона + 20 кредитов – 999 ₽</b>
+
+Когда Персона уже создана, докупать кредиты выгоднее:
+
+• <b>5 кредитов – 269 ₽</b>
+• <b>10 кредитов – 499 ₽</b>
+• <b>20 кредитов – 899 ₽</b>
+
+Хотите быстро поиграть стилями – берите <b>Экспресс</b>
+Хотите приятно удивляться раз за разом – выбирайте <b>Персону</b>
+
+Крутого вам творчества! ❤️"""
+
+
+async def handle_start_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «Тарифы»: текст тарифов и кнопки Экспресс, Персона, Назад."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    profile = store.get_user(user_id)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
+        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
+        [InlineKeyboardButton("Назад", callback_data="pl_fast_back")],
+    ])
+    await query.edit_message_text(TARIFFS_MESSAGE, reply_markup=kb, parse_mode="HTML")
+
+
 async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Кнопка «А точно ли получится круто?»."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    profile = store.get_user(user_id)
     text = (
         "<b>Точно ли получится круто?</b>\n\n"
         "Круто получится – вопрос только <b>насколько и каким способом</b>. У нас есть два режима, и они разные\n\n"
@@ -1600,7 +1667,7 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
         "Самый простой путь – попробовать <b>Экспресс-фото</b>, а если хотите включить «вау-режим» надолго – перейти на <b>Персону</b>"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
         [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
         [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
         [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
@@ -3211,7 +3278,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
-                [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+                [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Назад", callback_data="pl_start_persona")],
             ])
         else:
@@ -3221,7 +3288,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✨ Персона", callback_data="pl_persona_create")],
-                [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+                [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
@@ -3376,7 +3443,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
-                [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+                [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Назад", callback_data="pl_start_persona")],
             ])
         else:
@@ -3386,7 +3453,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✨ Персона", callback_data="pl_persona_create")],
-                [InlineKeyboardButton("⚡️ Экспресс-фото", callback_data="pl_start_fast")],
+                [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
@@ -5317,6 +5384,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_persona_page_callback, pattern="^pl_persona_page:"))
     application.add_handler(CallbackQueryHandler(handle_persona_style_callback, pattern="^pl_persona_style:"))
     application.add_handler(CallbackQueryHandler(handle_persona_back_callback, pattern="^pl_persona_back$"))
+    application.add_handler(CallbackQueryHandler(handle_start_tariffs_callback, pattern="^pl_start_tariffs$"))
     application.add_handler(CallbackQueryHandler(handle_start_examples_callback, pattern="^pl_start_examples$"))
     application.add_handler(CallbackQueryHandler(handle_examples_show_albums_callback, pattern="^pl_examples_show_albums$"))
     application.add_handler(CallbackQueryHandler(handle_examples_page_callback, pattern="^pl_examples_page:"))

@@ -133,18 +133,47 @@ async def _forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.warning("Пропуск: PRISMALAB_SUPPORT_ADMIN_ID не задан или 0")
         return
 
-    text = update.message.text or update.message.caption or "(медиа без подписи)"
     label = _user_label(user)
-    admin_text = f"📩 От {label}:\n\n{text}"
+    caption = update.message.caption or ""
+    text = update.message.text or ""
 
     try:
-        sent = await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
-        _reply_map[(ADMIN_ID, sent.message_id)] = (user.id, chat_id)
-        if DATABASE_URL:
-            await asyncio.to_thread(
-                _reply_map_pg_save, ADMIN_ID, sent.message_id, user.id, chat_id
-            )
-        logger.info("Переслано админу (message_id=%s), от user_id=%s", sent.message_id, user.id)
+        sent = None
+        # Фото
+        if update.message.photo:
+            photo = update.message.photo[-1]  # лучшее качество
+            admin_caption = f"📩 От {label}:\n\n{caption}" if caption else f"📩 От {label}"
+            sent = await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo.file_id, caption=admin_caption)
+        # Документ (в т.ч. фото как файл)
+        elif update.message.document:
+            admin_caption = f"📩 От {label}:\n\n{caption}" if caption else f"📩 От {label}"
+            sent = await context.bot.send_document(chat_id=ADMIN_ID, document=update.message.document.file_id, caption=admin_caption)
+        # Видео
+        elif update.message.video:
+            admin_caption = f"📩 От {label}:\n\n{caption}" if caption else f"📩 От {label}"
+            sent = await context.bot.send_video(chat_id=ADMIN_ID, video=update.message.video.file_id, caption=admin_caption)
+        # Голосовое
+        elif update.message.voice:
+            sent = await context.bot.send_voice(chat_id=ADMIN_ID, voice=update.message.voice.file_id, caption=f"📩 От {label}")
+        # Стикер
+        elif update.message.sticker:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"📩 От {label}: (стикер)")
+            sent = await context.bot.send_sticker(chat_id=ADMIN_ID, sticker=update.message.sticker.file_id)
+        # Текст
+        elif text:
+            admin_text = f"📩 От {label}:\n\n{text}"
+            sent = await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+        else:
+            admin_text = f"📩 От {label}:\n\n(неподдерживаемый тип сообщения)"
+            sent = await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+
+        if sent:
+            _reply_map[(ADMIN_ID, sent.message_id)] = (user.id, chat_id)
+            if DATABASE_URL:
+                await asyncio.to_thread(
+                    _reply_map_pg_save, ADMIN_ID, sent.message_id, user.id, chat_id
+                )
+            logger.info("Переслано админу (message_id=%s), от user_id=%s", sent.message_id, user.id)
     except Exception as e:
         logger.error("Не удалось переслать админу: %s", e, exc_info=True)
 
