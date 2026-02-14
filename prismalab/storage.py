@@ -818,8 +818,8 @@ class PrismaLabStore:
             # PostgreSQL
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Всего юзеров (всегда без фильтра)
-                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._users_table}")
+                # Всего юзеров: уникальные user_id с событием start
+                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
                 row = cur.fetchone()
                 stats["users"]["total"] = int(row["cnt"]) if row else 0
 
