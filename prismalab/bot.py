@@ -5478,6 +5478,10 @@ def main() -> None:
 
     async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Глобальный обработчик ошибок: логируем и показываем пользователю дружественное сообщение."""
+        # Игнорируем BadRequest (например, "Message is not modified" при двойном клике)
+        if isinstance(context.error, BadRequest):
+            logger.debug("BadRequest проигнорирован: %s", context.error)
+            return
         logger.error("Необработанное исключение:", exc_info=context.error)
         if isinstance(update, Update) and update.effective_message:
             try:
