@@ -3400,8 +3400,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = int(update.effective_user.id) if update.effective_user else 0
     profile = store.get_user(user_id)
     await update.message.reply_text(
-        "Загрузите фото в разделе Экспресс-фото или Персона 👇",
+        "Перед загрузкой фото нужно выбрать раздел: <b>Экспресс-фото</b> или <b>Персона</b>",
         reply_markup=_start_keyboard(profile),
+        parse_mode="HTML",
     )
 
 
@@ -3563,8 +3564,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = int(update.effective_user.id) if update.effective_user else 0
     profile = store.get_user(user_id)
     await update.message.reply_text(
-        "Загрузите фото в разделе Экспресс-фото или Персона 👇",
+        "Перед загрузкой фото нужно выбрать раздел: <b>Экспресс-фото</b> или <b>Персона</b>",
         reply_markup=_start_keyboard(profile),
+        parse_mode="HTML",
     )
 
 
