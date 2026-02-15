@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-gear me-2"></i>Настройки</h2>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Настройки сохранены
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-calculator me-2"></i>Себестоимость
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Создание персоны ($)</label>
+                        <input type="number" step="0.01" min="0" class="form-control"
+                               name="cost_persona_create" value="{{ settings.cost_persona_create }}">
+                        <small class="text-muted">Стоимость обучения модели Astria</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Фото Экспресс ($)</label>
+                        <input type="number" step="0.001" min="0" class="form-control"
+                               name="cost_fast_photo" value="{{ settings.cost_fast_photo }}">
+                        <small class="text-muted">Стоимость одной генерации Экспресс</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Фото Персона ($)</label>
+                        <input type="number" step="0.001" min="0" class="form-control"
+                               name="cost_persona_photo" value="{{ settings.cost_persona_photo }}">
+                        <small class="text-muted">Стоимость одной генерации Персоны</small>
+                    </div>
+                    <hr>
+                    <div class="mb-3">
+                        <label class="form-label">Курс USD/RUB</label>
+                        <input type="number" step="0.01" min="0" class="form-control"
+                               name="usd_rub" value="{{ settings.usd_rub }}">
+                        <small class="text-muted">Курс для расчёта себестоимости в рублях</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Сохранить
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Информация
+            </div>
+            <div class="card-body">
+                <p>Эти значения используются для расчёта себестоимости и маржи на дашборде.</p>
+                <h6>Формула расчёта:</h6>
+                <code>
+                    Себестоимость = (Персон × ${{ settings.cost_persona_create }} +
+                    Экспресс × ${{ settings.cost_fast_photo }} +
+                    Фото персоны × ${{ settings.cost_persona_photo }}) × {{ settings.usd_rub }} ₽/$
+                </code>
+                <hr>
+                <p class="mb-0 text-muted">
+                    <small>Изменения вступают в силу сразу после сохранения.</small>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -158,6 +158,83 @@
             background: var(--primary-gradient);
             border-color: transparent;
         }
+
+        /* Блок "За всё время" */
+        .all-time-section {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+        .all-time-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, rgba(102, 126, 234, 0.15) 0%, transparent 70%);
+            pointer-events: none;
+        }
+        .all-time-header {
+            color: white;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        }
+        .all-time-header i {
+            font-size: 1.5rem;
+            opacity: 0.9;
+        }
+        .stat-card.all-time {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        .stat-card.all-time .stat-value {
+            color: white;
+        }
+        .stat-card.all-time .stat-label {
+            color: rgba(255, 255, 255, 0.7);
+        }
+        .stat-card.all-time .help-icon {
+            color: rgba(255, 255, 255, 0.5);
+        }
+        .stat-card.all-time .help-icon:hover {
+            color: rgba(255, 255, 255, 0.8);
+        }
+        .stat-card.all-time.primary {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.4) 0%, rgba(118, 75, 162, 0.4) 100%);
+            border-color: rgba(102, 126, 234, 0.5);
+        }
+        .stat-card.all-time.success {
+            background: linear-gradient(135deg, rgba(40, 167, 69, 0.4) 0%, rgba(32, 201, 151, 0.4) 100%);
+            border-color: rgba(40, 167, 69, 0.5);
+        }
+        .stat-card.all-time.danger {
+            background: linear-gradient(135deg, rgba(220, 53, 69, 0.4) 0%, rgba(200, 35, 51, 0.4) 100%);
+            border-color: rgba(220, 53, 69, 0.5);
+        }
+
+        /* Блок "За период" */
+        .period-section {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 2px 15px rgba(0, 0, 0, 0.05);
+        }
+        .period-header {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 16px;
+        }
+        .period-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #333;
+        }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
@@ -178,6 +255,9 @@
                     </a>
                     <a class="nav-link {% if '/payments' in request.url.path %}active{% endif %}" href="{{ admin_base }}/payments">
                         <i class="bi bi-credit-card"></i> Платежи
+                    </a>
+                    <a class="nav-link {% if '/settings' in request.url.path %}active{% endif %}" href="{{ admin_base }}/settings">
+                        <i class="bi bi-gear"></i> Настройки
                     </a>
                 </nav>
                 <div class="user-admin mt-auto">

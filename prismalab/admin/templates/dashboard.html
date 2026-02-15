@@ -5,115 +5,204 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-graph-up me-2"></i>Дашборд</h2>
-    <div class="d-flex gap-2 align-items-center flex-wrap">
-        <div class="period-selector btn-group">
-            <a href="?period=today" class="btn btn-outline-primary btn-sm {% if period == 'today' %}active{% endif %}">Сегодня</a>
-            <a href="?period=yesterday" class="btn btn-outline-primary btn-sm {% if period == 'yesterday' %}active{% endif %}">Вчера</a>
-            <a href="?period=week" class="btn btn-outline-primary btn-sm {% if period == 'week' %}active{% endif %}">Неделя</a>
-            <a href="?period=month" class="btn btn-outline-primary btn-sm {% if period == 'month' %}active{% endif %}">Месяц</a>
+</div>
+
+<!-- ========== БЛОК "ЗА ВСЁ ВРЕМЯ" ========== -->
+<div class="all-time-section mb-5">
+    <div class="all-time-header">
+        <i class="bi bi-infinity me-2"></i>За всё время
+    </div>
+    <div class="row">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Все пользователи, которые нажали /start в боте</div>
+                <div class="stat-value">{{ all_time.users_total }}</div>
+                <div class="stat-label"><i class="bi bi-people"></i> Всего пользователей</div>
+            </div>
         </div>
-        <form method="GET" class="d-flex gap-2 align-items-center">
-            <input type="hidden" name="period" value="custom">
-            <input type="date" name="date_from" class="form-control form-control-sm" style="width: 140px;" value="{{ date_from }}">
-            <span class="text-muted">—</span>
-            <input type="date" name="date_to" class="form-control form-control-sm" style="width: 140px;" value="{{ date_to }}">
-            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel"></i></button>
-        </form>
-        <a href="{{ admin_base }}/export?type=payments&date_from={{ date_from }}&date_to={{ date_to }}" class="btn btn-success btn-sm">
-            <i class="bi bi-download"></i> CSV
-        </a>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time {% if all_time.margin.amount >= 0 %}success{% else %}danger{% endif %}">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Финансовые показатели за всё время</div>
+                <div class="stat-value" style="font-size: 1rem; line-height: 1.6;">
+                    <div>Выручка: <strong>₽{{ "{:,.0f}".format(all_time.total_revenue).replace(",", " ") }}</strong></div>
+                    <div class="text-muted">Себест.: ₽{{ "{:,.0f}".format(all_time.total_cost).replace(",", " ") }}</div>
+                    <div>Маржа: <strong>₽{{ "{:,.0f}".format(all_time.margin.amount).replace(",", " ") }}</strong> <small class="text-muted">({{ all_time.margin.percent }}%)</small></div>
+                </div>
+                <div class="stat-label"><i class="bi bi-cash-stack"></i> Финансы</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Средняя сумма одной покупки</div>
+                <div class="stat-value">₽{{ "%.0f"|format(all_time.avg_check) }}</div>
+                <div class="stat-label"><i class="bi bi-receipt"></i> Средний чек</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Доля пользователей, которые хотя бы раз оплатили</div>
+                <div class="stat-value">{{ all_time.conversion }}%</div>
+                <div class="stat-label"><i class="bi bi-funnel"></i> Конверсия в покупку</div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Среднее количество генераций на одного платящего пользователя</div>
+                <div class="stat-value">{{ all_time.gens_per_paying_user }}</div>
+                <div class="stat-label"><i class="bi bi-images"></i> Генераций на платящего</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Количество покупок пакетов Экспресс</div>
+                <div class="stat-value">{{ all_time.express_purchases }}</div>
+                <div class="stat-label"><i class="bi bi-lightning"></i> Покупок Экспресс</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Количество покупок Персоны (создание + докупка)</div>
+                <div class="stat-value">{{ all_time.persona_purchases }}</div>
+                <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона</div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Распределение пользователей по полу (из профиля)</div>
+                <div class="stat-value" style="font-size: 1.1rem;">
+                    <i class="bi bi-gender-male text-primary"></i> {{ all_time.gender.male }}%
+                    <i class="bi bi-gender-female text-danger ms-2"></i> {{ all_time.gender.female }}%
+                    <span class="text-muted ms-2">? {{ all_time.gender.unknown }}%</span>
+                </div>
+                <div class="stat-label"><i class="bi bi-people"></i> Пол пользователей</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Среднее количество дней от /start до первой оплаты</div>
+                <div class="stat-value">{{ all_time.days_to_first_purchase }}</div>
+                <div class="stat-label"><i class="bi bi-calendar-check"></i> Дней до покупки</div>
+            </div>
+        </div>
     </div>
 </div>
 
-<!-- Статистика -->
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
-            <div class="help-tooltip">Всего пользователей в боте</div>
-            <div class="stat-value">{{ stats.users.total }}</div>
-            <div class="stat-label"><i class="bi bi-people"></i> Всего пользователей</div>
+<!-- ========== БЛОК "ЗА ПЕРИОД" ========== -->
+<div class="period-section">
+    <div class="period-header mb-3">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="period-title"><i class="bi bi-calendar-range me-2"></i>За период</span>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <div class="period-selector btn-group">
+                    <a href="?period=today" class="btn btn-outline-primary btn-sm {% if period == 'today' %}active{% endif %}">Сегодня</a>
+                    <a href="?period=yesterday" class="btn btn-outline-primary btn-sm {% if period == 'yesterday' %}active{% endif %}">Вчера</a>
+                    <a href="?period=week" class="btn btn-outline-primary btn-sm {% if period == 'week' %}active{% endif %}">Неделя</a>
+                    <a href="?period=month" class="btn btn-outline-primary btn-sm {% if period == 'month' %}active{% endif %}">Месяц</a>
+                </div>
+                <form method="GET" class="d-flex gap-2 align-items-center">
+                    <input type="hidden" name="period" value="custom">
+                    <input type="date" name="date_from" class="form-control form-control-sm" style="width: 130px;" value="{{ date_from }}">
+                    <span class="text-muted">—</span>
+                    <input type="date" name="date_to" class="form-control form-control-sm" style="width: 130px;" value="{{ date_to }}">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel"></i></button>
+                </form>
+                <a href="{{ admin_base }}/export?type=payments&date_from={{ date_from }}&date_to={{ date_to }}" class="btn btn-success btn-sm">
+                    <i class="bi bi-download"></i> CSV
+                </a>
+            </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card primary">
-            <div class="stat-value">₽{{ "%.0f"|format(stats.payments.total_revenue) }}</div>
-            <div class="stat-label"><i class="bi bi-currency-dollar"></i> Выручка за период</div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">₽{{ "%.0f"|format(stats.payments.avg_check) }}</div>
-            <div class="stat-label"><i class="bi bi-receipt"></i> Средний чек</div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.conversion }}%</div>
-            <div class="stat-label"><i class="bi bi-funnel"></i> Конверсия в покупку</div>
-        </div>
-    </div>
-</div>
 
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
-            <div class="help-tooltip">Новых пользователей за выбранный период</div>
-            <div class="stat-value">{{ stats.users.new }}</div>
-            <div class="stat-label"><i class="bi bi-person-plus"></i> Новых за период</div>
+    <!-- Основные метрики за период -->
+    <div class="row mb-4">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Новых пользователей за выбранный период</div>
+                <div class="stat-value">{{ stats.users.new }}</div>
+                <div class="stat-label"><i class="bi bi-person-plus"></i> Новых пользователей</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card primary">
+                <div class="stat-value">₽{{ "{:,.0f}".format(stats.payments.total_revenue).replace(",", " ") }}</div>
+                <div class="stat-label"><i class="bi bi-currency-dollar"></i> Выручка</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.payments.avg_check) }}</div>
+                <div class="stat-label"><i class="bi bi-receipt"></i> Средний чек</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card {% if stats.margin.amount >= 0 %}success{% else %}danger{% endif %}">
+                <div class="stat-value">₽{{ "{:,.0f}".format(stats.margin.amount).replace(",", " ") }}</div>
+                <div class="stat-label"><i class="bi bi-graph-up-arrow"></i> Маржа ({{ stats.margin.percent }}%)</div>
+            </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.payments.express.count }}</div>
-            <div class="stat-label"><i class="bi bi-lightning"></i> Покупок Экспресс (₽{{ "%.0f"|format(stats.payments.express.revenue) }})</div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.payments.persona.count }}</div>
-            <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона (₽{{ "%.0f"|format(stats.payments.persona.revenue) }})</div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.generations.free }}</div>
-            <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
-        </div>
-    </div>
-</div>
 
-<!-- Себестоимость и маржа -->
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="stat-card {% if stats.margin.amount >= 0 %}success{% else %}danger{% endif %}">
-            <div class="stat-value">₽{{ "%.0f"|format(stats.margin.amount) }}</div>
-            <div class="stat-label"><i class="bi bi-graph-up-arrow"></i> Маржа ({{ stats.margin.percent }}%)</div>
+    <!-- Покупки и генерации за период -->
+    <div class="row mb-4">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.payments.express.count }}</div>
+                <div class="stat-label"><i class="bi bi-lightning"></i> Покупок Экспресс (₽{{ "%.0f"|format(stats.payments.express.revenue) }})</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.payments.persona.count }}</div>
+                <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона (₽{{ "%.0f"|format(stats.payments.persona.revenue) }})</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.fast }}</div>
+                <div class="stat-label"><i class="bi bi-lightning"></i> Фото Экспресс</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.persona }}</div>
+                <div class="stat-label"><i class="bi bi-person-badge"></i> Фото Персона</div>
+            </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card warning">
-            <div class="stat-value">₽{{ "%.0f"|format(stats.costs.total) }}</div>
-            <div class="stat-label"><i class="bi bi-calculator"></i> Себестоимость</div>
+
+    <!-- Себестоимость за период -->
+    <div class="row mb-4">
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card warning">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.total) }}</div>
+                <div class="stat-label"><i class="bi bi-calculator"></i> Себестоимость</div>
+            </div>
         </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.generations.fast }}</div>
-            <div class="stat-label"><i class="bi bi-lightning"></i> Фото Экспресс (₽{{ "%.0f"|format(stats.costs.fast_photos) }})</div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="stat-card">
-            <div class="stat-value">{{ stats.generations.persona }}</div>
-            <div class="stat-label"><i class="bi bi-person-badge"></i> Фото Персона (₽{{ "%.0f"|format(stats.costs.persona_photos) }})</div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.free }}</div>
+                <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
+            </div>
         </div>
     </div>
 </div>
 
 <!-- Графики -->
-<div class="row">
+<div class="row mt-4">
     <div class="col-md-8 mb-4">
         <div class="card">
             <div class="card-header">
@@ -154,6 +243,20 @@
             </div>
             <div class="card-body">
                 <canvas id="genChart" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- График активности по часам (МСК) -->
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-clock me-2"></i>Активность по часам (МСК) — за выбранный период
+            </div>
+            <div class="card-body">
+                <canvas id="hourlyChart" height="80"></canvas>
             </div>
         </div>
     </div>
@@ -254,6 +357,32 @@
             responsive: true,
             plugins: { legend: { display: false } },
             scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // Горизонтальный график активности по часам (МСК)
+    const hourlyData = {{ hourly_data | tojson }};
+    new Chart(document.getElementById('hourlyChart'), {
+        type: 'bar',
+        data: {
+            labels: Array.from({length: 24}, (_, i) => i + ':00'),
+            datasets: [{
+                label: 'Уникальных пользователей',
+                data: hourlyData,
+                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                borderRadius: 4
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { beginAtZero: true },
+                y: {
+                    ticks: { font: { size: 11 } }
+                }
+            }
         }
     });
 </script>

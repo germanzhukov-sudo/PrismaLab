@@ -168,9 +168,24 @@ class PrismaLabStore:
             )
             try:
                 self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN persona_credits_remaining INTEGER DEFAULT 0")
+                conn.commit()
             except Exception:
-                pass
-            conn.commit()
+                conn.rollback()
+            # Таблица настроек (себестоимость, курс)
+            try:
+                self._execute(
+                    conn,
+                    """
+                    CREATE TABLE IF NOT EXISTS public.admin_settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
             logger.info("Таблица %s проверена/создана", self._users_table)
 
     def get_user(self, user_id: int) -> UserProfile:
@@ -222,6 +237,49 @@ class PrismaLabStore:
         with self._connect() as conn:
             self._execute(conn, sql, params)
             conn.commit()
+
+    # ========== Настройки себестоимости ==========
+
+    def get_cost_settings(self) -> dict:
+        """Получить настройки себестоимости."""
+        defaults = {
+            "cost_persona_create": 1.5,
+            "cost_fast_photo": 0.035,
+            "cost_persona_photo": 0.03,
+            "usd_rub": 90.0,
+        }
+        if not self._use_pg:
+            return defaults
+
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT key, value FROM public.admin_settings WHERE key LIKE 'cost_%' OR key = 'usd_rub'")
+                for row in cur.fetchall():
+                    key = row["key"]
+                    if key in defaults:
+                        try:
+                            defaults[key] = float(row["value"])
+                        except (ValueError, TypeError):
+                            pass
+        return defaults
+
+    def set_cost_settings(self, settings: dict) -> None:
+        """Сохранить настройки себестоимости."""
+        if not self._use_pg:
+            return
+
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                for key, value in settings.items():
+                    if key in ("cost_persona_create", "cost_fast_photo", "cost_persona_photo", "usd_rub"):
+                        cur.execute("""
+                            INSERT INTO public.admin_settings (key, value, updated_at)
+                            VALUES (%s, %s, NOW())
+                            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                        """, (key, str(value)))
+                conn.commit()
 
     def upsert_training(
         self,
@@ -781,21 +839,193 @@ class PrismaLabStore:
                 row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE {where_clause}", params).fetchone()
                 return int(row["cnt"]) if row else 0
 
-    def get_dashboard_stats(self, date_from: str | None = None, date_to: str | None = None) -> dict:
-        """Получить статистику для дашборда с опциональной фильтрацией по датам."""
-        # Себестоимость в долларах
-        COST_PERSONA_CREATE = 1.5      # создание персоны
-        COST_FAST_PHOTO = 0.035        # одно экспресс-фото
-        COST_PERSONA_PHOTO = 0.03      # одно фото персоны
-        USD_RUB = 90.0                 # курс для расчёта в рублях
+    def get_all_time_stats(self) -> dict:
+        """Получить статистику за всё время (для постоянного блока)."""
+        # Себестоимость из настроек
+        cost_settings = self.get_cost_settings()
+        COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
+        COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
+        COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
+        USD_RUB = cost_settings["usd_rub"]
 
         stats = {
-            "users": {"total": 0, "new": 0},
+            "users_total": 0,
+            "total_revenue": 0.0,
+            "total_cost": 0.0,
+            "avg_check": 0.0,
+            "paid_users": 0,
+            "conversion": 0.0,
+            "margin": {"amount": 0.0, "percent": 0.0},
+            "gens_per_paying_user": 0.0,
+            "express_purchases": 0,
+            "persona_purchases": 0,
+            "gender": {"male": 0.0, "female": 0.0, "unknown": 0.0},
+            "days_to_first_purchase": 0.0,
+        }
+
+        with self._connect() as conn:
+            if not self._use_pg:
+                row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+                stats["users_total"] = int(row["cnt"]) if row else 0
+                row = conn.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM payments").fetchone()
+                if row:
+                    stats["total_revenue"] = float(row["total"])
+                    if int(row["cnt"]) > 0:
+                        stats["avg_check"] = round(float(row["total"]) / int(row["cnt"]), 2)
+                return stats
+
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Всего юзеров (кто нажал /start)
+                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
+                row = cur.fetchone()
+                stats["users_total"] = int(row["cnt"]) if row else 0
+
+                # Общая выручка и кол-во платежей
+                cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments")
+                row = cur.fetchone()
+                if row:
+                    total_payments = int(row["cnt"])
+                    stats["total_revenue"] = float(row["total"])
+                    if total_payments > 0:
+                        stats["avg_check"] = round(stats["total_revenue"] / total_payments, 2)
+
+                # Платящие юзеры
+                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.payments")
+                row = cur.fetchone()
+                stats["paid_users"] = int(row["cnt"]) if row else 0
+
+                # Конверсия
+                if stats["users_total"] > 0:
+                    stats["conversion"] = round((stats["paid_users"] / stats["users_total"]) * 100, 2)
+
+                # Покупок Экспресс
+                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'fast'")
+                row = cur.fetchone()
+                stats["express_purchases"] = int(row["cnt"]) if row else 0
+
+                # Покупок Персона
+                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type LIKE 'persona%%'")
+                row = cur.fetchone()
+                stats["persona_purchases"] = int(row["cnt"]) if row else 0
+
+                # Для маржи: генерации по типам и создания персон
+                cur.execute("""SELECT
+                    COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
+                    COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
+                FROM public.user_events WHERE event_type = 'generation'""")
+                row = cur.fetchone()
+                fast_gens = int(row["fast"] or 0) if row else 0
+                persona_gens = int(row["persona"] or 0) if row else 0
+
+                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'persona_create'")
+                row = cur.fetchone()
+                persona_creates = int(row["cnt"]) if row else 0
+
+                # Расчёт себестоимости и маржи
+                total_cost = (persona_creates * COST_PERSONA_CREATE + fast_gens * COST_FAST_PHOTO + persona_gens * COST_PERSONA_PHOTO) * USD_RUB
+                stats["total_cost"] = round(total_cost, 2)
+                margin = stats["total_revenue"] - total_cost
+                stats["margin"]["amount"] = round(margin, 2)
+                stats["margin"]["percent"] = round((margin / stats["total_revenue"]) * 100, 2) if stats["total_revenue"] > 0 else 0.0
+
+                # Генераций на платящего юзера
+                total_gens = fast_gens + persona_gens
+                if stats["paid_users"] > 0:
+                    # Считаем генерации только от платящих юзеров
+                    cur.execute("""SELECT COUNT(*) as cnt FROM public.user_events ue
+                                   WHERE ue.event_type = 'generation'
+                                   AND EXISTS (SELECT 1 FROM public.payments p WHERE p.user_id = ue.user_id)""")
+                    row = cur.fetchone()
+                    paying_gens = int(row["cnt"]) if row else 0
+                    stats["gens_per_paying_user"] = round(paying_gens / stats["paid_users"], 1)
+
+                # Статистика по полу
+                cur.execute("""SELECT
+                    COUNT(*) FILTER (WHERE subject_gender = 'male') as male,
+                    COUNT(*) FILTER (WHERE subject_gender = 'female') as female,
+                    COUNT(*) FILTER (WHERE subject_gender IS NULL) as unknown,
+                    COUNT(*) as total
+                FROM public.users""")
+                row = cur.fetchone()
+                if row and int(row["total"] or 0) > 0:
+                    total = int(row["total"])
+                    stats["gender"]["male"] = round((int(row["male"] or 0) / total) * 100, 1)
+                    stats["gender"]["female"] = round((int(row["female"] or 0) / total) * 100, 1)
+                    stats["gender"]["unknown"] = round((int(row["unknown"] or 0) / total) * 100, 1)
+
+                # Среднее количество дней до первой покупки
+                cur.execute("""
+                    SELECT AVG(days) as avg_days FROM (
+                        SELECT
+                            p.user_id,
+                            EXTRACT(EPOCH FROM (MIN(p.created_at) - MIN(ue.created_at))) / 86400 as days
+                        FROM public.payments p
+                        JOIN public.user_events ue ON ue.user_id = p.user_id AND ue.event_type = 'start'
+                        GROUP BY p.user_id
+                    ) t
+                    WHERE days >= 0
+                """)
+                row = cur.fetchone()
+                if row and row["avg_days"] is not None:
+                    stats["days_to_first_purchase"] = round(float(row["avg_days"]), 1)
+
+        return stats
+
+    def get_hourly_activity(self, date_from: str | None = None, date_to: str | None = None) -> list[int]:
+        """Получить статистику уникальных пользователей по часам (МСК)."""
+        # Возвращаем список из 24 чисел (по количеству уникальных юзеров в каждый час)
+        result = [0] * 24
+
+        with self._connect() as conn:
+            if not self._use_pg:
+                return result
+
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Конвертируем UTC в МСК (UTC+3)
+                if date_from and date_to:
+                    cur.execute("""
+                        SELECT
+                            EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int as hour,
+                            COUNT(DISTINCT user_id) as cnt
+                        FROM public.user_events
+                        WHERE created_at >= %s AND created_at <= %s
+                        GROUP BY EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')
+                        ORDER BY hour
+                    """, (date_from, date_to + " 23:59:59"))
+                else:
+                    cur.execute("""
+                        SELECT
+                            EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int as hour,
+                            COUNT(DISTINCT user_id) as cnt
+                        FROM public.user_events
+                        GROUP BY EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')
+                        ORDER BY hour
+                    """)
+
+                for row in cur.fetchall():
+                    hour = int(row["hour"])
+                    if 0 <= hour < 24:
+                        result[hour] = int(row["cnt"])
+
+        return result
+
+    def get_dashboard_stats(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+        """Получить статистику для дашборда с опциональной фильтрацией по датам."""
+        # Себестоимость из настроек
+        cost_settings = self.get_cost_settings()
+        COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
+        COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
+        COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
+        USD_RUB = cost_settings["usd_rub"]
+
+        stats = {
+            "users": {"new": 0},
             "payments": {"total_count": 0, "total_revenue": 0.0, "avg_check": 0.0, "express": {"count": 0, "revenue": 0.0}, "persona": {"count": 0, "revenue": 0.0}},
             "generations": {"total": 0, "free": 0, "fast": 0, "persona": 0},
             "costs": {"total": 0.0, "persona_create": 0.0, "fast_photos": 0.0, "persona_photos": 0.0},
             "margin": {"amount": 0.0, "percent": 0.0},
-            "conversion": 0.0,
         }
 
         # Подготовка дат
@@ -807,8 +1037,6 @@ class PrismaLabStore:
         with self._connect() as conn:
             if not self._use_pg:
                 # SQLite: упрощённая версия
-                row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
-                stats["users"]["total"] = int(row["cnt"]) if row else 0
                 row = conn.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM payments").fetchone()
                 if row:
                     stats["payments"]["total_count"] = int(row["cnt"])
@@ -818,11 +1046,6 @@ class PrismaLabStore:
             # PostgreSQL
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Всего юзеров: уникальные user_id с событием start
-                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
-                row = cur.fetchone()
-                stats["users"]["total"] = int(row["cnt"]) if row else 0
-
                 # Новые юзеры за период: считаем по дате ПЕРВОГО события start для каждого юзера
                 if has_dates:
                     cur.execute(
@@ -912,7 +1135,7 @@ class PrismaLabStore:
                     stats["generations"]["fast"] = int(row["fast"] or 0)
                     stats["generations"]["persona"] = int(row["persona"] or 0)
 
-                # Бесплатные генерации (юзеры без платежей)
+                # Бесплатные генерации (юзеры без платежей за период)
                 if has_dates:
                     cur.execute(
                         """SELECT COUNT(*) as cnt FROM public.user_events ue
@@ -955,13 +1178,6 @@ class PrismaLabStore:
                 margin = revenue - total_cost
                 stats["margin"]["amount"] = round(margin, 2)
                 stats["margin"]["percent"] = round((margin / revenue) * 100, 2) if revenue > 0 else 0.0
-
-                # Конверсия (всегда общая)
-                if stats["users"]["total"] > 0:
-                    cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.payments")
-                    row = cur.fetchone()
-                    paid_users = int(row["cnt"]) if row else 0
-                    stats["conversion"] = round((paid_users / stats["users"]["total"]) * 100, 2)
 
         return stats
 

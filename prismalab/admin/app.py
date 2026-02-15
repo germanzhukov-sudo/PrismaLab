@@ -161,14 +161,18 @@ async def dashboard(request: Request):
         date_to = request.query_params.get("date_to", today.isoformat())
 
     store = get_store()
+    all_time = store.get_all_time_stats()
     stats = store.get_dashboard_stats(date_from, date_to)
     chart_data = store.get_chart_data(days=30)
+    hourly_data = store.get_hourly_activity(date_from, date_to)
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "admin": request.state.admin,
+        "all_time": all_time,
         "stats": stats,
         "chart_data": chart_data,
+        "hourly_data": hourly_data,
         "period": period,
         "date_from": date_from,
         "date_to": date_to,
@@ -384,6 +388,38 @@ async def api_chart_data(request: Request):
     return JSONResponse(data)
 
 
+@require_auth
+async def settings_page(request: Request):
+    """Страница настроек себестоимости."""
+    store = get_store()
+    settings = store.get_cost_settings()
+    saved = request.query_params.get("saved") == "1"
+
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "settings": settings,
+        "saved": saved,
+    })
+
+
+@require_auth
+async def settings_post(request: Request):
+    """Сохранение настроек."""
+    store = get_store()
+    form = await request.form()
+
+    settings = {
+        "cost_persona_create": float(form.get("cost_persona_create", 1.5)),
+        "cost_fast_photo": float(form.get("cost_fast_photo", 0.035)),
+        "cost_persona_photo": float(form.get("cost_persona_photo", 0.03)),
+        "usd_rub": float(form.get("usd_rub", 90.0)),
+    }
+    store.set_cost_settings(settings)
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/settings?saved=1", status_code=303)
+
+
 # ========== Роуты ==========
 # Полные пути /admin/... — aiohttp передаёт path как есть
 async def _debug_path(request: Request):
@@ -404,6 +440,8 @@ routes = [
     Route("/admin/users/{user_id:int}/credits", user_credits_post, methods=["POST"]),
     Route("/admin/payments", payments_list, methods=["GET"]),
     Route("/admin/export", export_csv, methods=["GET"]),
+    Route("/admin/settings", settings_page, methods=["GET"]),
+    Route("/admin/settings", settings_post, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
     Route("/admin/api/chart", api_chart_data, methods=["GET"]),
     Mount("/admin/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static"),
