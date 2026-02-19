@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PrismaLab Studio</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/app/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Screen: Loading -->
+        <div id="screen-loading" class="screen active">
+            <div class="loading-container">
+                <div class="logo-pulse">
+                    <span class="logo-icon">✨</span>
+                </div>
+                <div class="loading-text">PrismaLab</div>
+                <div class="loading-dots"><span></span><span></span><span></span></div>
+            </div>
+        </div>
+
+        <!-- Screen: Main Menu -->
+        <div id="screen-main" class="screen">
+            <div class="screen-content">
+                <h1 class="screen-title">PrismaLab</h1>
+                <p class="screen-subtitle">AI-фотостудия</p>
+                <div class="main-cards">
+                    <button class="main-card" onclick="goToExpress()">
+                        <div class="main-card-icon">⚡</div>
+                        <div class="main-card-title">Экспресс-фото</div>
+                        <div class="main-card-desc">Быстрая генерация по одному фото</div>
+                    </button>
+                    <button class="main-card" id="main-card-packs" onclick="goToPacks()" style="display:none">
+                        <div class="main-card-icon">📸</div>
+                        <div class="main-card-title">Фотопаки</div>
+                        <div class="main-card-desc">20 фото в одном стиле</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Packs Catalog -->
+        <div id="screen-packs" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Фотопаки</h2>
+                <div></div>
+            </div>
+            <div class="packs-grid" id="packs-grid">
+                <!-- Паки загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Pack Detail -->
+        <div id="screen-pack-detail" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('packs')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="pack-detail-title">Пак</h2>
+                <div></div>
+            </div>
+            <div class="pack-detail-container">
+                <div class="pack-gallery" id="pack-gallery">
+                    <!-- Примеры загрузятся динамически -->
+                </div>
+                <div class="pack-info">
+                    <div class="pack-info-row">
+                        <span class="pack-info-label">Количество фото</span>
+                        <span class="pack-info-value" id="pack-detail-count">20</span>
+                    </div>
+                </div>
+                <button class="generate-btn" id="pack-buy-btn" onclick="buyPack()">
+                    <span class="btn-text" id="pack-buy-text">Купить 990 ₽</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Pack Paid -->
+        <div id="screen-pack-paid" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon">✅</div>
+                <h2 class="nocredits-title">Оплата прошла!</h2>
+                <p class="nocredits-text">Перейдите в бот и нажмите кнопку «Загрузить фото для пака», чтобы отправить 10-20 селфи.</p>
+                <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+            </div>
+        </div>
+
+        <!-- Screen: Gender -->
+        <div id="screen-gender" class="screen">
+            <div class="screen-content">
+                <h1 class="screen-title">Кто на фото?</h1>
+                <p class="screen-subtitle">Подберём стили специально для вас</p>
+                <div class="gender-cards">
+                    <button class="gender-card" data-gender="male" onclick="selectGender('male')">
+                        <div class="gender-icon">👨</div>
+                        <div class="gender-label">Мужчина</div>
+                    </button>
+                    <button class="gender-card" data-gender="female" onclick="selectGender('female')">
+                        <div class="gender-icon">👩</div>
+                        <div class="gender-label">Женщина</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Styles -->
+        <div id="screen-styles" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('gender')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Выберите стиль</h2>
+                <div class="credits-badge" id="credits-badge">
+                    <span class="credits-icon">⚡</span>
+                    <span id="credits-count">0</span>
+                </div>
+            </div>
+            <div class="styles-grid" id="styles-grid">
+                <!-- Стили загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Upload -->
+        <div id="screen-upload" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('styles')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="selected-style-name">Стиль</h2>
+                <div></div>
+            </div>
+            <div class="upload-container">
+                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                    <div class="upload-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <div class="upload-text">Загрузите фото</div>
+                    <div class="upload-hint">Нажмите или перетащите</div>
+                    <div class="upload-hint">JPG, PNG до 15 МБ</div>
+                </div>
+                <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handleFileSelect(event)">
+
+                <!-- Preview -->
+                <div class="upload-preview" id="upload-preview" style="display:none">
+                    <img id="preview-image" src="" alt="Preview">
+                    <button class="preview-change" onclick="resetUpload()">Сменить фото</button>
+                </div>
+
+                <button class="generate-btn" id="generate-btn" style="display:none" onclick="startGeneration()">
+                    <span class="btn-text">✨ Создать</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Generating -->
+        <div id="screen-generating" class="screen">
+            <div class="generating-container">
+                <div class="generating-visual">
+                    <div class="generating-ring"></div>
+                    <div class="generating-ring ring-2"></div>
+                    <div class="generating-ring ring-3"></div>
+                    <div class="generating-center">
+                        <span>🎨</span>
+                    </div>
+                </div>
+                <h2 class="generating-title">Создаём шедевр</h2>
+                <p class="generating-subtitle">AI обрабатывает ваше фото...</p>
+                <div class="generating-progress">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="generating-tip" id="generating-tip">Обычно это занимает 30-60 секунд</div>
+            </div>
+        </div>
+
+        <!-- Screen: Result -->
+        <div id="screen-result" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('styles')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Результат</h2>
+                <div></div>
+            </div>
+            <div class="result-container">
+                <div class="result-image-wrapper">
+                    <img id="result-image" src="" alt="Result">
+                </div>
+                <div class="result-actions">
+                    <button class="action-btn primary" onclick="downloadResult()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Скачать
+                    </button>
+                    <button class="action-btn secondary" onclick="tryAnotherStyle()">
+                        🎨 Ещё стиль
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: No Credits -->
+        <div id="screen-nocredits" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon">💎</div>
+                <h2 class="nocredits-title">Нужны кредиты</h2>
+                <p class="nocredits-text">У вас закончились бесплатные генерации. Купите кредиты, чтобы продолжить.</p>
+                <button class="action-btn primary" onclick="buyCredits()">Купить кредиты</button>
+                <button class="action-btn secondary" onclick="goBack('styles')">Назад</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app/static/app.js"></script>
+</body>
+</html>

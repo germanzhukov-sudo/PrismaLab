@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -15,6 +15,9 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from .constants import ADMIN_BASE
+
+# Получаем префикс таблиц из storage
+TABLE_PREFIX = os.getenv("TABLE_PREFIX", "")
 from .auth import (
     create_session,
     delete_session,
@@ -141,8 +144,9 @@ async def dashboard(request: Request):
     """Главная страница — дашборд."""
     period = request.query_params.get("period", "week")
 
-    # Определяем даты
-    today = datetime.now().date()
+    # Определяем даты (МСК = UTC+3)
+    _MSK = timezone(timedelta(hours=3))
+    today = datetime.now(_MSK).date()
     if period == "today":
         date_from = today.isoformat()
         date_to = today.isoformat()
@@ -305,22 +309,24 @@ def _do_csv_export(export_type: str, date_from: str, date_to: str) -> str:
     logger.info("Connected!")
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            payments_table = f"public.{TABLE_PREFIX}payments"
+            users_table = f"public.{TABLE_PREFIX}users"
             if export_type == "payments":
                 if date_from and date_to:
                     cur.execute(
-                        "SELECT * FROM public.payments WHERE created_at >= %s AND created_at <= %s ORDER BY created_at DESC",
+                        f"SELECT * FROM {payments_table} WHERE created_at >= %s AND created_at <= %s ORDER BY created_at DESC",
                         (date_from, date_to + " 23:59:59")
                     )
                 else:
                     # Без дат — последние 10000 записей
-                    cur.execute("SELECT * FROM public.payments ORDER BY created_at DESC LIMIT 10000")
+                    cur.execute(f"SELECT * FROM {payments_table} ORDER BY created_at DESC LIMIT 10000")
                 rows = cur.fetchall()
                 writer.writerow(["ID", "User ID", "Payment ID", "Method", "Type", "Credits", "Amount RUB", "Created At"])
                 for p in rows:
                     writer.writerow([p.get("id"), p.get("user_id"), p.get("payment_id"), p.get("payment_method"), p.get("product_type"), p.get("credits"), p.get("amount_rub"), p.get("created_at")])
             elif export_type == "users":
                 # Все пользователи (до 50000)
-                cur.execute("SELECT * FROM public.users ORDER BY updated_at DESC LIMIT 50000")
+                cur.execute(f"SELECT * FROM {users_table} ORDER BY updated_at DESC LIMIT 50000")
                 rows = cur.fetchall()
                 writer.writerow(["User ID", "Fast Credits", "Persona Credits", "Gender", "Updated At"])
                 for u in rows:
@@ -359,7 +365,8 @@ async def export_csv(request: Request):
 async def api_stats(request: Request):
     """API: статистика."""
     period = request.query_params.get("period", "week")
-    today = datetime.now().date()
+    _MSK = timezone(timedelta(hours=3))
+    today = datetime.now(_MSK).date()
 
     if period == "today":
         date_from = today.isoformat()

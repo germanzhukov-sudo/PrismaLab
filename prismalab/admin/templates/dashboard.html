@@ -154,6 +154,14 @@
                 <div class="stat-label"><i class="bi bi-graph-up-arrow"></i> Маржа ({{ stats.margin.percent }}%)</div>
             </div>
         </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Доля новых пользователей, совершивших хотя бы одну оплату за период ({{ stats.conversion.paid_users }} из {{ stats.users.new }})</div>
+                <div class="stat-value">{{ stats.conversion.percent }}%</div>
+                <div class="stat-label"><i class="bi bi-funnel"></i> Конверсия в оплату</div>
+            </div>
+        </div>
     </div>
 
     <!-- Покупки и генерации за период -->
