@@ -42,6 +42,7 @@ async def alert_payment(user_id: int, amount_rub: float, credits: int, product_t
         "fast": "Экспресс",
         "persona_topup": "Персона (пополнение)",
         "persona_create": "Создание Персоны",
+        "persona_pack": "Фотопак",
     }
     product_name = product_names.get(product_type, product_type)
 
@@ -81,6 +82,26 @@ async def alert_slow_generation(user_id: int, duration_seconds: float, generatio
         f"Тип: {type_name}\n"
         f"Время: {minutes:.1f} мин\n"
         f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>"
+    )
+    await _send_alert(text)
+
+
+async def alert_payment_error(user_id: int, product_type: str, error: str) -> None:
+    """Алерт об ошибке создания платежа."""
+    product_names = {
+        "fast": "Экспресс",
+        "persona_topup": "Персона (пополнение)",
+        "persona_create": "Создание Персоны",
+        "persona_pack": "Фотопак",
+    }
+    product_name = product_names.get(product_type, product_type)
+    error_short = error[:200] + "..." if len(error) > 200 else error
+
+    text = (
+        f"❌ <b>Ошибка платежа!</b>\n\n"
+        f"Продукт: {product_name}\n"
+        f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
+        f"Ошибка: <code>{error_short}</code>"
     )
     await _send_alert(text)
 

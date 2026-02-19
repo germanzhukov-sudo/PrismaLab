@@ -71,7 +71,7 @@ from prismalab.payment import (
 from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
 from prismalab.styles import STYLES, get_style
 from prismalab.storage import PrismaLabStore
-from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report
+from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report, alert_payment_error
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -2492,6 +2492,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         return
     except Exception as e:
         logger.warning("Ошибка create_payment для pack %s: %s", pack_id, e)
+        asyncio.create_task(alert_payment_error(user_id, "persona_pack", str(e)))
         await query.edit_message_text(
             "❌ Ошибка оплаты. Попробуйте еще раз.",
             reply_markup=_persona_packs_keyboard(),
@@ -2499,6 +2500,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         return
     if not (url and payment_id):
         err = str(payment_id or "unknown")
+        asyncio.create_task(alert_payment_error(user_id, "persona_pack", err))
         if "network error" in err.lower() or "readtimeout" in err.lower() or "connecttimeout" in err.lower():
             await query.edit_message_text(
                 "❌ Не удалось связаться с YooKassa (сеть/таймаут). Попробуйте еще раз через 1-2 минуты.",
@@ -2576,6 +2578,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
             return
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
+            asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
             await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
             return
 
@@ -2696,6 +2699,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             return
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
+            asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
             await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
             return
 
@@ -2816,6 +2820,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
             return
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
+            asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
             await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
             return
 
@@ -3020,6 +3025,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
             return
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
+            asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
             await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
             return
 
@@ -3407,6 +3413,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             return
         else:
             logger.warning("Ошибка создания платежа (fast): %s", payment_id)
+            asyncio.create_task(alert_payment_error(user_id, "fast", str(payment_id)))
             await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
             return
 
