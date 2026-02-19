@@ -13,6 +13,7 @@ from typing import Any
 
 logger = logging.getLogger("prismalab.storage")
 DATABASE_URL = os.getenv("DATABASE_URL")
+TABLE_PREFIX = os.getenv("TABLE_PREFIX", "")  # "" для прода, "dev_" для dev
 
 
 def _pg_url_with_ssl(url: str) -> str:
@@ -69,7 +70,13 @@ class PrismaLabStore:
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.db_path = str(db_path if db_path is not None else _default_db_path())
         self._use_pg = bool(DATABASE_URL and DATABASE_URL.strip())
-        self._users_table = "public.users" if self._use_pg else "users"
+        self._prefix = TABLE_PREFIX
+        # Имена таблиц с учётом префикса
+        self._users_table = f"public.{self._prefix}users" if self._use_pg else f"{self._prefix}users"
+        self._payments_table = f"public.{self._prefix}payments" if self._use_pg else f"{self._prefix}payments"
+        self._user_events_table = f"public.{self._prefix}user_events" if self._use_pg else f"{self._prefix}user_events"
+        self._admins_table = f"public.{self._prefix}admins" if self._use_pg else f"{self._prefix}admins"
+        self._admin_settings_table = f"public.{self._prefix}admin_settings" if self._use_pg else f"{self._prefix}admin_settings"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -166,6 +173,7 @@ class PrismaLabStore:
                 )
                 """,
             )
+            conn.commit()
             try:
                 self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN persona_credits_remaining INTEGER DEFAULT 0")
                 conn.commit()
@@ -175,8 +183,8 @@ class PrismaLabStore:
             try:
                 self._execute(
                     conn,
-                    """
-                    CREATE TABLE IF NOT EXISTS public.admin_settings (
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._admin_settings_table} (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
                         updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -254,7 +262,7 @@ class PrismaLabStore:
         with self._connect() as conn:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT key, value FROM public.admin_settings WHERE key LIKE 'cost_%' OR key = 'usd_rub'")
+                cur.execute(f"SELECT key, value FROM {self._admin_settings_table} WHERE key LIKE 'cost_%' OR key = 'usd_rub'")
                 for row in cur.fetchall():
                     key = row["key"]
                     if key in defaults:
@@ -274,8 +282,8 @@ class PrismaLabStore:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 for key, value in settings.items():
                     if key in ("cost_persona_create", "cost_fast_photo", "cost_persona_photo", "usd_rub"):
-                        cur.execute("""
-                            INSERT INTO public.admin_settings (key, value, updated_at)
+                        cur.execute(f"""
+                            INSERT INTO {self._admin_settings_table} (key, value, updated_at)
                             VALUES (%s, %s, NOW())
                             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
                         """, (key, str(value)))
@@ -494,8 +502,8 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     # Таблица платежей
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS public.payments (
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._payments_table} (
                             id SERIAL PRIMARY KEY,
                             user_id BIGINT NOT NULL,
                             payment_id TEXT,
@@ -507,8 +515,8 @@ class PrismaLabStore:
                         )
                     """)
                     # Таблица событий пользователей
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS public.user_events (
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._user_events_table} (
                             id SERIAL PRIMARY KEY,
                             user_id BIGINT NOT NULL,
                             event_type TEXT NOT NULL,
@@ -517,8 +525,8 @@ class PrismaLabStore:
                         )
                     """)
                     # Таблица админов
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS public.admins (
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._admins_table} (
                             id SERIAL PRIMARY KEY,
                             username TEXT UNIQUE NOT NULL,
                             password_hash TEXT NOT NULL,
@@ -530,18 +538,19 @@ class PrismaLabStore:
                     # Добавить created_at в users если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._users_table} ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()")
+                        conn.commit()
                     except Exception:
-                        pass
+                        conn.rollback()
                     # Индексы
                     try:
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON public.payments(user_id)")
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_created_at ON public.payments(created_at DESC)")
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_events_user_id ON public.user_events(user_id)")
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_events_created_at ON public.user_events(created_at DESC)")
-                        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_events_type ON public.user_events(event_type)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}payments_user_id ON {self._payments_table}(user_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_payments_created_at ON {self._payments_table}(created_at DESC)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_user_id ON {self._user_events_table}(user_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_created_at ON {self._user_events_table}(created_at DESC)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_type ON {self._user_events_table}(event_type)")
+                        conn.commit()
                     except Exception:
-                        pass
-                conn.commit()
+                        conn.rollback()
                 logger.info("Таблицы админки созданы/проверены")
             else:
                 # SQLite версия
@@ -597,7 +606,7 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT 1 FROM public.payments WHERE payment_id = %s LIMIT 1",
+                        f"SELECT 1 FROM {self._payments_table} WHERE payment_id = %s LIMIT 1",
                         (payment_id,),
                     )
                     return cur.fetchone() is not None
@@ -623,8 +632,8 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        """
-                        INSERT INTO public.payments (user_id, payment_id, payment_method, product_type, credits, amount_rub)
+                        f"""
+                        INSERT INTO {self._payments_table} (user_id, payment_id, payment_method, product_type, credits, amount_rub)
                         VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id
                         """,
@@ -654,8 +663,8 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor, Json
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        """
-                        INSERT INTO public.user_events (user_id, event_type, event_data)
+                        f"""
+                        INSERT INTO {self._user_events_table} (user_id, event_type, event_data)
                         VALUES (%s, %s, %s)
                         RETURNING id
                         """,
@@ -683,7 +692,7 @@ class PrismaLabStore:
             if self._use_pg:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM public.admins WHERE username = %s AND is_active = TRUE", (username,))
+                    cur.execute(f"SELECT * FROM {self._admins_table} WHERE username = %s AND is_active = TRUE", (username,))
                     row = cur.fetchone()
                     return dict(row) if row else None
             else:
@@ -697,12 +706,12 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        """
-                        INSERT INTO public.admins (username, password_hash, display_name)
+                        f"""
+                        INSERT INTO {self._admins_table} (username, password_hash, display_name)
                         VALUES (%s, %s, %s)
                         ON CONFLICT (username) DO UPDATE SET
                             password_hash = EXCLUDED.password_hash,
-                            display_name = COALESCE(EXCLUDED.display_name, public.admins.display_name)
+                            display_name = COALESCE(EXCLUDED.display_name, {self._admins_table}.display_name)
                         RETURNING id
                         """,
                         (username, password_hash, display_name),
@@ -787,13 +796,13 @@ class PrismaLabStore:
                 params.append(product_type)
             if date_from:
                 conditions.append("created_at >= %s" if self._use_pg else "created_at >= ?")
-                params.append(date_from)
+                params.append(str(date_from) + " 00:00:00+03")
             if date_to:
                 conditions.append("created_at <= %s" if self._use_pg else "created_at <= ?")
-                params.append(date_to + " 23:59:59")
+                params.append(str(date_to) + " 23:59:59+03")
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
-            table = "public.payments" if self._use_pg else "payments"
+            table = self._payments_table
 
             if self._use_pg:
                 from psycopg2.extras import RealDictCursor
@@ -821,13 +830,13 @@ class PrismaLabStore:
                 params.append(product_type)
             if date_from:
                 conditions.append("created_at >= %s" if self._use_pg else "created_at >= ?")
-                params.append(date_from)
+                params.append(str(date_from) + " 00:00:00+03")
             if date_to:
                 conditions.append("created_at <= %s" if self._use_pg else "created_at <= ?")
-                params.append(date_to + " 23:59:59")
+                params.append(str(date_to) + " 23:59:59+03")
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
-            table = "public.payments" if self._use_pg else "payments"
+            table = self._payments_table
 
             if self._use_pg:
                 from psycopg2.extras import RealDictCursor
@@ -877,12 +886,12 @@ class PrismaLabStore:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 # Всего юзеров (кто нажал /start)
-                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
+                cur.execute(f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._user_events_table} WHERE event_type = 'start'")
                 row = cur.fetchone()
                 stats["users_total"] = int(row["cnt"]) if row else 0
 
                 # Общая выручка и кол-во платежей
-                cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments")
+                cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table}")
                 row = cur.fetchone()
                 if row:
                     total_payments = int(row["cnt"])
@@ -891,7 +900,7 @@ class PrismaLabStore:
                         stats["avg_check"] = round(stats["total_revenue"] / total_payments, 2)
 
                 # Платящие юзеры
-                cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.payments")
+                cur.execute(f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._payments_table}")
                 row = cur.fetchone()
                 stats["paid_users"] = int(row["cnt"]) if row else 0
 
@@ -900,25 +909,25 @@ class PrismaLabStore:
                     stats["conversion"] = round((stats["paid_users"] / stats["users_total"]) * 100, 2)
 
                 # Покупок Экспресс
-                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'fast'")
+                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'fast'")
                 row = cur.fetchone()
                 stats["express_purchases"] = int(row["cnt"]) if row else 0
 
                 # Покупок Персона
-                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type LIKE 'persona%%'")
+                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type LIKE 'persona%%'")
                 row = cur.fetchone()
                 stats["persona_purchases"] = int(row["cnt"]) if row else 0
 
                 # Для маржи: генерации по типам и создания персон
-                cur.execute("""SELECT
+                cur.execute(f"""SELECT
                     COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
                     COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
-                FROM public.user_events WHERE event_type = 'generation'""")
+                FROM {self._user_events_table} WHERE event_type = 'generation'""")
                 row = cur.fetchone()
                 fast_gens = int(row["fast"] or 0) if row else 0
                 persona_gens = int(row["persona"] or 0) if row else 0
 
-                cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'persona_create'")
+                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'persona_create'")
                 row = cur.fetchone()
                 persona_creates = int(row["cnt"]) if row else 0
 
@@ -933,20 +942,20 @@ class PrismaLabStore:
                 total_gens = fast_gens + persona_gens
                 if stats["paid_users"] > 0:
                     # Считаем генерации только от платящих юзеров
-                    cur.execute("""SELECT COUNT(*) as cnt FROM public.user_events ue
+                    cur.execute(f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
                                    WHERE ue.event_type = 'generation'
-                                   AND EXISTS (SELECT 1 FROM public.payments p WHERE p.user_id = ue.user_id)""")
+                                   AND EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""")
                     row = cur.fetchone()
                     paying_gens = int(row["cnt"]) if row else 0
                     stats["gens_per_paying_user"] = round(paying_gens / stats["paid_users"], 1)
 
                 # Статистика по полу
-                cur.execute("""SELECT
+                cur.execute(f"""SELECT
                     COUNT(*) FILTER (WHERE subject_gender = 'male') as male,
                     COUNT(*) FILTER (WHERE subject_gender = 'female') as female,
                     COUNT(*) FILTER (WHERE subject_gender IS NULL) as unknown,
                     COUNT(*) as total
-                FROM public.users""")
+                FROM {self._users_table}""")
                 row = cur.fetchone()
                 if row and int(row["total"] or 0) > 0:
                     total = int(row["total"])
@@ -955,13 +964,13 @@ class PrismaLabStore:
                     stats["gender"]["unknown"] = round((int(row["unknown"] or 0) / total) * 100, 1)
 
                 # Среднее количество дней до первой покупки
-                cur.execute("""
+                cur.execute(f"""
                     SELECT AVG(days) as avg_days FROM (
                         SELECT
                             p.user_id,
                             EXTRACT(EPOCH FROM (MIN(p.created_at) - MIN(ue.created_at))) / 86400 as days
-                        FROM public.payments p
-                        JOIN public.user_events ue ON ue.user_id = p.user_id AND ue.event_type = 'start'
+                        FROM {self._payments_table} p
+                        JOIN {self._user_events_table} ue ON ue.user_id = p.user_id AND ue.event_type = 'start'
                         GROUP BY p.user_id
                     ) t
                     WHERE days >= 0
@@ -985,21 +994,21 @@ class PrismaLabStore:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 # Конвертируем UTC в МСК (UTC+3)
                 if date_from and date_to:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT
                             EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int as hour,
                             COUNT(DISTINCT user_id) as cnt
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         WHERE created_at >= %s AND created_at <= %s
                         GROUP BY EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')
                         ORDER BY hour
                     """, (date_from, date_to + " 23:59:59"))
                 else:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT
                             EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int as hour,
                             COUNT(DISTINCT user_id) as cnt
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         GROUP BY EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')
                         ORDER BY hour
                     """)
@@ -1026,13 +1035,14 @@ class PrismaLabStore:
             "generations": {"total": 0, "free": 0, "fast": 0, "persona": 0},
             "costs": {"total": 0.0, "persona_create": 0.0, "fast_photos": 0.0, "persona_photos": 0.0},
             "margin": {"amount": 0.0, "percent": 0.0},
+            "conversion": {"paid_users": 0, "percent": 0.0},
         }
 
-        # Подготовка дат
+        # Подготовка дат (МСК → UTC)
         has_dates = bool(date_from and date_to)
         if has_dates:
-            d_from = str(date_from)
-            d_to = str(date_to) + " 23:59:59"
+            d_from = str(date_from) + " 00:00:00+03"
+            d_to = str(date_to) + " 23:59:59+03"
 
         with self._connect() as conn:
             if not self._use_pg:
@@ -1049,10 +1059,10 @@ class PrismaLabStore:
                 # Новые юзеры за период: считаем по дате ПЕРВОГО события start для каждого юзера
                 if has_dates:
                     cur.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) as cnt FROM (
                             SELECT user_id, MIN(created_at) as first_start
-                            FROM public.user_events
+                            FROM {self._user_events_table}
                             WHERE event_type = 'start'
                             GROUP BY user_id
                             HAVING MIN(created_at) >= %s AND MIN(created_at) <= %s
@@ -1064,18 +1074,18 @@ class PrismaLabStore:
                     stats["users"]["new"] = int(row["cnt"]) if row else 0
                 else:
                     # Без дат — все уникальные юзеры с хотя бы одним start
-                    cur.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM public.user_events WHERE event_type = 'start'")
+                    cur.execute(f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._user_events_table} WHERE event_type = 'start'")
                     row = cur.fetchone()
                     stats["users"]["new"] = int(row["cnt"]) if row else 0
 
                 # Платежи
                 if has_dates:
                     cur.execute(
-                        "SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments WHERE created_at >= %s AND created_at <= %s",
+                        f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE created_at >= %s AND created_at <= %s",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments")
+                    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table}")
                 row = cur.fetchone()
                 if row:
                     stats["payments"]["total_count"] = int(row["cnt"])
@@ -1086,11 +1096,11 @@ class PrismaLabStore:
                 # Экспресс платежи
                 if has_dates:
                     cur.execute(
-                        "SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments WHERE product_type = 'fast' AND created_at >= %s AND created_at <= %s",
+                        f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type = 'fast' AND created_at >= %s AND created_at <= %s",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments WHERE product_type = 'fast'")
+                    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type = 'fast'")
                 row = cur.fetchone()
                 if row:
                     stats["payments"]["express"]["count"] = int(row["cnt"])
@@ -1099,11 +1109,11 @@ class PrismaLabStore:
                 # Персона платежи (%% для экранирования % в Python)
                 if has_dates:
                     cur.execute(
-                        "SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments WHERE product_type LIKE 'persona%%' AND created_at >= %s AND created_at <= %s",
+                        f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type LIKE 'persona%%' AND created_at >= %s AND created_at <= %s",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM public.payments WHERE product_type LIKE 'persona%%'")
+                    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type LIKE 'persona%%'")
                 row = cur.fetchone()
                 if row:
                     stats["payments"]["persona"]["count"] = int(row["cnt"])
@@ -1112,21 +1122,21 @@ class PrismaLabStore:
                 # Генерации по типам (fast / persona)
                 if has_dates:
                     cur.execute(
-                        """SELECT
+                        f"""SELECT
                             COUNT(*) as total,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         WHERE event_type = 'generation' AND created_at >= %s AND created_at <= %s""",
                         (d_from, d_to),
                     )
                 else:
                     cur.execute(
-                        """SELECT
+                        f"""SELECT
                             COUNT(*) as total,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         WHERE event_type = 'generation'"""
                     )
                 row = cur.fetchone()
@@ -1138,27 +1148,27 @@ class PrismaLabStore:
                 # Бесплатные генерации (юзеры без платежей за период)
                 if has_dates:
                     cur.execute(
-                        """SELECT COUNT(*) as cnt FROM public.user_events ue
+                        f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
                            WHERE ue.event_type = 'generation'
                            AND ue.created_at >= %s AND ue.created_at <= %s
-                           AND NOT EXISTS (SELECT 1 FROM public.payments p WHERE p.user_id = ue.user_id)""",
+                           AND NOT EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute("""SELECT COUNT(*) as cnt FROM public.user_events ue
+                    cur.execute(f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
                                    WHERE ue.event_type = 'generation'
-                                   AND NOT EXISTS (SELECT 1 FROM public.payments p WHERE p.user_id = ue.user_id)""")
+                                   AND NOT EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""")
                 row = cur.fetchone()
                 stats["generations"]["free"] = int(row["cnt"]) if row else 0
 
                 # Создания персон (покупки persona_create)
                 if has_dates:
                     cur.execute(
-                        "SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'persona_create' AND created_at >= %s AND created_at <= %s",
+                        f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'persona_create' AND created_at >= %s AND created_at <= %s",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute("SELECT COUNT(*) as cnt FROM public.payments WHERE product_type = 'persona_create'")
+                    cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'persona_create'")
                 row = cur.fetchone()
                 persona_creates = int(row["cnt"]) if row else 0
 
@@ -1179,6 +1189,21 @@ class PrismaLabStore:
                 stats["margin"]["amount"] = round(margin, 2)
                 stats["margin"]["percent"] = round((margin / revenue) * 100, 2) if revenue > 0 else 0.0
 
+                # Конверсия за период: платящие юзеры / новые юзеры
+                if has_dates:
+                    cur.execute(
+                        f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._payments_table} WHERE created_at >= %s AND created_at <= %s",
+                        (d_from, d_to),
+                    )
+                else:
+                    cur.execute(f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._payments_table}")
+                row = cur.fetchone()
+                paid_users = int(row["cnt"]) if row else 0
+                stats["conversion"]["paid_users"] = paid_users
+                new_users = stats["users"]["new"]
+                if new_users > 0:
+                    stats["conversion"]["percent"] = round((paid_users / new_users) * 100, 2)
+
         return stats
 
     def get_chart_data(self, days: int = 30) -> dict:
@@ -1192,9 +1217,9 @@ class PrismaLabStore:
                     # PostgreSQL: INTERVAL '1 day' * N вместо INTERVAL '%s days'
                     # Выручка по дням
                     cur.execute(
-                        """
+                        f"""
                         SELECT DATE(created_at) as day, COALESCE(SUM(amount_rub), 0) as total
-                        FROM public.payments
+                        FROM {self._payments_table}
                         WHERE created_at >= NOW() - INTERVAL '1 day' * %s
                         GROUP BY DATE(created_at)
                         ORDER BY day
@@ -1205,9 +1230,9 @@ class PrismaLabStore:
 
                     # Новые юзеры по дням (по событию start)
                     cur.execute(
-                        """
+                        f"""
                         SELECT DATE(created_at) as day, COUNT(DISTINCT user_id) as cnt
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         WHERE event_type = 'start' AND created_at >= NOW() - INTERVAL '1 day' * %s
                         GROUP BY DATE(created_at)
                         ORDER BY day
@@ -1218,9 +1243,9 @@ class PrismaLabStore:
 
                     # Генерации по дням
                     cur.execute(
-                        """
+                        f"""
                         SELECT DATE(created_at) as day, COUNT(*) as cnt
-                        FROM public.user_events
+                        FROM {self._user_events_table}
                         WHERE event_type = 'generation' AND created_at >= NOW() - INTERVAL '1 day' * %s
                         GROUP BY DATE(created_at)
                         ORDER BY day
@@ -1264,13 +1289,13 @@ class PrismaLabStore:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT * FROM public.payments WHERE user_id = %s ORDER BY created_at DESC LIMIT 100",
+                        f"SELECT * FROM {self._payments_table} WHERE user_id = %s ORDER BY created_at DESC LIMIT 100",
                         (int(user_id),),
                     )
                     result["payments"] = [dict(row) for row in cur.fetchall()]
 
                     cur.execute(
-                        "SELECT * FROM public.user_events WHERE user_id = %s ORDER BY created_at DESC LIMIT 100",
+                        f"SELECT * FROM {self._user_events_table} WHERE user_id = %s ORDER BY created_at DESC LIMIT 100",
                         (int(user_id),),
                     )
                     result["events"] = [dict(row) for row in cur.fetchall()]
