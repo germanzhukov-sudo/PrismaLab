@@ -50,9 +50,9 @@ INVOICE_AMOUNT_KOPECKS = int(os.getenv("INVOICE_AMOUNT_KOPECKS") or "8800")  # 8
 INVOICE_PAYLOAD_PREFIX = "pl:"
 
 # Цены в рублях (для отображения и реальной оплаты если PAYMENT_TEST_AMOUNT=0)
-PRICES_FAST = {5: 169, 10: 309, 30: 690, 50: 990}
-PRICES_PERSONA_TOPUP = {5: 269, 10: 499, 20: 899}
-PRICES_PERSONA_CREATE = {10: 599, 20: 999}
+PRICES_FAST = {5: 199, 10: 299, 30: 699}
+PRICES_PERSONA_TOPUP = {10: 229, 20: 439, 30: 629}
+PRICES_PERSONA_CREATE = {20: 599, 40: 999}
 
 
 def is_yookassa_configured() -> bool:
@@ -69,12 +69,25 @@ def _amount_rub(product_type: str, credits: int) -> float:
     if PAYMENT_TEST_AMOUNT > 0:
         return float(PAYMENT_TEST_AMOUNT)
     if product_type == "fast":
-        return float(PRICES_FAST.get(credits, 169))
+        return float(PRICES_FAST.get(credits, 199))
     if product_type == "persona_topup":
-        return float(PRICES_PERSONA_TOPUP.get(credits, 269))
+        return float(PRICES_PERSONA_TOPUP.get(credits, 229))
     if product_type == "persona_create":
         return float(PRICES_PERSONA_CREATE.get(credits, 599))
     return 10.0
+
+
+def apply_test_amount(amount_rub: float) -> float:
+    """
+    Применяет глобальную тестовую сумму платежа, если она включена.
+    Полезно для продуктов с динамической ценой (например, Astria packs).
+    """
+    if PAYMENT_TEST_AMOUNT > 0:
+        return float(PAYMENT_TEST_AMOUNT)
+    try:
+        return max(1.0, float(amount_rub))
+    except Exception:
+        return 1.0
 
 
 def create_payment(
@@ -85,7 +98,7 @@ def create_payment(
     return_url: str | None = None,
 ) -> tuple[str | None, str | None]:
     """
-    Создаёт платёж в ЮKassa.
+    Создаёт платёж в ЮKassa через SDK.
     Возвращает (confirmation_url, payment_id) или (None, error_message).
     """
     if not is_yookassa_configured():
@@ -126,12 +139,29 @@ def get_payment_status(payment_id: str) -> str | None:
         return None
     try:
         from yookassa import Configuration, Payment
+
         Configuration.configure(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
         payment = Payment.find_one(payment_id)
         return payment.status
     except Exception as e:
-        logger.exception("Ошибка получения статуса платежа %s: %s", payment_id, e)
+        logger.warning("Ошибка получения статуса платежа %s: %s", payment_id, type(e).__name__)
         return None
+
+
+def get_payment_metadata(payment_id: str) -> dict:
+    """Получить metadata платежа из ЮKassa. Возвращает dict (может быть пустым)."""
+    if not is_yookassa_configured():
+        return {}
+    try:
+        from yookassa import Configuration, Payment
+
+        Configuration.configure(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
+        payment = Payment.find_one(payment_id)
+        meta = getattr(payment, "metadata", None)
+        return dict(meta) if isinstance(meta, dict) else {}
+    except Exception as e:
+        logger.warning("Ошибка получения metadata платежа %s: %s", payment_id, type(e).__name__)
+        return {}
 
 
 def _yookassa_success_content(
@@ -242,21 +272,51 @@ async def poll_payment_status(
             elif product_type == "persona_create":
                 store.set_persona_credits(user_id, credits)
                 store.set_astria_lora_tune(user_id=user_id, tune_id=None)
+            elif product_type == "persona_pack":
+                # Пак — не начисляем кредиты, отправляем кнопку
+                pass
 
-            # Текст и клавиатура как в Telegram Payments (bot.handle_successful_payment)
-            msg_text, reply_markup = _yookassa_success_content(bot, store, user_id, product_type, credits)
+            if product_type == "persona_pack":
+                # Для паков: кнопка загрузки фото (pack_id из metadata)
+                pack_id = "0"
+                meta = get_payment_metadata(payment_id)
+                if meta.get("pack_id"):
+                    pack_id = str(meta["pack_id"])
+                try:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                    kb = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "📸 Загрузить фото для пака",
+                            callback_data=f"pl_pack_upload:{pack_id}:{credits}",
+                        )
+                    ]])
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"Оплата получена ✅\n\n"
+                            f"Теперь загрузите <b>10-20 селфи</b> для создания персоны.\n"
+                            f"Нажмите кнопку ниже, чтобы начать."
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
+                except Exception as e:
+                    logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
+            else:
+                # Текст и клавиатура как в Telegram Payments (bot.handle_successful_payment)
+                msg_text, reply_markup = _yookassa_success_content(bot, store, user_id, product_type, credits)
 
-            # Отправляем сообщение
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=msg_text,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup,
-                    disable_web_page_preview=True,
-                )
-            except Exception as e:
-                logger.warning("Не удалось отправить сообщение об оплате: %s", e)
+                # Отправляем сообщение
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=msg_text,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup,
+                        disable_web_page_preview=True,
+                    )
+                except Exception as e:
+                    logger.warning("Не удалось отправить сообщение об оплате: %s", e)
 
             # Алерт админу
             await send_payment_alert(user_id, amount_rub, credits, product_type)
@@ -343,6 +403,33 @@ async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
         else:
             new_total = profile.persona_credits_remaining + credits
             store.set_persona_credits(user_id, new_total)
+    elif product_type == "persona_pack":
+        # Оплата фотопака — отправляем кнопку "Загрузить фото" в бот
+        pack_id = metadata.get("pack_id", "")
+        chat_id = metadata.get("chat_id")
+        if chat_id:
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "📸 Загрузить фото для пака",
+                        callback_data=f"pl_pack_upload:{pack_id}:{credits}",
+                    )
+                ]])
+                await bot.send_message(
+                    chat_id=int(chat_id),
+                    text=(
+                        f"Оплата получена ✅\n\n"
+                        f"Теперь загрузите <b>10-20 селфи</b> для создания персоны.\n"
+                        f"Нажмите кнопку ниже, чтобы начать."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+            except Exception as e:
+                logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
+        await send_payment_alert(user_id, amount_rub, credits, product_type)
+        return 200, "OK"
     else:
         logger.warning("Неизвестный product_type в платеже %s: %s", payment_id, product_type)
         return 200, "OK"
@@ -400,10 +487,12 @@ def run_webhook_server(bot: Any, store: Any) -> None:
         else:
             logger.info("Health endpoint слушает порт %s (path: /health)", port)
 
+        # ASGI bridge для Starlette-приложений (админка, miniapp)
+        from aiohttp_asgi import ASGIResource
+
         # Админка на том же порту по пути /admin (один вход, один порт)
         try:
             from prismalab.admin.app import create_admin_app
-            from aiohttp_asgi import ASGIResource
             admin_app = create_admin_app(store)
             # root_path="" — в scope уходит полный path (/admin/), иначе ASGI может резать и Starlette не матчит
             asgi_resource = ASGIResource(admin_app, root_path="")
@@ -424,6 +513,218 @@ def run_webhook_server(bot: Any, store: Any) -> None:
             logger.warning("Админка не подключена (не установлены зависимости): %s", e)
         except Exception as e:
             logger.warning("Ошибка подключения админки: %s (%s)", type(e).__name__, e, exc_info=True)
+
+        # Mini App на том же порту по пути /app (прямые aiohttp handlers, без ASGIResource)
+        try:
+            from prismalab.miniapp import routes as miniapp_routes
+            miniapp_routes.set_store(store)
+
+            async def _miniapp_page(_request: web.Request) -> web.Response:
+                """Отдаёт HTML Mini App."""
+                from pathlib import Path
+                html_path = Path(__file__).parent / "miniapp" / "templates" / "app.html"
+                html = html_path.read_text(encoding="utf-8")
+                return web.Response(text=html, content_type="text/html")
+
+            async def _miniapp_api_auth(request: web.Request) -> web.Response:
+                body = await request.json()
+                # Прямой вызов API
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Invalid init data"}, status=401)
+                profile = miniapp_routes.get_store().get_user(user["user_id"])
+                user_id = user["user_id"]
+                owner_id = miniapp_routes.OWNER_ID
+                if not owner_id or user_id != owner_id:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                return web.json_response({
+                    "user_id": user_id,
+                    "first_name": user["first_name"],
+                    "credits": {"fast": profile.paid_generations_remaining, "free_used": profile.free_generation_used},
+                    "gender": profile.subject_gender,
+                    "packs_enabled": True,
+                })
+
+            async def _miniapp_api_styles(request: web.Request) -> web.Response:
+                user = _miniapp_get_user(request)
+                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                gender = request.query.get("gender", "female")
+                styles = miniapp_routes.FAST_STYLES_FEMALE if gender == "female" else miniapp_routes.FAST_STYLES_MALE
+                return web.json_response({"styles": styles, "gender": gender})
+
+            async def _miniapp_api_generate(request: web.Request) -> web.Response:
+                reader = await request.multipart()
+                init_data = ""
+                style_id = ""
+                photo_bytes = b""
+                async for part in reader:
+                    if part.name == "init_data":
+                        init_data = (await part.read()).decode()
+                    elif part.name == "style_id":
+                        style_id = (await part.read()).decode()
+                    elif part.name == "photo":
+                        photo_bytes = await part.read()
+
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+
+                user_id = user["user_id"]
+                s = miniapp_routes.get_store()
+                profile = s.get_user(user_id)
+                has_free = not profile.free_generation_used
+                has_paid = profile.paid_generations_remaining > 0
+                if not has_free and not has_paid:
+                    return web.json_response({"error": "no_credits"}, status=402)
+                if len(photo_bytes) > 15 * 1024 * 1024:
+                    return web.json_response({"error": "Photo too large"}, status=413)
+
+                import uuid
+                task_id = str(uuid.uuid4())[:8]
+                miniapp_routes._generation_tasks[task_id] = {"status": "processing", "user_id": user_id, "style_id": style_id, "result_url": None, "error": None}
+                asyncio.get_event_loop().create_task(
+                    miniapp_routes._run_generation(task_id, user_id, style_id, photo_bytes, has_free, profile)
+                )
+                return web.json_response({"task_id": task_id, "status": "processing"})
+
+            async def _miniapp_api_status(request: web.Request) -> web.Response:
+                user = _miniapp_get_user(request)
+                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                task_id = request.match_info.get("task_id", "")
+                task = miniapp_routes._generation_tasks.get(task_id)
+                if not task:
+                    return web.json_response({"error": "Task not found"}, status=404)
+                if int(task.get("user_id") or 0) != int(user["user_id"]):
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                response = {"task_id": task_id, "status": task["status"]}
+                if task["status"] == "done":
+                    response["result_url"] = task["result_url"]
+                elif task["status"] == "error":
+                    response["error"] = task["error"]
+                return web.json_response(response)
+
+            def _miniapp_get_user(request: web.Request):
+                """Извлекает user из initData (header или query)."""
+                init_data = request.headers.get("X-Telegram-Init-Data", "")
+                if not init_data:
+                    init_data = request.query.get("init_data", "")
+                if not init_data:
+                    return None
+                from prismalab.miniapp.auth import validate_init_data
+                return validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+
+            async def _miniapp_api_packs(request: web.Request) -> web.Response:
+                # Паки только для owner
+                user = _miniapp_get_user(request)
+                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"packs": []})
+                offers = miniapp_routes._load_pack_offers()
+                if not offers:
+                    return web.json_response({"packs": []})
+                result = []
+                for offer in offers:
+                    pack_data = await miniapp_routes._fetch_pack_data(offer["id"])
+                    result.append({
+                        "id": offer["id"],
+                        "title": offer["title"],
+                        "price_rub": offer["price_rub"],
+                        "expected_images": offer["expected_images"],
+                        "cover_url": pack_data["cover_url"],
+                    })
+                return web.json_response({"packs": result})
+
+            async def _miniapp_api_pack_detail(request: web.Request) -> web.Response:
+                user = _miniapp_get_user(request)
+                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                pack_id_str = request.match_info.get("pack_id", "")
+                try:
+                    pack_id = int(pack_id_str)
+                except (ValueError, TypeError):
+                    return web.json_response({"error": "Invalid pack_id"}, status=400)
+                offers = miniapp_routes._load_pack_offers()
+                offer = next((o for o in offers if o["id"] == pack_id), None)
+                if not offer:
+                    return web.json_response({"error": "Pack not found"}, status=404)
+                pack_data = await miniapp_routes._fetch_pack_data(pack_id)
+                return web.json_response({
+                    "id": offer["id"],
+                    "title": offer["title"],
+                    "price_rub": offer["price_rub"],
+                    "expected_images": offer["expected_images"],
+                    "cover_url": pack_data["cover_url"],
+                    "examples": pack_data["examples"],
+                })
+
+            async def _miniapp_api_pack_buy(request: web.Request) -> web.Response:
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                pack_id_str = request.match_info.get("pack_id", "")
+                try:
+                    pack_id = int(pack_id_str)
+                except (ValueError, TypeError):
+                    return web.json_response({"error": "Invalid pack_id"}, status=400)
+                offers = miniapp_routes._load_pack_offers()
+                offer = next((o for o in offers if o["id"] == pack_id), None)
+                if not offer:
+                    return web.json_response({"error": "Pack not found"}, status=404)
+                user_id = user["user_id"]
+                price_rub = offer["price_rub"]
+                amount = apply_test_amount(float(price_rub))
+                miniapp_url = miniapp_routes.MINIAPP_URL
+                return_url = miniapp_url.rstrip("/") + f"?pack_paid={pack_id}" if miniapp_url else ""
+                if not miniapp_url:
+                    logger.warning("MINIAPP_URL не задан — после оплаты пака пользователь не вернётся в Mini App")
+                url, payment_id_or_err = create_payment(
+                    amount_rub=amount,
+                    description=f"PrismaLab — {offer['title']}",
+                    metadata={
+                        "user_id": str(user_id),
+                        "chat_id": str(user_id),
+                        "product_type": "persona_pack",
+                        "credits": str(offer["expected_images"]),
+                        "pack_id": str(pack_id),
+                    },
+                    return_url=return_url,
+                )
+                if not url:
+                    return web.json_response({"error": "Payment creation failed"}, status=500)
+                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
+
+            # Статика Mini App
+            from pathlib import Path
+            miniapp_static_path = str(Path(__file__).parent / "miniapp" / "static")
+            app.router.add_get("/app", _miniapp_page)
+            app.router.add_get("/app/", _miniapp_page)
+            app.router.add_post("/app/api/auth", _miniapp_api_auth)
+            app.router.add_get("/app/api/styles", _miniapp_api_styles)
+            app.router.add_post("/app/api/generate", _miniapp_api_generate)
+            app.router.add_get("/app/api/status/{task_id}", _miniapp_api_status)
+            app.router.add_get("/app/api/packs", _miniapp_api_packs)
+            app.router.add_get("/app/api/packs/{pack_id}", _miniapp_api_pack_detail)
+            app.router.add_post("/app/api/packs/{pack_id}/buy", _miniapp_api_pack_buy)
+            app.router.add_static("/app/static", miniapp_static_path)
+            logger.info("Mini App доступен на порту %s (path: /app/)", port)
+        except ImportError as e:
+            logger.warning("Mini App не подключен: %s", e)
+        except Exception as e:
+            logger.warning("Ошибка подключения Mini App: %s (%s)", type(e).__name__, e, exc_info=True)
 
         runner = web.AppRunner(app)
         await runner.setup()
