@@ -50,6 +50,8 @@ async function authenticate() {
             state.credits = data.credits;
             state.gender = data.gender;
             state.packsEnabled = !!data.packs_enabled;
+            state.hasPersona = !!data.has_persona;
+            state.personaCredits = data.persona_credits || 0;
             updateCreditsDisplay();
 
             // Проверяем возврат из ЮKassa после оплаты пака
@@ -59,7 +61,12 @@ async function authenticate() {
                 return;
             }
 
-            // Главное меню (карточка «Фотопаки» показывается только при packsEnabled)
+            // Пол не известен — спрашиваем и сохраняем в профиль
+            if (!data.gender) {
+                showScreen('gender');
+                return;
+            }
+
             showScreen('main');
         } else {
             if (resp.status === 403) {
@@ -103,21 +110,11 @@ function showScreen(name) {
         if (target) {
             target.classList.add('active');
         }
-        if (name === 'main') {
-            updateMainMenuPacksVisibility();
-        }
     }, 50);
 
     // Haptic feedback
     if (tg?.HapticFeedback) {
         tg.HapticFeedback.impactOccurred('light');
-    }
-}
-
-function updateMainMenuPacksVisibility() {
-    const card = document.getElementById('main-card-packs');
-    if (card) {
-        card.style.display = state.packsEnabled ? '' : 'none';
     }
 }
 
@@ -137,8 +134,18 @@ async function selectGender(gender) {
         tg.HapticFeedback.impactOccurred('medium');
     }
 
-    await loadStyles(gender);
-    showScreen('styles');
+    // Сохраняем пол в профиль (как в основном боте)
+    try {
+        await fetch('/app/api/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, gender }),
+        });
+    } catch (e) {
+        console.warn('Profile save error:', e);
+    }
+
+    showScreen('main');
 }
 
 // === Styles ===
@@ -448,20 +455,34 @@ function buyCredits() {
 
 // === Main Menu ===
 
-async function goToExpress() {
-    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-    if (state.gender) {
-        await loadStyles(state.gender);
-        showScreen('styles');
-    } else {
-        showScreen('gender');
-    }
-}
-
 async function goToPacks() {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    state.packCategory = state.packCategory || 'female';
     showScreen('packs');
     await loadPacks();
+}
+
+function goToProfile() {
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    renderProfile();
+    showScreen('profile');
+}
+
+function renderProfile() {
+    const fastTotal = (state.credits?.fast || 0) + (state.credits?.free_used ? 0 : 1);
+    document.getElementById('profile-fast-credits').textContent = fastTotal;
+    document.getElementById('profile-persona-credits').textContent = state.personaCredits ?? 0;
+    document.getElementById('profile-personas-count').textContent = state.hasPersona ? '1' : '0';
+    document.getElementById('profile-gender').textContent = state.gender === 'male' ? 'Мужской 👨' : (state.gender === 'female' ? 'Женский 👩' : '—');
+}
+
+function selectPackCategory(category) {
+    state.packCategory = category;
+    document.querySelectorAll('.category-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.category === category);
+    });
+    renderPacksByCategory();
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 }
 
 // === Packs ===
@@ -481,39 +502,52 @@ async function loadPacks() {
         const resp = await fetch('/app/api/packs', { headers });
         const data = await resp.json();
         state.packs = data.packs || [];
+        state.packCategory = state.packCategory || 'female';
 
-        grid.innerHTML = '';
-
-        if (state.packs.length === 0) {
-            grid.innerHTML = '<p style="color: var(--text-secondary); padding: 20px; text-align: center; grid-column: 1/-1;">Паки пока недоступны</p>';
-            return;
-        }
-
-        state.packs.forEach((pack, index) => {
-            const card = document.createElement('div');
-            card.className = 'pack-card';
-            card.style.animationDelay = `${index * 0.08}s`;
-            card.onclick = () => openPackDetail(pack.id);
-
-            const coverStyle = pack.cover_url
-                ? `background-image: url(${pack.cover_url}); background-size: cover; background-position: center;`
-                : `background: linear-gradient(135deg, hsl(${index * 60 + 200}, 60%, 25%), hsl(${index * 60 + 240}, 70%, 15%));`;
-
-            card.innerHTML = `
-                <div class="pack-card-cover" style="${coverStyle}"></div>
-                <div class="pack-card-info">
-                    <div class="pack-card-title">${pack.title}</div>
-                    <div class="pack-card-meta">${pack.expected_images} фото</div>
-                    <div class="pack-card-price">${pack.price_rub} &#8381;</div>
-                </div>
-            `;
-
-            grid.appendChild(card);
+        document.querySelectorAll('.category-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.category === state.packCategory);
         });
+
+        renderPacksByCategory();
     } catch (e) {
         console.error('Load packs error:', e);
         grid.innerHTML = '<p style="color: var(--text-secondary); padding: 20px; text-align: center; grid-column: 1/-1;">Ошибка загрузки паков</p>';
     }
+}
+
+function renderPacksByCategory() {
+    const grid = document.getElementById('packs-grid');
+    grid.innerHTML = '';
+
+    const category = state.packCategory || 'female';
+    const filtered = (state.packs || []).filter(p => (p.category || 'female') === category);
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<p style="color: var(--text-secondary); padding: 20px; text-align: center; grid-column: 1/-1;">В этой категории пока нет фотосетов</p>';
+        return;
+    }
+
+    filtered.forEach((pack, index) => {
+        const card = document.createElement('div');
+        card.className = 'pack-card';
+        card.style.animationDelay = `${index * 0.08}s`;
+        card.onclick = () => openPackDetail(pack.id);
+
+        const coverStyle = pack.cover_url
+            ? `background-image: url(${pack.cover_url}); background-size: cover; background-position: center;`
+            : `background: linear-gradient(135deg, hsl(${index * 60 + 200}, 60%, 25%), hsl(${index * 60 + 240}, 70%, 15%));`;
+
+        card.innerHTML = `
+            <div class="pack-card-cover" style="${coverStyle}"></div>
+            <div class="pack-card-info">
+                <div class="pack-card-title">${pack.title}</div>
+                <div class="pack-card-meta">${pack.expected_images} фото</div>
+                <div class="pack-card-price">${pack.price_rub} &#8381;</div>
+            </div>
+        `;
+
+        grid.appendChild(card);
+    });
 }
 
 async function openPackDetail(packId) {

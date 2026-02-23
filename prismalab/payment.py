@@ -631,7 +631,29 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                     "credits": {"fast": profile.paid_generations_remaining, "free_used": profile.free_generation_used},
                     "gender": profile.subject_gender,
                     "packs_enabled": True,
+                    "has_persona": bool(getattr(profile, "astria_lora_tune_id", None)),
+                    "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
                 })
+
+            async def _miniapp_api_profile(request: web.Request) -> web.Response:
+                """Сохранение пола в профиль (как в основном боте)."""
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Invalid init data"}, status=401)
+                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
+                    return web.json_response({"error": "Forbidden"}, status=403)
+                gender = body.get("gender")
+                if gender not in ("male", "female"):
+                    return web.json_response({"error": "Invalid gender"}, status=400)
+                store = miniapp_routes.get_store()
+                store.set_subject_gender(user["user_id"], gender)
+                return web.json_response({"ok": True, "gender": gender})
 
             async def _miniapp_api_styles(request: web.Request) -> web.Response:
                 user = _miniapp_get_user(request)
@@ -723,6 +745,7 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                         "price_rub": offer["price_rub"],
                         "expected_images": offer["expected_images"],
                         "cover_url": pack_data["cover_url"],
+                        "category": offer.get("category", "female"),
                     })
                 return web.json_response({"packs": result})
 
@@ -811,6 +834,7 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
             app.router.add_get("/app", _miniapp_page)
             app.router.add_get("/app/", _miniapp_page)
             app.router.add_post("/app/api/auth", _miniapp_api_auth)
+            app.router.add_post("/app/api/profile", _miniapp_api_profile)
             app.router.add_get("/app/api/styles", _miniapp_api_styles)
             app.router.add_post("/app/api/generate", _miniapp_api_generate)
             app.router.add_get("/app/api/status/{task_id}", _miniapp_api_status)

@@ -139,8 +139,31 @@ async def api_auth(request: Request):
             "free_used": profile.free_generation_used,
         },
         "gender": profile.subject_gender,
-        "packs_enabled": bool(OWNER_ID and user_id == OWNER_ID),
+        "packs_enabled": True,
+        "has_persona": bool(getattr(profile, "astria_lora_tune_id", None)),
+        "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
     })
+
+
+async def api_profile(request: Request):
+    """Обновление профиля (пол). Сохраняет в БД как в основном боте."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Invalid init data"}, status_code=401)
+
+    gender = body.get("gender")
+    if gender not in ("male", "female"):
+        return JSONResponse({"error": "Invalid gender"}, status_code=400)
+
+    store = get_store()
+    store.set_subject_gender(user["user_id"], gender)
+    return JSONResponse({"ok": True, "gender": gender})
 
 
 async def api_styles(request: Request):
@@ -339,33 +362,67 @@ async def api_status(request: Request):
 
 # ========== Паки Astria ==========
 
+# Паки, которые всегда в списке (даже если нет в env)
+DEFAULT_PACKS: list[dict] = [
+    {"id": 248, "title": "Dog Art", "price_rub": 990, "expected_images": 16, "class_name": "dog", "category": "animals"},
+    {"id": 682, "title": "Cat Meowgic", "price_rub": 990, "expected_images": 43, "class_name": "cat", "category": "animals"},
+    {"id": 593, "title": "Kids Halloween", "price_rub": 790, "expected_images": 19, "class_name": "boy", "category": "child"},
+    {"id": 859, "title": "Kids Holiday", "price_rub": 790, "expected_images": 40, "class_name": "girl", "category": "child"},
+    {"id": 2152, "title": "Nordic Girl", "price_rub": 790, "expected_images": 44, "class_name": "girl", "category": "child"},
+    {"id": 2501, "title": "Newborn Dreams", "price_rub": 790, "expected_images": 80, "class_name": "girl", "category": "child"},
+]
+
+# Маппинг pack_id → category (если не задан в env)
+PACK_ID_CATEGORIES: dict[int, str] = {
+    248: "animals",
+    682: "animals",
+    593: "child",
+    859: "child",
+    2152: "child",
+    2501: "child",
+}
+
+
 def _load_pack_offers() -> list[dict]:
-    """Парсит PRISMALAB_ASTRIA_PACK_OFFERS из env. Формат: JSON-массив."""
+    """Парсит PRISMALAB_ASTRIA_PACK_OFFERS из env + добавляет DEFAULT_PACKS."""
+    seen_ids: set[int] = set()
+    result: list[dict] = []
+
     raw = os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS", "")
-    if not raw:
-        return []
-    try:
-        offers = json.loads(raw)
-        if not isinstance(offers, list):
-            return []
-        result = []
-        for o in offers:
-            if not isinstance(o, dict):
-                continue
-            pack_id = int(o.get("id") or 0)
-            if not pack_id:
-                continue
-            result.append({
-                "id": pack_id,
-                "title": str(o.get("title") or f"Pack #{pack_id}"),
-                "price_rub": int(o.get("price_rub") or 0),
-                "expected_images": int(o.get("expected_images") or 20),
-                "class_name": str(o.get("class_name") or "woman"),
-            })
-        return result
-    except (json.JSONDecodeError, ValueError, TypeError) as e:
-        logger.warning("Ошибка парсинга PRISMALAB_ASTRIA_PACK_OFFERS: %s", e)
-        return []
+    if raw:
+        try:
+            offers = json.loads(raw)
+            if isinstance(offers, list):
+                for o in offers:
+                    if not isinstance(o, dict):
+                        continue
+                    pack_id = int(o.get("id") or 0)
+                    if not pack_id:
+                        continue
+                    seen_ids.add(pack_id)
+                    # Маппинг всегда приоритетнее env — чтобы детские/животные не попадали в женские
+                    category = PACK_ID_CATEGORIES.get(pack_id)
+                    if not category:
+                        category = str(o.get("category") or "").strip().lower()
+                    if category not in ("female", "child", "animals"):
+                        category = "female"
+                    result.append({
+                        "id": pack_id,
+                        "title": str(o.get("title") or f"Pack #{pack_id}"),
+                        "price_rub": int(o.get("price_rub") or 0),
+                        "expected_images": int(o.get("expected_images") or 20),
+                        "class_name": str(o.get("class_name") or "woman"),
+                        "category": category,
+                    })
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning("Ошибка парсинга PRISMALAB_ASTRIA_PACK_OFFERS: %s", e)
+
+    for p in DEFAULT_PACKS:
+        if p["id"] not in seen_ids:
+            result.append(dict(p))
+            seen_ids.add(p["id"])
+
+    return result
 
 
 # Кеш: pack_id → {"data": {...}, "ts": float}
@@ -433,6 +490,7 @@ async def api_packs(request: Request):
             "price_rub": offer["price_rub"],
             "expected_images": offer["expected_images"],
             "cover_url": pack_data["cover_url"],
+            "category": offer.get("category", "female"),
         })
     return JSONResponse({"packs": result})
 
@@ -530,6 +588,7 @@ routes = [
     Route("/app", app_page, methods=["GET"]),
     Route("/app/", app_page, methods=["GET"]),
     Route("/app/api/auth", api_auth, methods=["POST"]),
+    Route("/app/api/profile", api_profile, methods=["POST"]),
     Route("/app/api/styles", api_styles, methods=["GET"]),
     Route("/app/api/generate", api_generate, methods=["POST"]),
     Route("/app/api/status/{task_id}", api_status, methods=["GET"]),

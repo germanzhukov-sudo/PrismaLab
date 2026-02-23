@@ -22,19 +22,17 @@
 
         <!-- Screen: Main Menu -->
         <div id="screen-main" class="screen">
-            <div class="screen-content">
-                <h1 class="screen-title">PrismaLab</h1>
-                <p class="screen-subtitle">AI-фотостудия</p>
+            <div class="screen-content main-screen-content">
+                <h1 class="screen-title main-title-premium">PrismaLab</h1>
+                <p class="main-welcome-text">Добро пожаловать в студию PrismaLab. В каждом фотосете мы даём сразу несколько фотографий, чтобы вы могли выбрать лучшее</p>
                 <div class="main-cards">
-                    <button class="main-card" onclick="goToExpress()">
-                        <div class="main-card-icon">⚡</div>
-                        <div class="main-card-title">Экспресс-фото</div>
-                        <div class="main-card-desc">Быстрая генерация по одному фото</div>
-                    </button>
-                    <button class="main-card" id="main-card-packs" onclick="goToPacks()" style="display:none">
+                    <button class="main-card" onclick="goToPacks()">
                         <div class="main-card-icon">📸</div>
-                        <div class="main-card-title">Фотопаки</div>
-                        <div class="main-card-desc">20 фото в одном стиле</div>
+                        <div class="main-card-title">Готовые фотосеты</div>
+                    </button>
+                    <button class="main-card main-card-profile" onclick="goToProfile()">
+                        <div class="main-card-icon">👤</div>
+                        <div class="main-card-title">Профиль</div>
                     </button>
                 </div>
             </div>
@@ -46,8 +44,13 @@
                 <button class="back-btn" onclick="goBack('main')">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
-                <h2 class="header-title">Фотопаки</h2>
+                <h2 class="header-title">Готовые фотосеты</h2>
                 <div></div>
+            </div>
+            <div class="pack-categories" id="pack-categories">
+                <button class="category-tab active" data-category="female" onclick="selectPackCategory('female')">Женские</button>
+                <button class="category-tab" data-category="child" onclick="selectPackCategory('child')">Детские</button>
+                <button class="category-tab" data-category="animals" onclick="selectPackCategory('animals')">С животными</button>
             </div>
             <div class="packs-grid" id="packs-grid">
                 <!-- Паки загрузятся динамически -->
@@ -84,8 +87,39 @@
             <div class="nocredits-container">
                 <div class="nocredits-icon">✅</div>
                 <h2 class="nocredits-title">Оплата прошла!</h2>
-                <p class="nocredits-text">Перейдите в бот и отправьте 10 селфи для создания фотопака.</p>
+                <p class="nocredits-text">Перейдите в бот — там всё продолжится.</p>
                 <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+            </div>
+        </div>
+
+        <!-- Screen: Profile -->
+        <div id="screen-profile" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Профиль</h2>
+                <div></div>
+            </div>
+            <div class="profile-container">
+                <div class="profile-card">
+                    <div class="profile-row">
+                        <span class="profile-label">Баланс Экспресс</span>
+                        <span class="profile-value" id="profile-fast-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Баланс Персоны</span>
+                        <span class="profile-value" id="profile-persona-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Созданных персон</span>
+                        <span class="profile-value" id="profile-personas-count">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Пол</span>
+                        <span class="profile-value" id="profile-gender">—</span>
+                    </div>
+                </div>
             </div>
         </div>
 

@@ -201,45 +201,57 @@ def _guard_dev_only_flags() -> None:
         )
 
 
+# Паки, которые всегда в списке (Mini App + бот)
+_DEFAULT_PACK_OFFERS: list[dict[str, Any]] = [
+    {"id": 248, "title": "Dog Art", "price_rub": 990.0, "expected_images": 16, "class_name": "dog"},
+    {"id": 682, "title": "Cat Meowgic", "price_rub": 990.0, "expected_images": 43, "class_name": "cat"},
+    {"id": 593, "title": "Kids Halloween", "price_rub": 790.0, "expected_images": 19, "class_name": "boy"},
+    {"id": 859, "title": "Kids Holiday", "price_rub": 790.0, "expected_images": 40, "class_name": "girl"},
+    {"id": 2152, "title": "Nordic Girl", "price_rub": 790.0, "expected_images": 44, "class_name": "girl"},
+    {"id": 2501, "title": "Newborn Dreams", "price_rub": 790.0, "expected_images": 80, "class_name": "girl"},
+]
+
+
 def _pack_offers() -> list[dict[str, Any]]:
     """
-    Конфиг паков через env PRISMALAB_ASTRIA_PACK_OFFERS.
-    Формат JSON:
-    [{"id":260,"title":"Для свиданий","price_rub":1490,"expected_images":28,"class_name":"woman"}]
+    Конфиг паков: env PRISMALAB_ASTRIA_PACK_OFFERS + _DEFAULT_PACK_OFFERS.
     """
-    raw = (os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS") or "").strip()
-    if not raw:
-        return []
-    try:
-        items = json.loads(raw)
-    except Exception:
-        logger.warning("PRISMALAB_ASTRIA_PACK_OFFERS: невалидный JSON")
-        return []
-    if not isinstance(items, list):
-        logger.warning("PRISMALAB_ASTRIA_PACK_OFFERS должен быть массивом")
-        return []
+    seen_ids: set[int] = set()
     offers: list[dict[str, Any]] = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
+
+    raw = (os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS") or "").strip()
+    if raw:
         try:
-            pack_id = int(it.get("id"))
-            title = str(it.get("title") or f"Пак #{pack_id}")
-            price_rub = float(it.get("price_rub"))
-            expected_images = int(it.get("expected_images") or 0)
-            class_name_raw = str(it.get("class_name") or "").strip().lower()
-            class_name = class_name_raw if class_name_raw in {"man", "woman", "boy", "girl"} else ""
-            offers.append(
-                {
-                    "id": pack_id,
-                    "title": title,
-                    "price_rub": max(1.0, price_rub),
-                    "expected_images": max(0, expected_images),
-                    "class_name": class_name,
-                }
-            )
+            items = json.loads(raw)
+            if isinstance(items, list):
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    try:
+                        pack_id = int(it.get("id"))
+                        title = str(it.get("title") or f"Пак #{pack_id}")
+                        price_rub = float(it.get("price_rub"))
+                        expected_images = int(it.get("expected_images") or 0)
+                        class_name_raw = str(it.get("class_name") or "").strip().lower()
+                        class_name = class_name_raw if class_name_raw in {"man", "woman", "boy", "girl", "dog", "cat"} else ""
+                        seen_ids.add(pack_id)
+                        offers.append({
+                            "id": pack_id,
+                            "title": title,
+                            "price_rub": max(1.0, price_rub),
+                            "expected_images": max(0, expected_images),
+                            "class_name": class_name,
+                        })
+                    except Exception:
+                        continue
         except Exception:
-            continue
+            logger.warning("PRISMALAB_ASTRIA_PACK_OFFERS: невалидный JSON")
+
+    for p in _DEFAULT_PACK_OFFERS:
+        if p["id"] not in seen_ids:
+            offers.append(dict(p))
+            seen_ids.add(p["id"])
+
     return offers
 
 
@@ -2044,13 +2056,13 @@ def _persona_lora_name(gender: str | None) -> str:
 
 def _resolve_pack_class_name(offer: dict[str, Any], gender: str | None) -> str:
     custom = str(offer.get("class_name") or "").strip().lower()
-    if custom in {"man", "woman", "boy", "girl"}:
+    if custom in {"man", "woman", "boy", "girl", "dog", "cat"}:
         return custom
     return _persona_pack_class_name(gender)
 
 
 def _pack_classes_text(classes: list[str]) -> str:
-    mapping = {"man": "man (мужчина)", "woman": "woman (женщина)", "boy": "boy (мальчик)", "girl": "girl (девочка)"}
+    mapping = {"man": "man (мужчина)", "woman": "woman (женщина)", "boy": "boy (мальчик)", "girl": "girl (девочка)", "dog": "dog (собакой)", "cat": "cat (кошкой)"}
     labels: list[str] = []
     for cls in classes:
         labels.append(mapping.get(cls, cls))
