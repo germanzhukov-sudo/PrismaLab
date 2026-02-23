@@ -703,19 +703,19 @@ PERSONA_INTRO_MESSAGE = """<b>Вот где начинается магия</b> 
 • <b>Персона + 40 кредитов – 999 ₽</b>"""
 
 
-def _persona_intro_keyboard() -> InlineKeyboardMarkup:
+def _persona_intro_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура вводного экрана Персоны: тарифы и Назад."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("✨ 599 руб – 20 фото", callback_data="pl_persona_buy:20")],
         [InlineKeyboardButton("✨ 999 руб – 40 фото", callback_data="pl_persona_buy:40")],
     ]
-    if _pack_offers():
+    if _pack_offers() and OWNER_ID and user_id == OWNER_ID:
         rows.append([InlineKeyboardButton("🎬 Готовые фотопаки", callback_data="pl_persona_packs")])
     rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
 
-PERSONA_PACKS_MESSAGE = """<b>Готовые фотопаки Astria</b>
+PERSONA_PACKS_MESSAGE = """<b>Готовые фотопаки</b>
 
 Пак = фиксированная цена за серию готовых кадров.
 После оплаты запускаем генерацию автоматически и присылаем весь результат в чат."""
@@ -985,7 +985,7 @@ PERSONA_STYLES_MALE = [
 PERSONA_STYLES_PER_PAGE = 8
 
 
-def _persona_styles_keyboard(gender: str, page: int = 0) -> InlineKeyboardMarkup:
+def _persona_styles_keyboard(gender: str, page: int = 0, user_id: int = 0) -> InlineKeyboardMarkup:
     """25 стилей для Персоны: по 8 на страницу (8+8+9), 1 кнопка в ряд, навигация стрелками."""
     styles = PERSONA_STYLES_FEMALE if gender == "female" else PERSONA_STYLES_MALE
     total = len(styles)
@@ -1007,7 +1007,7 @@ def _persona_styles_keyboard(gender: str, page: int = 0) -> InlineKeyboardMarkup
     if nav_buttons:
         rows.append(nav_buttons)
 
-    if _pack_offers():
+    if _pack_offers() and OWNER_ID and user_id == OWNER_ID:
         rows.append([InlineKeyboardButton("🎬 Готовые фотопаки", callback_data="pl_persona_packs")])
 
     return InlineKeyboardMarkup(rows)
@@ -1615,9 +1615,19 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
         context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
         return
 
-    # Персоны нет, но кредиты есть — значит оплатил, но фото не загрузил
+    # Персоны нет, но кредиты есть — значит оплатил, но фото не загрузил (или обучение в процессе)
     credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    pending = getattr(profile, "astria_lora_tune_id_pending", None)
     if credits > 0:
+        if pending:
+            # Обучение в процессе (бот мог рестартовать) — показать «Проверить статус»
+            context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+            await query.edit_message_text(
+                PERSONA_TRAINING_MESSAGE,
+                reply_markup=_persona_training_keyboard(),
+                parse_mode="HTML",
+            )
+            return
         # Показать экран загрузки фото (как после оплаты)
         await query.edit_message_text(
             PERSONA_RULES_MESSAGE,
@@ -2091,7 +2101,7 @@ async def _run_persona_pack_generation(
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text="❌ Astria API не настроен.",
+                text="❌ Сервис генерации не настроен.",
             )
             return
         profile = store.get_user(user_id)
@@ -2198,6 +2208,14 @@ async def _run_persona_pack_generation(
             )
             return
 
+        # Сохраняем tune_id как Persona, если у пользователя её ещё нет (пак создал tune из загруженных фото)
+        if train_file_ids and tune.tune_id and not profile.astria_lora_tune_id:
+            try:
+                store.set_astria_lora_tune(user_id=user_id, tune_id=tune.tune_id)
+                logger.info("pack: сохранён tune_id %s как Persona для user %s", tune.tune_id, user_id)
+            except Exception as e:
+                logger.warning("pack: не удалось сохранить tune_id для user %s: %s", user_id, e)
+
         total = min(len(urls), expected)
         sent_count = 0
         pack_download_timeout = 90.0
@@ -2260,7 +2278,7 @@ async def _run_persona_pack_generation(
     except AstriaError as e:
         logger.exception("Ошибка генерации пака %s (Astria): %s", pack_id, e)
         details = str(e).strip()
-        short = details[:300] if details else "Ошибка Astria"
+        short = details[:300] if details else "Ошибка генерации"
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -2385,7 +2403,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     if not use_yookassa():
         logger.info("persona_pack_buy: yookassa disabled")
         await query.edit_message_text(
-            "Для паков в dev включен только YooKassa (PAYMENT_PROVIDER=yookassa).",
+            "Для паков в dev включена только оплата по ссылке.",
             reply_markup=_persona_packs_keyboard(),
         )
         return
@@ -2401,7 +2419,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     settings = load_settings()
     logger.info("persona_pack_buy: settings loaded astria_key=%s", bool(settings.astria_api_key))
     if not settings.astria_api_key:
-        await query.edit_message_text("❌ Astria API не настроен.", reply_markup=_persona_packs_keyboard())
+        await query.edit_message_text("❌ Сервис генерации не настроен.", reply_markup=_persona_packs_keyboard())
         return
 
     logger.info("persona_pack_buy: edit progress message")
@@ -2418,7 +2436,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     except Exception as e:
         logger.warning("Не удалось получить pack %s перед оплатой: %s", pack_id, e)
         await query.edit_message_text(
-            "❌ Не удалось проверить конфигурацию пака (Astria недоступна). Попробуйте еще раз.",
+            "❌ Не удалось проверить конфигурацию пака. Попробуйте еще раз.",
             reply_markup=_persona_packs_keyboard(),
         )
         return
@@ -2503,7 +2521,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         asyncio.create_task(alert_payment_error(user_id, "persona_pack", err))
         if "network error" in err.lower() or "readtimeout" in err.lower() or "connecttimeout" in err.lower():
             await query.edit_message_text(
-                "❌ Не удалось связаться с YooKassa (сеть/таймаут). Попробуйте еще раз через 1-2 минуты.",
+                "❌ Не удалось связаться с платёжной системой (сеть/таймаут). Попробуйте еще раз через 1-2 минуты.",
                 reply_markup=_persona_packs_keyboard(),
             )
         else:
@@ -2598,7 +2616,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_create) BadRequest: %s", e)
-            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена ЮKassa.")
+            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена платёжная система.")
         return
 
     store.set_persona_credits(user_id, credits)
@@ -2719,7 +2737,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_topup) BadRequest: %s", e)
-            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена ЮKassa.")
+            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена платёжная система.")
         return
 
     profile = store.get_user(user_id)
@@ -2840,7 +2858,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_topup) BadRequest: %s", e)
-            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена ЮKassa.")
+            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена платёжная система.")
         return
 
     profile = store.get_user(user_id)
@@ -3045,7 +3063,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_create) BadRequest: %s", e)
-            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена ЮKassa.")
+            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена платёжная система.")
         return
 
     store.set_persona_credits(user_id, credits)
@@ -3140,10 +3158,52 @@ async def handle_persona_pack_reset_photos_callback(update: Update, context: Con
 
 
 async def handle_persona_check_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка «Проверить статус Персоны»: пока модель обучается — заглушка."""
+    """Кнопка «Проверить статус Персоны»: проверяет статус, при pending — опрашивает tune (восстановление после рестарта)."""
     query = update.callback_query
     if not query:
         return
+    user_id = int(query.from_user.id) if query.from_user else 0
+    profile = store.get_user(user_id)
+    pending_tune_id = getattr(profile, "astria_lora_tune_id_pending", None)
+
+    # Восстановление: есть pending tune (бот рестартовал во время обучения)
+    if pending_tune_id:
+        await query.answer("Проверяю статус…", show_alert=False)
+        try:
+            from prismalab.astria_client import _get_tune, _timeout_s
+            settings = load_settings()
+            last = await asyncio.to_thread(
+                _get_tune,
+                api_key=settings.astria_api_key,
+                tune_id=pending_tune_id,
+                timeout_s=_timeout_s(30.0),
+            )
+            status = str(last.get("status") or last.get("state") or "").lower()
+            trained_at = last.get("trained_at")
+            if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
+                store.set_astria_lora_tune(user_id=user_id, tune_id=pending_tune_id)
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
+                credits = profile.persona_credits_remaining
+                gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
+                text = f"Готово! 🎉 Персональная модель обучена\n\nТеперь выберите стиль из списка ниже – у вас {credits} {_fast_credits_word(credits)}\n\n{STYLE_EXAMPLES_FOOTER}"
+                await query.edit_message_text(
+                    text,
+                    reply_markup=_persona_styles_keyboard(gender),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+            if status in {"failed", "error", "cancelled"}:
+                store.clear_astria_lora_tune_pending(user_id)
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "error"
+                await query.edit_message_text(
+                    "При обучении возникла ошибка. Загрузите 10 фото заново или напишите в поддержку.",
+                    parse_mode="HTML",
+                )
+                return
+        except Exception as e:
+            logger.warning("Ошибка проверки pending tune %s: %s", pending_tune_id, e)
+
     status = context.user_data.get(USERDATA_PERSONA_TRAINING_STATUS) or "training"
     if status == "training":
         await query.answer(
@@ -3431,7 +3491,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             )
         except BadRequest as e:
             logger.exception("send_invoice (fast) BadRequest: %s", e)
-            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена ЮKassa.")
+            await query.edit_message_text("❌ Не удалось отправить счёт. Проверьте в BotFather → Payments, что подключена платёжная система.")
         return
 
     profile = store.get_user(user_id)
@@ -4014,6 +4074,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     mode = context.user_data.get(USERDATA_MODE) or "normal"
+    # Fallback: Mini App оплата — user_data не доходит из webhook/poll, проверяем БД
+    if mode != "persona_pack_upload":
+        pending_pack_id = store.get_pending_pack_upload(user_id)
+        if pending_pack_id is not None:
+            context.user_data[USERDATA_MODE] = "persona_pack_upload"
+            context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pending_pack_id
+            context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
+            context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
+            context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
+            mode = "persona_pack_upload"
     logger.info(f"[Photo Handler] Режим: {mode}, user {update.effective_user.id}")
     photo = update.message.photo[-1]  # самое большое
 
@@ -4040,6 +4110,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = False
             context.user_data[USERDATA_MODE] = "persona"
+            store.clear_pending_pack_upload(user_id)
             await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию пака…")
             pack_id = int(context.user_data.get(USERDATA_PERSONA_SELECTED_PACK_ID) or 0)
             offer = _find_pack_offer(pack_id)
@@ -4099,7 +4170,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         user_id = int(update.effective_user.id) if update.effective_user else 0
         profile = store.get_user(user_id)
         credits = getattr(profile, "persona_credits_remaining", 0) or 0
+        pending = getattr(profile, "astria_lora_tune_id_pending", None)
         if credits > 0 and not profile.astria_lora_tune_id:
+            # Есть pending (обучение шло, бот рестартовал) — показать «Проверить статус»
+            if pending:
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+                await update.message.reply_text(
+                    PERSONA_TRAINING_MESSAGE,
+                    reply_markup=_persona_training_keyboard(),
+                )
+                return
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
             ])
@@ -4236,6 +4316,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     mode = context.user_data.get(USERDATA_MODE) or "normal"
+    if mode != "persona_pack_upload":
+        pending_pack_id = store.get_pending_pack_upload(user_id)
+        if pending_pack_id is not None:
+            context.user_data[USERDATA_MODE] = "persona_pack_upload"
+            context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pending_pack_id
+            context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
+            context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
+            context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
+            mode = "persona_pack_upload"
     if mode == "persona_pack_upload" and context.user_data.get(USERDATA_PERSONA_PACK_WAITING_UPLOAD):
         ids = list(context.user_data.get(USERDATA_PERSONA_PACK_PHOTOS, []))
         if len(ids) >= 10:
@@ -4253,6 +4342,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = False
             context.user_data[USERDATA_MODE] = "persona"
+            store.clear_pending_pack_upload(user_id)
             await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию пака…")
             pack_id = int(context.user_data.get(USERDATA_PERSONA_SELECTED_PACK_ID) or 0)
             offer = _find_pack_offer(pack_id)
@@ -4602,7 +4692,7 @@ async def _start_astria_lora(
                 raise
         
         if not from_persona:
-            await context.bot.send_message(chat_id=chat_id, text="Создаю LoRA tune на Flux1.dev…\n\nЭто может занять 10–60 минут (иногда до 2 часов при загрузке Astria). Я напишу, когда будет готово.")
+            await context.bot.send_message(chat_id=chat_id, text="Создаю LoRA tune…\n\nЭто может занять 10–60 минут (иногда до 2 часов при загрузке). Я напишу, когда будет готово.")
         
         logger.info(f"[LoRA] Начинаю создание LoRA tune через Astria API...")
         from prismalab.astria_client import create_lora_tune_and_wait
@@ -4615,6 +4705,7 @@ async def _start_astria_lora(
             image_bytes_list=image_bytes_list,
             base_tune_id="1504944",  # Flux1.dev из галереи (проверенная конфигурация для LoRA)
             preset="flux-lora-portrait",  # Рекомендуется для людей
+            on_created=lambda tid: store.set_astria_lora_tune_pending(user_id=user_id, tune_id=tid),
             max_seconds=7200,  # До 2 часов на training (увеличено с 1 часа)
             poll_seconds=15.0,
         )
@@ -4650,18 +4741,20 @@ async def _start_astria_lora(
                 chat_id=chat_id,
                 text="✅ Готово! LoRA модель создана на Flux1.dev.\n"
                 f"ID модели: {result.tune_id}\n"
-                "Теперь нажми кнопку «🌟 Astria» — я буду генерировать сцены с высоким качеством через Astria LoRA.",
+                "Теперь нажми «✨ Персона» — я буду генерировать сцены с высоким качеством.",
                 reply_markup=_start_keyboard(profile),
             )
     except AstriaError as e:
         if from_persona:
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "error"
+        store.clear_astria_lora_tune_pending(user_id)
         logger.error("Astria LoRA error: %s", e, exc_info=True)
         msg = "Что-то пошло не так, персона не создалась. Загрузите фото заново или напишите в поддержку." if from_persona else USER_FRIENDLY_ERROR
         await context.bot.send_message(chat_id=chat_id, text=msg)
     except Exception as e:
         if from_persona:
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "error"
+        store.clear_astria_lora_tune_pending(user_id)
         logger.error("Astria LoRA error: %s", e, exc_info=True)
         msg = "Что-то пошло не так, персона не создалась. Загрузите фото заново или напишите в поддержку." if from_persona else USER_FRIENDLY_ERROR
         await context.bot.send_message(chat_id=chat_id, text=msg)
@@ -4770,7 +4863,7 @@ async def _run_style_job(
             
             if not active_tune_id:
                 err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else (
-                    "❌ Для генерации через Astria нужно сначала создать FaceID или LoRA tune.\n\n"
+                    "❌ Для генерации нужно сначала создать FaceID или LoRA tune.\n\n"
                     "• 📸 FaceID (1 фото) - быстро, для одной сцены\n"
                     "• 🎯 LoRA (10 фото) - качественно, для множества сцен"
                 )
@@ -4945,7 +5038,7 @@ async def _run_style_job(
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
             tune_type_label = "LoRA" if use_lora else "FaceID"
             
-            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово (Astria {tune_type_label}): «{style.title}»"
+            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
             await _safe_send_document(
                 bot=bot,
                 chat_id=chat_id,
@@ -5718,7 +5811,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
         "seedream/4.5-text-to-image": "🎨 Seedream 4.5",
     }
     # Для отображения используем короткое имя
-    model_label = model_labels.get(model_name, f"KIE {model_name}")
+    model_label = model_labels.get(model_name, model_name)
     
     settings = load_settings()
     if not settings.kie_api_key:
@@ -5741,7 +5834,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("Пожалуйста, немного подождите. Ещё обрабатываю прошлый запрос")
         return
     
-    status_msg = await query.message.reply_text(f"{model_label} Запускаю генерацию через KIE…")
+    status_msg = await query.message.reply_text(f"{model_label} Запускаю генерацию…")
     
     async def runner():
         try:
@@ -5771,7 +5864,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
-                text="📤 Загружаю фото в KIE…",
+                text="📤 Загружаю фото…",
             )
             
             import secrets
@@ -5864,7 +5957,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
             else:
                 mode_text = "text-to-image"
             # Для upscale не показываем промпт (его нет)
-            status_text = f"{model_label} Генерирую через KIE ({mode_text})\n\n"
+            status_text = f"{model_label} Генерирую ({mode_text})\n\n"
             if not ("upscale" in model_name.lower() or "topaz" in model_name.lower() or "recraft" in model_name.lower()):
                 status_text += f"📝 Промпт: {prompt_preview}\n\n"
             status_text += f"⏱ Это может занять 30-60 секунд."
@@ -5976,7 +6069,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_message_id,
-                    text="❌ KIE вернул задачу без изображения. Попробуй ещё раз.",
+                    text="❌ Генератор вернул задачу без изображения. Попробуй ещё раз.",
                 )
                 return
             
@@ -6019,7 +6112,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 bot=bot,
                 chat_id=chat_id,
                 document=bio,
-                caption=f"{model_label} Готово (KIE, {mode_text})",
+                caption=f"{model_label} Готово ({mode_text})",
             )
             # Логируем успешную генерацию для аналитики
             try:
@@ -6036,7 +6129,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
             # Специальная обработка NSFW ошибки
             if "nsfw" in error_msg.lower():
                 user_msg = (
-                    "❌ KIE заблокировал запрос как небезопасный контент (NSFW).\n\n"
+                    "❌ Запрос заблокирован как небезопасный контент (NSFW).\n\n"
                     "Возможные причины:\n"
                     "• Загруженное фото содержит контент, который модель считает небезопасным\n"
                     "• Промпт содержит слова, которые вызывают срабатывание фильтра\n\n"
@@ -6089,7 +6182,7 @@ async def handle_astria_generate_callback(update: Update, context: ContextTypes.
         user_profile = store.get_user(user_id)
         if not user_profile or (not user_profile.astria_lora_tune_id and not user_profile.astria_tune_id):
             await query.edit_message_text(
-                "❌ Для генерации через Astria нужно:\n"
+                "❌ Для генерации нужно:\n"
                 "• Либо отправить фото\n"
                 "• Либо создать LoRA (10 фото) или FaceID (1 фото)"
             )
@@ -6108,7 +6201,7 @@ async def handle_astria_generate_callback(update: Update, context: ContextTypes.
         "identity preserved, natural expression change, no face morphing, no distortion, correct anatomy, no extra fingers, no text"
     )
     
-    status_msg = await query.message.reply_text("🌟 Astria: Запускаю генерацию…")
+    status_msg = await query.message.reply_text("Запускаю генерацию…")
     
     await _run_style_job(
         bot=context.bot,
@@ -6306,7 +6399,7 @@ def main() -> None:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="prismalab")
         loop.set_default_executor(executor)
 
-        run_webhook_server(app.bot, store)
+        run_webhook_server(app.bot, store, application=app)
 
         # Дневной отчёт в 21:00 по Москве (UTC+3)
         async def daily_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:

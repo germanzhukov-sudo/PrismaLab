@@ -37,6 +37,7 @@ def main() -> int:
                 training_status TEXT,
                 astria_tune_id TEXT,
                 astria_lora_tune_id TEXT,
+                astria_lora_tune_id_pending TEXT,
                 free_generation_used INTEGER DEFAULT 0,
                 paid_generations_remaining INTEGER DEFAULT 0,
                 subject_gender TEXT,
@@ -45,6 +46,16 @@ def main() -> int:
             )
         """)
         conn.commit()
+        try:
+            cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS astria_lora_tune_id_pending TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS pending_pack_id INTEGER")
+            conn.commit()
+        except Exception:
+            conn.rollback()
         cur.close()
         conn.close()
         print("Таблица public.users проверена/создана.")

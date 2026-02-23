@@ -84,7 +84,7 @@
             <div class="nocredits-container">
                 <div class="nocredits-icon">✅</div>
                 <h2 class="nocredits-title">Оплата прошла!</h2>
-                <p class="nocredits-text">Перейдите в бот и нажмите кнопку «Загрузить фото для пака», чтобы отправить 10-20 селфи.</p>
+                <p class="nocredits-text">Перейдите в бот и отправьте 10 селфи для создания фотопака.</p>
                 <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
             </div>
         </div>
@@ -211,6 +211,11 @@
                 <button class="action-btn secondary" onclick="goBack('styles')">Назад</button>
             </div>
         </div>
+    </div>
+
+    <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+        <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Закрыть">×</button>
     </div>
 
     <script src="/app/static/app.js"></script>

@@ -368,14 +368,17 @@ def _load_pack_offers() -> list[dict]:
         return []
 
 
-# Кеш: pack_id → {"cover_url": str, "examples": [str, ...]}
+# Кеш: pack_id → {"data": {...}, "ts": float}
 _pack_cache: dict[int, dict] = {}
+_PACK_CACHE_TTL = 3600  # 1 час
 
 
 async def _fetch_pack_data(pack_id: int) -> dict:
-    """Загружает данные пака из Astria API и кеширует."""
-    if pack_id in _pack_cache:
-        return _pack_cache[pack_id]
+    """Загружает данные пака из Astria API и кеширует на 1 час."""
+    import time as _time
+    cached = _pack_cache.get(pack_id)
+    if cached and (_time.time() - cached["ts"]) < _PACK_CACHE_TTL:
+        return cached["data"]
     if not ASTRIA_API_KEY:
         return {"cover_url": "", "examples": []}
     try:
@@ -405,7 +408,7 @@ async def _fetch_pack_data(pack_id: int) -> dict:
                     elif isinstance(imgs, str) and imgs.startswith("http"):
                         examples.append(imgs)
         data = {"cover_url": cover_url, "examples": examples}
-        _pack_cache[pack_id] = data
+        _pack_cache[pack_id] = {"data": data, "ts": __import__('time').time()}
         return data
     except Exception as e:
         logger.warning("Ошибка загрузки пака %s из Astria: %s", pack_id, e)
@@ -420,9 +423,10 @@ async def api_packs(request: Request):
     offers = _load_pack_offers()
     if not offers:
         return JSONResponse({"packs": []})
+    # Параллельная загрузка всех паков из Astria API
+    pack_datas = await asyncio.gather(*[_fetch_pack_data(o["id"]) for o in offers])
     result = []
-    for offer in offers:
-        pack_data = await _fetch_pack_data(offer["id"])
+    for offer, pack_data in zip(offers, pack_datas):
         result.append({
             "id": offer["id"],
             "title": offer["title"],

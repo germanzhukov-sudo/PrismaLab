@@ -102,7 +102,7 @@ def create_payment(
     Возвращает (confirmation_url, payment_id) или (None, error_message).
     """
     if not is_yookassa_configured():
-        return None, "ЮKassa не настроена (YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)"
+        return None, "Платёжная система не настроена"
     try:
         from yookassa import Configuration, Payment
 
@@ -224,6 +224,7 @@ async def poll_payment_status(
     amount_rub: float,
     timeout_seconds: int = 600,  # 10 минут
     poll_interval: int = 5,
+    application: Any = None,
 ) -> None:
     """
     Поллинг статуса платежа. Проверяет каждые poll_interval секунд.
@@ -277,25 +278,51 @@ async def poll_payment_status(
                 pass
 
             if product_type == "persona_pack":
-                # Для паков: кнопка загрузки фото (pack_id из metadata)
+                # Для паков: устанавливаем state загрузки фото и отправляем инструкцию
                 pack_id = "0"
                 meta = get_payment_metadata(payment_id)
                 if meta.get("pack_id"):
                     pack_id = str(meta["pack_id"])
+                pack_id_int = int(pack_id) if pack_id.isdigit() else 0
+
+                # БД: fallback когда application.user_data не доходит (Mini App, другой поток)
+                try:
+                    store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id_int)
+                except Exception as e:
+                    logger.warning("Не удалось установить pending_pack в БД: %s", e)
+
+                # Устанавливаем user_data через application._user_data (defaultdict)
+                # NB: application.user_data — read-only mappingproxy, писать можно только в _user_data
+                if application is not None:
+                    try:
+                        from prismalab.bot import (
+                            USERDATA_MODE,
+                            USERDATA_PERSONA_SELECTED_PACK_ID,
+                            USERDATA_PERSONA_PACK_WAITING_UPLOAD,
+                            USERDATA_PERSONA_PACK_PHOTOS,
+                            USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
+                        )
+                        ud = application._user_data[user_id]  # defaultdict(dict) — создаст если нет
+                        ud[USERDATA_MODE] = "persona_pack_upload"
+                        ud[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id_int
+                        ud[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
+                        ud[USERDATA_PERSONA_PACK_PHOTOS] = []
+                        ud[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
+                        logger.info("Установлен state persona_pack_upload для user %s (pack %s)", user_id, pack_id)
+                    except Exception as e:
+                        logger.warning("Не удалось установить user_data для пака: %s", e)
+
                 try:
                     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                    kb = InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
-                            "📸 Загрузить фото для пака",
-                            callback_data=f"pl_pack_upload:{pack_id}:{credits}",
-                        )
-                    ]])
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Сбросить фото пака", callback_data="pl_persona_pack_reset_photos")],
+                    ])
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
                             f"Оплата получена ✅\n\n"
-                            f"Теперь загрузите <b>10-20 селфи</b> для создания персоны.\n"
-                            f"Нажмите кнопку ниже, чтобы начать."
+                            f"<b>Для запуска фотопака нужно 10 фото</b>\n\n"
+                            f"Отправьте 10 фото этого человека (можно все сразу или по одной)."
                         ),
                         parse_mode="HTML",
                         reply_markup=kb,
@@ -335,7 +362,7 @@ async def poll_payment_status(
         await asyncio.sleep(poll_interval)
 
 
-async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
+async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = None) -> tuple[int, str]:
     """
     Обрабатывает вебхук от ЮKassa.
     Возвращает (http_status, response_body).
@@ -404,30 +431,89 @@ async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
             new_total = profile.persona_credits_remaining + credits
             store.set_persona_credits(user_id, new_total)
     elif product_type == "persona_pack":
-        # Оплата фотопака — отправляем кнопку "Загрузить фото" в бот
+        # Оплата фотопака
         pack_id = metadata.get("pack_id", "")
         chat_id = metadata.get("chat_id")
-        if chat_id:
+        pack_id_int = int(pack_id) if str(pack_id).isdigit() else 0
+
+        profile = store.get_user(user_id)
+        has_persona = bool(getattr(profile, "astria_lora_tune_id", None))
+
+        if has_persona and chat_id:
+            # Есть Персона — запускаем пак сразу, без загрузки фото
             try:
-                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "📸 Загрузить фото для пака",
-                        callback_data=f"pl_pack_upload:{pack_id}:{credits}",
+                from prismalab.bot import _run_persona_pack_generation, _find_pack_offer
+                offer = _find_pack_offer(pack_id_int)
+                if offer:
+                    user_data = application._user_data.get(user_id, {}) if application else {}
+                    ctx = type("Context", (), {"bot": bot, "user_data": user_data})()
+                    coro = _run_persona_pack_generation(
+                        context=ctx,
+                        chat_id=int(chat_id),
+                        user_id=user_id,
+                        pack_id=pack_id_int,
+                        offer=offer,
                     )
-                ]])
-                await bot.send_message(
-                    chat_id=int(chat_id),
-                    text=(
-                        f"Оплата получена ✅\n\n"
-                        f"Теперь загрузите <b>10-20 селфи</b> для создания персоны.\n"
-                        f"Нажмите кнопку ниже, чтобы начать."
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                )
+                    if application:
+                        application.create_task(coro)
+                    else:
+                        asyncio.create_task(coro)
+                    await bot.send_message(
+                        chat_id=int(chat_id),
+                        text=f"Оплата получена ✅\n\nЗапускаю пак «{offer['title']}».",
+                        parse_mode="HTML",
+                    )
+                else:
+                    has_persona = False  # fallback: попросим фото
             except Exception as e:
-                logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
+                logger.warning("Webhook: не удалось запустить пак напрямую для user %s: %s", user_id, e)
+                has_persona = False
+
+        if not has_persona:
+            # Нет Персоны — просим загрузить 10 фото
+            try:
+                store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id_int)
+            except Exception as e:
+                logger.warning("Webhook: не удалось установить pending_pack в БД: %s", e)
+
+            if application is not None:
+                try:
+                    from prismalab.bot import (
+                        USERDATA_MODE,
+                        USERDATA_PERSONA_SELECTED_PACK_ID,
+                        USERDATA_PERSONA_PACK_WAITING_UPLOAD,
+                        USERDATA_PERSONA_PACK_PHOTOS,
+                        USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
+                    )
+                    ud = application._user_data[user_id]
+                    ud[USERDATA_MODE] = "persona_pack_upload"
+                    ud[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id_int
+                    ud[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
+                    ud[USERDATA_PERSONA_PACK_PHOTOS] = []
+                    ud[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
+                    logger.info("Webhook: установлен state persona_pack_upload для user %s (pack %s)", user_id, pack_id)
+                except Exception as e:
+                    logger.warning("Webhook: не удалось установить user_data для пака: %s", e)
+
+            if chat_id:
+                try:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Сбросить фото пака", callback_data="pl_persona_pack_reset_photos")],
+                    ])
+                    await bot.send_message(
+                        chat_id=int(chat_id),
+                        text=(
+                            f"Оплата получена ✅\n\n"
+                            f"<b>Для запуска фотопака нужно 10 фото</b>\n\n"
+                            f"Отправьте 10 фото этого человека (можно все сразу или по одной)."
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
+                except Exception as e:
+                    logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
+
         await send_payment_alert(user_id, amount_rub, credits, product_type)
         return 200, "OK"
     else:
@@ -456,7 +542,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any) -> tuple[int, str]:
     return 200, "OK"
 
 
-def run_webhook_server(bot: Any, store: Any) -> None:
+def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
     """Запускает HTTP-сервер на порту 8080: GET /health для healthcheck Docker; при наличии ЮKassa — POST /payment/webhook; /admin/* — админка."""
     import threading
 
@@ -476,7 +562,7 @@ def run_webhook_server(bot: Any, store: Any) -> None:
                     return web.Response(status=405, text="Method not allowed")
                 try:
                     body = await request.read()
-                    status, text = await handle_webhook(body, bot, store)
+                    status, text = await handle_webhook(body, bot, store, application=application)
                     return web.Response(status=status, text=text)
                 except Exception as e:
                     logger.exception("Ошибка вебхука: %s", e)
@@ -705,6 +791,18 @@ def run_webhook_server(bot: Any, store: Any) -> None:
                 )
                 if not url:
                     return web.json_response({"error": "Payment creation failed"}, status=500)
+                # Запускаем поллинг — bot и application доступны через замыкание run_webhook_server
+                asyncio.get_event_loop().create_task(poll_payment_status(
+                    payment_id=payment_id_or_err,
+                    bot=bot,
+                    store=store,
+                    user_id=user_id,
+                    chat_id=user_id,
+                    credits=offer["expected_images"],
+                    product_type="persona_pack",
+                    amount_rub=amount,
+                    application=application,
+                ))
                 return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
 
             # Статика Mini App

@@ -47,6 +47,7 @@ class UserProfile:
     training_status: str | None
     astria_tune_id: str | None  # FaceID tune (1 фото)
     astria_lora_tune_id: str | None  # LoRA tune (10+ фото)
+    astria_lora_tune_id_pending: str | None  # LoRA tune в процессе обучения (сохраняем сразу при создании)
     free_generation_used: bool  # потрачена ли 1 бесплатная генерация
     paid_generations_remaining: int  # остаток купленных генераций
     persona_credits_remaining: int  # кредиты Персоны (10 или 20 после оплаты)
@@ -140,10 +141,12 @@ class PrismaLabStore:
             for col, col_type in [
                 ("astria_tune_id", "TEXT"),
                 ("astria_lora_tune_id", "TEXT"),
+                ("astria_lora_tune_id_pending", "TEXT"),
                 ("free_generation_used", "INTEGER DEFAULT 0"),
                 ("paid_generations_remaining", "INTEGER DEFAULT 0"),
                 ("persona_credits_remaining", "INTEGER DEFAULT 0"),
                 ("subject_gender", "TEXT"),
+                ("pending_pack_id", "INTEGER"),
             ]:
                 try:
                     self._execute(conn, f"ALTER TABLE users ADD COLUMN {col} {col_type}")
@@ -174,11 +177,16 @@ class PrismaLabStore:
                 """,
             )
             conn.commit()
-            try:
-                self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN persona_credits_remaining INTEGER DEFAULT 0")
-                conn.commit()
-            except Exception:
-                conn.rollback()
+            for add_col in [
+                ("persona_credits_remaining", "INTEGER DEFAULT 0"),
+                ("astria_lora_tune_id_pending", "TEXT"),
+                ("pending_pack_id", "INTEGER"),
+            ]:
+                try:
+                    self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN {add_col[0]} {add_col[1]}")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
             # Таблица настроек (себестоимость, курс)
             try:
                 self._execute(
@@ -216,6 +224,7 @@ class PrismaLabStore:
                     training_status=None,
                     astria_tune_id=None,
                     astria_lora_tune_id=None,
+                    astria_lora_tune_id_pending=None,
                     free_generation_used=False,
                     paid_generations_remaining=0,
                     persona_credits_remaining=0,
@@ -235,6 +244,7 @@ class PrismaLabStore:
                 training_status=_row_get(row, "training_status"),
                 astria_tune_id=_row_get(row, "astria_tune_id"),
                 astria_lora_tune_id=_row_get(row, "astria_lora_tune_id"),
+                astria_lora_tune_id_pending=_row_get(row, "astria_lora_tune_id_pending"),
                 free_generation_used=_bool("free_generation_used"),
                 paid_generations_remaining=_int("paid_generations_remaining"),
                 persona_credits_remaining=_int("persona_credits_remaining"),
@@ -351,20 +361,41 @@ class PrismaLabStore:
     def set_astria_lora_tune(self, *, user_id: int, tune_id: str | None) -> None:
         if tune_id is None:
             self._run(
-                f"UPDATE {self._users_table} SET astria_lora_tune_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+                f"UPDATE {self._users_table} SET astria_lora_tune_id = NULL, astria_lora_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
                 (int(user_id),),
             )
         else:
             self._run(
                 f"""
-                INSERT INTO {self._users_table} (user_id, astria_lora_tune_id, updated_at)
-                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                INSERT INTO {self._users_table} (user_id, astria_lora_tune_id, astria_lora_tune_id_pending, updated_at)
+                VALUES (%s, %s, NULL, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id) DO UPDATE SET
                     astria_lora_tune_id = EXCLUDED.astria_lora_tune_id,
+                    astria_lora_tune_id_pending = NULL,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (int(user_id), str(tune_id)),
             )
+
+    def set_astria_lora_tune_pending(self, *, user_id: int, tune_id: str) -> None:
+        """Сохраняет tune_id сразу после создания (до завершения обучения). Защита от потери при рестарте бота."""
+        self._run(
+            f"""
+            INSERT INTO {self._users_table} (user_id, astria_lora_tune_id_pending, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                astria_lora_tune_id_pending = EXCLUDED.astria_lora_tune_id_pending,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (int(user_id), str(tune_id)),
+        )
+
+    def clear_astria_lora_tune_pending(self, user_id: int) -> None:
+        """Очищает pending tune (при ошибке обучения или после успешного завершения)."""
+        self._run(
+            f"UPDATE {self._users_table} SET astria_lora_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+            (int(user_id),),
+        )
 
     def spend_free_generation(self, user_id: int) -> None:
         self._run(
@@ -472,6 +503,46 @@ class PrismaLabStore:
                 updated_at = CURRENT_TIMESTAMP
             WHERE user_id = %s
             """,
+            (int(user_id),),
+        )
+
+    # --- Pending pack upload (Mini App: оплата в другом потоке, user_data не доходит) ---
+
+    def set_pending_pack_upload(self, *, user_id: int, pack_id: int) -> None:
+        """Юзер оплатил пак — ждём 10 фото. Fallback когда application.user_data не доходит."""
+        self._run(
+            f"""
+            INSERT INTO {self._users_table} (user_id, pending_pack_id, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET pending_pack_id = EXCLUDED.pending_pack_id, updated_at = CURRENT_TIMESTAMP
+            """,
+            (int(user_id), int(pack_id)),
+        )
+
+    def get_pending_pack_upload(self, user_id: int) -> int | None:
+        """pack_id если юзер ждёт загрузку фото для пака, иначе None."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"SELECT pending_pack_id FROM {self._users_table} WHERE user_id = %s AND pending_pack_id IS NOT NULL",
+                        (int(user_id),),
+                    )
+                    row = cur.fetchone()
+            else:
+                sql = f"SELECT pending_pack_id FROM {self._users_table} WHERE user_id = ? AND pending_pack_id IS NOT NULL"
+                cur = conn.execute(sql, (int(user_id),))
+                row = cur.fetchone()
+            if row:
+                val = row["pending_pack_id"] if hasattr(row, "keys") else row[0]
+                return int(val) if val is not None else None
+            return None
+
+    def clear_pending_pack_upload(self, user_id: int) -> None:
+        """Очистить после приёма 10 фото или сброса."""
+        self._run(
+            f"UPDATE {self._users_table} SET pending_pack_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
             (int(user_id),),
         )
 

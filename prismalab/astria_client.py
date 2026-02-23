@@ -5,7 +5,7 @@ import os
 import time
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -624,6 +624,7 @@ async def create_lora_tune_and_wait(
     base_tune_id: str = "1504944",  # Flux1.dev из галереи
     preset: str = "flux-lora-portrait",
     callback: str | None = None,
+    on_created: "Callable[[str], None] | None" = None,  # Вызывается сразу после создания tune (до polling)
     max_seconds: int = 7200,  # LoRA training может занять до 2 часов (увеличено с 1 часа)
     poll_seconds: float = 15.0,
 ) -> AstriaTuneResult:
@@ -659,7 +660,14 @@ async def create_lora_tune_and_wait(
     tune_id = str(created.get("id") or "")
     if not tune_id:
         raise AstriaError(f"Неожиданный ответ Astria при создании LoRA tune (нет id): {created}")
-    
+
+    # Сохраняем tune_id сразу (защита от потери при рестарте бота во время polling)
+    if on_created:
+        try:
+            on_created(tune_id)
+        except Exception as e:
+            logger.warning("on_created callback failed: %s", e)
+
     # Логируем model_type из ответа для диагностики
     model_type = created.get("model_type") or created.get("type") or "unknown"
     logger.info(f"Astria tune {tune_id} создан, model_type в ответе: '{model_type}'")

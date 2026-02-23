@@ -543,6 +543,7 @@ async function openPackDetail(packId) {
                 img.src = url;
                 img.className = 'pack-gallery-img';
                 img.loading = 'lazy';
+                img.onclick = (e) => { e.stopPropagation(); openLightbox(url); };
                 gallery.appendChild(img);
             });
         } else {
@@ -590,6 +591,15 @@ async function buyPack() {
             btn.querySelector('.btn-text').textContent = `Купить ${state.selectedPack.price_rub} \u20BD`;
         }
     }
+}
+
+function openLightbox(src) {
+    document.getElementById('lightbox-img').src = src;
+    document.getElementById('lightbox').style.display = 'flex';
+}
+
+function closeLightbox() {
+    document.getElementById('lightbox').style.display = 'none';
 }
 
 function closeMiniApp() {
