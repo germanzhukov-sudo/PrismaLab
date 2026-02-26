@@ -315,7 +315,7 @@ async function startGeneration() {
         pollStatus();
     } catch (e) {
         console.error('Generation error:', e);
-        alert('Ошибка генерации. Попробуйте ещё раз.');
+        alert('Ошибка генерации: ' + e.message);
         showScreen('upload');
     }
 }
@@ -503,7 +503,7 @@ async function loadPacks() {
     try {
         const headers = {};
         if (state.initData) headers['X-Telegram-Init-Data'] = state.initData;
-        const resp = await fetch(`/app/api/packs?ts=${Date.now()}`, { headers, cache: 'no-store' });
+        const resp = await fetch('/app/api/packs', { headers });
         const data = await resp.json();
         state.packs = data.packs || [];
         state.packCategory = state.packCategory || 'female';
@@ -565,7 +565,7 @@ async function openPackDetail(packId) {
     try {
         const headers = {};
         if (state.initData) headers['X-Telegram-Init-Data'] = state.initData;
-        const resp = await fetch(`/app/api/packs/${packId}?ts=${Date.now()}`, { headers, cache: 'no-store' });
+        const resp = await fetch(`/app/api/packs/${packId}`, { headers });
         const pack = await resp.json();
         state.selectedPack = pack;
 
@@ -622,7 +622,7 @@ async function buyPack() {
         }
     } catch (e) {
         console.error('Buy pack error:', e);
-        alert('Ошибка создания платежа. Попробуйте ещё раз.');
+        alert('Ошибка создания платежа: ' + e.message);
     } finally {
         btn.disabled = false;
         if (state.selectedPack) {

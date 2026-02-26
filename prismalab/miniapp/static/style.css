@@ -829,17 +829,8 @@ body {
     transform: scale(0.98);
 }
 
-/* ===== Packs Grid ===== */
+/* ===== Packs Loading ===== */
 
-.packs-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    padding: 16px;
-    padding-bottom: 32px;
-}
-
-/* Packs loading — Prisma-стиль */
 .packs-loading {
     display: flex;
     flex-direction: column;
@@ -913,6 +904,16 @@ body {
 @keyframes packs-dot-pulse {
     0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1); }
+}
+
+/* ===== Packs Grid ===== */
+
+.packs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 16px;
+    padding-bottom: 32px;
 }
 
 .pack-card {

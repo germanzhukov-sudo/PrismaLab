@@ -19,6 +19,12 @@ fi
 
 cd "$LOCAL_DIR"
 
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+if [ -n "$branch" ] && [ "$branch" != "main" ]; then
+  echo "Ошибка: деплой только с ветки main. Сейчас: $branch"
+  exit 1
+fi
+
 if [ ! -f .env ]; then
   echo "Ошибка: создай .env в папке проекта с токенами и ключами"
   exit 1
