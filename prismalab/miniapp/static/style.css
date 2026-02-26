@@ -839,6 +839,82 @@ body {
     padding-bottom: 32px;
 }
 
+/* Packs loading — Prisma-стиль */
+.packs-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 280px;
+    padding: 40px 24px;
+    gap: 28px;
+}
+
+.packs-prism {
+    width: 72px;
+    height: 72px;
+    position: relative;
+    animation: prism-rotate 3s ease-in-out infinite;
+}
+
+.packs-prism::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 35%, #f43f5e 70%, #8b5cf6 100%);
+    background-size: 200% 200%;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    animation: prism-gradient 2.5s ease-in-out infinite;
+}
+
+.packs-prism::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    background: var(--bg-primary);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    opacity: 0.3;
+}
+
+@keyframes prism-rotate {
+    0%, 100% { transform: rotate(0deg) scale(1); }
+    50% { transform: rotate(180deg) scale(1.05); }
+}
+
+@keyframes prism-gradient {
+    0%, 100% { background-position: 0% 50%; filter: brightness(1); }
+    50% { background-position: 100% 50%; filter: brightness(1.15); }
+}
+
+.packs-loading-text {
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    text-align: center;
+    max-width: 280px;
+}
+
+.packs-loading-dots {
+    display: flex;
+    gap: 6px;
+}
+
+.packs-loading-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-purple);
+    animation: packs-dot-pulse 1.4s infinite ease-in-out;
+}
+
+.packs-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.packs-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes packs-dot-pulse {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+}
+
 .pack-card {
     position: relative;
     border-radius: var(--radius-md);

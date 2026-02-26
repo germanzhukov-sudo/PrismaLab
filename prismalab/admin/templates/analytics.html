@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+
+{% block title %}Аналитика — PrismaLab Admin{% endblock %}
+
+{% block extra_css %}
+<style>
+    .funnel-card {
+        background: white;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 2px 15px rgba(0, 0, 0, 0.05);
+    }
+    .funnel-title {
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 20px;
+    }
+    .funnel-step {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    .funnel-label {
+        width: 170px;
+        font-size: 0.85rem;
+        color: #555;
+        flex-shrink: 0;
+        text-align: right;
+        padding-right: 12px;
+    }
+    .funnel-bar-wrapper {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .funnel-bar {
+        height: 32px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        color: white;
+        font-weight: 600;
+        font-size: 0.85rem;
+        min-width: 40px;
+        transition: width 0.6s ease;
+    }
+    .funnel-pct {
+        font-size: 0.8rem;
+        color: #6c757d;
+        white-space: nowrap;
+        min-width: 55px;
+    }
+    .funnel-pct .drop {
+        color: #dc3545;
+    }
+    .funnel-pct .good {
+        color: #28a745;
+    }
+
+    /* Цвета воронок */
+    .funnel-persona .funnel-bar { background: linear-gradient(135deg, #667eea, #764ba2); }
+    .funnel-fast .funnel-bar { background: linear-gradient(135deg, #28a745, #20c997); }
+    .funnel-packs .funnel-bar { background: linear-gradient(135deg, #fd7e14, #ffc107); }
+
+    /* Затухание шагов */
+    .funnel-step:nth-child(1) .funnel-bar { opacity: 1; }
+    .funnel-step:nth-child(2) .funnel-bar { opacity: 0.9; }
+    .funnel-step:nth-child(3) .funnel-bar { opacity: 0.8; }
+    .funnel-step:nth-child(4) .funnel-bar { opacity: 0.7; }
+    .funnel-step:nth-child(5) .funnel-bar { opacity: 0.6; }
+    .funnel-step:nth-child(6) .funnel-bar { opacity: 0.5; }
+
+    .empty-funnel {
+        text-align: center;
+        padding: 30px;
+        color: #adb5bd;
+    }
+    .empty-funnel i {
+        font-size: 2rem;
+        display: block;
+        margin-bottom: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-funnel me-2"></i>Аналитика</h2>
+</div>
+
+<!-- Фильтр по периоду -->
+<div class="period-section mb-4">
+    <div class="period-header mb-3">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="period-title"><i class="bi bi-calendar-range me-2"></i>За период</span>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <div class="period-selector btn-group">
+                    <a href="?period=today" class="btn btn-outline-primary btn-sm {% if period == 'today' %}active{% endif %}">Сегодня</a>
+                    <a href="?period=yesterday" class="btn btn-outline-primary btn-sm {% if period == 'yesterday' %}active{% endif %}">Вчера</a>
+                    <a href="?period=week" class="btn btn-outline-primary btn-sm {% if period == 'week' %}active{% endif %}">Неделя</a>
+                    <a href="?period=month" class="btn btn-outline-primary btn-sm {% if period == 'month' %}active{% endif %}">Месяц</a>
+                </div>
+                <form method="GET" class="d-flex gap-2 align-items-center">
+                    <input type="hidden" name="period" value="custom">
+                    <input type="date" name="date_from" class="form-control form-control-sm" style="width: 130px;" value="{{ date_from }}">
+                    <span class="text-muted">—</span>
+                    <input type="date" name="date_to" class="form-control form-control-sm" style="width: 130px;" value="{{ date_to }}">
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel"></i></button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== ВОРОНКИ ========== -->
+<div class="row mb-4">
+    <!-- Воронка Персоны -->
+    <div class="col-lg-4 mb-4">
+        <div class="funnel-card h-100">
+            <div class="funnel-title"><i class="bi bi-person-badge me-2" style="color:#764ba2"></i>Воронка Персоны</div>
+            {% if funnels.persona and funnels.persona[0].count > 0 %}
+            <div class="funnel-persona">
+                {% set max_count = funnels.persona[0].count %}
+                {% for step in funnels.persona %}
+                <div class="funnel-step">
+                    <div class="funnel-label">{{ step.label }}</div>
+                    <div class="funnel-bar-wrapper">
+                        <div class="funnel-bar" style="width: {{ (step.count / max_count * 100) | round(0) if max_count > 0 else 0 }}%">
+                            {{ step.count }}
+                        </div>
+                        <div class="funnel-pct">
+                            {% if loop.index0 == 0 %}
+                                100%
+                            {% elif funnels.persona[loop.index0 - 1].count > 0 %}
+                                {% set pct = (step.count / funnels.persona[loop.index0 - 1].count * 100) | round(0) | int %}
+                                <span class="{% if pct >= 50 %}good{% else %}drop{% endif %}">{{ pct }}%</span>
+                            {% else %}
+                                <span class="drop">0%</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-funnel">
+                <i class="bi bi-inbox"></i>
+                Нет данных за период
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Воронка Экспресса -->
+    <div class="col-lg-4 mb-4">
+        <div class="funnel-card h-100">
+            <div class="funnel-title"><i class="bi bi-lightning me-2" style="color:#28a745"></i>Воронка Экспресса</div>
+            {% if funnels.fast and funnels.fast[0].count > 0 %}
+            <div class="funnel-fast">
+                {% set max_count = funnels.fast[0].count %}
+                {% for step in funnels.fast %}
+                <div class="funnel-step">
+                    <div class="funnel-label">{{ step.label }}</div>
+                    <div class="funnel-bar-wrapper">
+                        <div class="funnel-bar" style="width: {{ (step.count / max_count * 100) | round(0) if max_count > 0 else 0 }}%">
+                            {{ step.count }}
+                        </div>
+                        <div class="funnel-pct">
+                            {% if loop.index0 == 0 %}
+                                100%
+                            {% elif funnels.fast[loop.index0 - 1].count > 0 %}
+                                {% set pct = (step.count / funnels.fast[loop.index0 - 1].count * 100) | round(0) | int %}
+                                <span class="{% if pct >= 50 %}good{% else %}drop{% endif %}">{{ pct }}%</span>
+                            {% else %}
+                                <span class="drop">0%</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-funnel">
+                <i class="bi bi-inbox"></i>
+                Нет данных за период
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Воронка Фотосетов -->
+    <div class="col-lg-4 mb-4">
+        <div class="funnel-card h-100">
+            <div class="funnel-title"><i class="bi bi-box-seam me-2" style="color:#fd7e14"></i>Воронка Фотосетов</div>
+            {% if funnels.packs and funnels.packs[0].count > 0 %}
+            <div class="funnel-packs">
+                {% set max_count = funnels.packs[0].count %}
+                {% for step in funnels.packs %}
+                <div class="funnel-step">
+                    <div class="funnel-label">{{ step.label }}</div>
+                    <div class="funnel-bar-wrapper">
+                        <div class="funnel-bar" style="width: {{ (step.count / max_count * 100) | round(0) if max_count > 0 else 0 }}%">
+                            {{ step.count }}
+                        </div>
+                        <div class="funnel-pct">
+                            {% if loop.index0 == 0 %}
+                                100%
+                            {% elif funnels.packs[loop.index0 - 1].count > 0 %}
+                                {% set pct = (step.count / funnels.packs[loop.index0 - 1].count * 100) | round(0) | int %}
+                                <span class="{% if pct >= 50 %}good{% else %}drop{% endif %}">{{ pct }}%</span>
+                            {% else %}
+                                <span class="drop">0%</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-funnel">
+                <i class="bi bi-inbox"></i>
+                Нет данных за период
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- ========== ГРАФИКИ ПОПУЛЯРНОСТИ ========== -->
+<div class="row">
+    <!-- Топ стилей -->
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-palette me-2"></i>Популярные стили
+            </div>
+            <div class="card-body">
+                {% if popularity.top_styles %}
+                <canvas id="stylesChart" height="200"></canvas>
+                {% else %}
+                <div class="empty-funnel">
+                    <i class="bi bi-inbox"></i>
+                    Нет данных за период
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Топ действий -->
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-activity me-2"></i>Популярные действия
+            </div>
+            <div class="card-body">
+                {% if popularity.top_actions %}
+                <canvas id="actionsChart" height="200"></canvas>
+                {% else %}
+                <div class="empty-funnel">
+                    <i class="bi bi-inbox"></i>
+                    Нет данных за период
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const popularity = {{ popularity | tojson }};
+
+    // Топ стилей
+    if (popularity.top_styles && popularity.top_styles.length > 0) {
+        new Chart(document.getElementById('stylesChart'), {
+            type: 'bar',
+            data: {
+                labels: popularity.top_styles.map(s => s.style_id || 'unknown'),
+                datasets: [{
+                    label: 'Выборов',
+                    data: popularity.top_styles.map(s => parseInt(s.cnt)),
+                    backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true },
+                    y: { ticks: { font: { size: 11 } } }
+                }
+            }
+        });
+    }
+
+    // Топ действий
+    if (popularity.top_actions && popularity.top_actions.length > 0) {
+        const actionLabels = {
+            'nav_fast': 'Раздел Экспресс',
+            'nav_persona': 'Раздел Персона',
+            'nav_packs': 'Раздел Фотосеты',
+            'nav_tariffs': 'Тарифы',
+            'nav_faq': 'FAQ',
+            'nav_examples': 'Примеры',
+            'nav_help': 'Помощь',
+            'nav_back_main': 'Назад в меню',
+            'nav_back_persona': 'Назад в Персону',
+            'fast_gender_select': 'Экспресс: пол',
+            'fast_style_select': 'Экспресс: стиль',
+            'fast_buy_init': 'Экспресс: купить',
+            'fast_page': 'Экспресс: страница',
+            'fast_upload_rules': 'Экспресс: правила фото',
+            'fast_change_style': 'Экспресс: смена стиля',
+            'fast_show_tariffs': 'Экспресс: тарифы',
+            'fast_show_ready': 'Экспресс: готовые',
+            'persona_create_start': 'Персона: создать',
+            'persona_gender_select': 'Персона: пол',
+            'persona_style_select': 'Персона: стиль',
+            'persona_buy_init': 'Персона: купить',
+            'persona_upload_start': 'Персона: загрузка фото',
+            'persona_page': 'Персона: страница',
+            'persona_topup_init': 'Персона: докупить',
+            'persona_topup_view': 'Персона: тарифы докупки',
+            'persona_topup_confirm': 'Персона: подтвердить докуп',
+            'persona_credits_out': 'Персона: кредиты кончились',
+            'persona_reset_photos': 'Персона: сброс фото',
+            'persona_check_status': 'Персона: проверить статус',
+            'persona_recreate_start': 'Персона: пересоздать',
+            'persona_recreate_confirm': 'Персона: подтвердить пересоздание',
+            'persona_recreate_cancel': 'Персона: отмена пересоздания',
+            'pack_buy_init': 'Фотосеты: купить',
+            'pack_reset_photos': 'Фотосеты: сброс фото',
+            'pack_retry': 'Фотосеты: повтор',
+            'payment_success': 'Оплата успешна',
+            'pre_checkout': 'Pre-checkout',
+            'generation': 'Генерация',
+            'pack_generation': 'Генерация фотосета',
+            'photo_upload': 'Загрузка фото',
+            'document_upload': 'Загрузка документа',
+            'profile_view': 'Профиль',
+            'profile_toggle_gender': 'Смена пола',
+            'profile_fast_tariffs': 'Профиль: тарифы',
+            'examples_page': 'Страница примеров',
+            'miniapp_pack_upload': 'Mini App: загрузка',
+            'reset': 'Сброс',
+            'text_input': 'Текстовый ввод',
+        };
+
+        new Chart(document.getElementById('actionsChart'), {
+            type: 'bar',
+            data: {
+                labels: popularity.top_actions.map(a => actionLabels[a.event_type] || a.event_type),
+                datasets: [{
+                    label: 'Раз',
+                    data: popularity.top_actions.map(a => parseInt(a.cnt)),
+                    backgroundColor: 'rgba(40, 167, 69, 0.8)',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true },
+                    y: { ticks: { font: { size: 11 } } }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

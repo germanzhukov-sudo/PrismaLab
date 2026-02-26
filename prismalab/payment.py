@@ -5,10 +5,15 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import hashlib
+import io
+import json
 import logging
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 
@@ -18,6 +23,63 @@ load_dotenv(_load_env)
 from typing import Any
 
 logger = logging.getLogger("prismalab.payment")
+
+# Astria pack callback
+ASTRIA_PACK_CALLBACK_SECRET = (os.getenv("PRISMALAB_ASTRIA_PACK_CALLBACK_SECRET") or "").strip()
+# Уже доставленные паки по run_id — защита от дубля callback + fallback + polling
+_pack_delivered: set[str] = set()
+# Пак сейчас в процессе отправки пользователю (polling/recovery) — чтобы fallback/callback не дублировали финал
+_pack_in_progress: set[str] = set()
+
+
+def _get_pack_callback_base_url() -> str:
+    """Базовый URL для Astria pack callback. Из PRISMALAB_PUBLIC_URL или MINIAPP_URL."""
+    url = (os.getenv("PRISMALAB_PUBLIC_URL") or "").strip()
+    if url:
+        return url.rstrip("/")
+    mini = (os.getenv("MINIAPP_URL") or "").strip()
+    if mini:
+        # https://app.prismalab.ru/app -> https://app.prismalab.ru
+        from urllib.parse import urlparse
+        parsed = urlparse(mini)
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+    return ""
+
+
+def _make_pack_callback_token(user_id: int, chat_id: int, pack_id: int, run_id: str) -> str:
+    """HMAC-SHA256 подпись для callback URL."""
+    if not ASTRIA_PACK_CALLBACK_SECRET:
+        return ""
+    msg = f"{user_id}:{chat_id}:{pack_id}:{run_id}"
+    return hmac.new(
+        ASTRIA_PACK_CALLBACK_SECRET.encode(),
+        msg.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_pack_callback_token(user_id: str, chat_id: str, pack_id: str, run_id: str, token: str) -> bool:
+    """Проверка HMAC-подписи callback."""
+    if not ASTRIA_PACK_CALLBACK_SECRET:
+        return False
+    try:
+        uid, cid, pid = int(user_id), int(chat_id), int(pack_id)
+        expected = _make_pack_callback_token(uid, cid, pid, run_id)
+        return hmac.compare_digest(expected, token)
+    except (ValueError, TypeError):
+        return False
+
+
+def build_pack_callback_url(user_id: int, chat_id: int, pack_id: int, run_id: str) -> str:
+    """Собирает URL для prompts_callback Astria."""
+    if not ASTRIA_PACK_CALLBACK_SECRET:
+        return ""
+    base = _get_pack_callback_base_url()
+    if not base:
+        return ""
+    params = {"user_id": user_id, "chat_id": chat_id, "pack_id": pack_id, "run_id": run_id}
+    params["token"] = _make_pack_callback_token(user_id, chat_id, pack_id, run_id)
+    return f"{base}/webhooks/astria-pack?{urlencode(params)}"
 
 # Выбор платёжной системы: "telegram" или "yookassa"
 PAYMENT_PROVIDER = (os.getenv("PAYMENT_PROVIDER") or "telegram").strip().lower()
@@ -30,8 +92,12 @@ YOOKASSA_RETURN_URL = (os.getenv("YOOKASSA_RETURN_URL") or "https://t.me/your_bo
 # Telegram Payments (инвойс в Telegram, без webhook)
 TELEGRAM_PROVIDER_TOKEN = (os.getenv("TELEGRAM_PROVIDER_TOKEN") or "").strip()
 
-# Алерт о платеже — используем модуль alerts
-from prismalab.alerts import alert_payment as send_payment_alert
+# Алерты
+from prismalab.alerts import (
+    alert_pack_error,
+    alert_payment as send_payment_alert,
+    alert_payment_error,
+)
 
 
 def use_yookassa() -> bool:
@@ -142,9 +208,14 @@ def get_payment_status(payment_id: str) -> str | None:
 
         Configuration.configure(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
         payment = Payment.find_one(payment_id)
-        return payment.status
+        status = getattr(payment, "status", None)
+        if status is None and hasattr(payment, "json"):
+            j = getattr(payment, "json", None)
+            if isinstance(j, dict):
+                status = j.get("status")
+        return status
     except Exception as e:
-        logger.warning("Ошибка получения статуса платежа %s: %s", payment_id, type(e).__name__)
+        logger.exception("Ошибка получения статуса платежа %s: %s", payment_id, e)
         return None
 
 
@@ -162,6 +233,33 @@ def get_payment_metadata(payment_id: str) -> dict:
     except Exception as e:
         logger.warning("Ошибка получения metadata платежа %s: %s", payment_id, type(e).__name__)
         return {}
+
+
+def _pack_alert_details_from_metadata(metadata: dict[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(metadata, dict):
+        return None
+    pack_id = str(metadata.get("pack_id") or "").strip()
+    pack_title = str(metadata.get("pack_title") or "").strip()
+    if not pack_title and pack_id.isdigit():
+        # Fallback для старых платежей mini app, где title не писался в metadata.
+        try:
+            from prismalab.bot import _find_pack_offer
+            offer = _find_pack_offer(int(pack_id))
+            if offer:
+                pack_title = str(offer.get("title") or "").strip()
+        except Exception:
+            pass
+    details = {
+        "pack_id": pack_id,
+        "pack_title": pack_title,
+        "pack_class": str(metadata.get("pack_class") or "").strip(),
+        "pack_num_images": str(metadata.get("pack_num_images") or metadata.get("credits") or "").strip(),
+        "pack_cost_field": str(metadata.get("pack_cost_field") or "").strip(),
+        "pack_cost_value": str(metadata.get("pack_cost_value") or "").strip(),
+    }
+    if any(details.values()):
+        return details
+    return None
 
 
 def _yookassa_success_content(
@@ -249,8 +347,9 @@ async def poll_payment_status(
                 return
 
             logger.info("Платёж %s успешен, начисляем кредиты", payment_id)
+            payment_log_id: int | None = None
             try:
-                store.log_payment(
+                payment_log_id = store.log_payment(
                     user_id=user_id,
                     payment_id=payment_id,
                     payment_method="yookassa",
@@ -260,6 +359,11 @@ async def poll_payment_status(
                 )
             except Exception as e:
                 logger.exception("Ошибка записи платежа: %s", e)
+                await asyncio.sleep(poll_interval)
+                continue
+            if payment_log_id is None:
+                logger.info("Платёж %s уже записан параллельным обработчиком, пропускаем", payment_id)
+                return
 
             # Начисляем кредиты
             if product_type == "fast":
@@ -277,58 +381,100 @@ async def poll_payment_status(
                 # Пак — не начисляем кредиты, отправляем кнопку
                 pass
 
+            pack_alert_details: dict[str, str] | None = None
             if product_type == "persona_pack":
-                # Для паков: устанавливаем state загрузки фото и отправляем инструкцию
+                # Для паков: при наличии Персоны — запускаем сразу; иначе просим 10 фото
                 pack_id = "0"
                 meta = get_payment_metadata(payment_id)
+                pack_alert_details = _pack_alert_details_from_metadata(meta)
                 if meta.get("pack_id"):
                     pack_id = str(meta["pack_id"])
                 pack_id_int = int(pack_id) if pack_id.isdigit() else 0
 
-                # БД: fallback когда application.user_data не доходит (Mini App, другой поток)
-                try:
-                    store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id_int)
-                except Exception as e:
-                    logger.warning("Не удалось установить pending_pack в БД: %s", e)
+                profile = store.get_user(user_id)
+                has_persona = bool(
+                    getattr(profile, "astria_lora_tune_id", None)
+                    or getattr(profile, "astria_lora_pack_tune_id", None)
+                )
 
-                # Устанавливаем user_data через application._user_data (defaultdict)
-                # NB: application.user_data — read-only mappingproxy, писать можно только в _user_data
-                if application is not None:
+                if has_persona and chat_id:
                     try:
-                        from prismalab.bot import (
-                            USERDATA_MODE,
-                            USERDATA_PERSONA_SELECTED_PACK_ID,
-                            USERDATA_PERSONA_PACK_WAITING_UPLOAD,
-                            USERDATA_PERSONA_PACK_PHOTOS,
-                            USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
-                        )
-                        ud = application._user_data[user_id]  # defaultdict(dict) — создаст если нет
-                        ud[USERDATA_MODE] = "persona_pack_upload"
-                        ud[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id_int
-                        ud[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
-                        ud[USERDATA_PERSONA_PACK_PHOTOS] = []
-                        ud[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
-                        logger.info("Установлен state persona_pack_upload для user %s (pack %s)", user_id, pack_id)
+                        from html import escape
+                        from prismalab.bot import _run_persona_pack_generation, _find_pack_offer, _persona_training_keyboard
+                        offer = _find_pack_offer(pack_id_int)
+                        if offer:
+                            msg = await bot.send_message(
+                                chat_id=int(chat_id),
+                                text=f"Оплата получена ✅\n\nПриступаю к созданию фотосета <b>«{escape(offer['title'])}»</b>",
+                                parse_mode="HTML",
+                                reply_markup=_persona_training_keyboard(),
+                            )
+                            user_data = application._user_data[user_id] if application else {}
+                            ctx = type("Context", (), {"bot": bot, "user_data": user_data, "application": application})()
+                            coro = _run_persona_pack_generation(
+                                context=ctx,
+                                chat_id=int(chat_id),
+                                user_id=user_id,
+                                pack_id=pack_id_int,
+                                offer=offer,
+                                run_id=payment_id,
+                                status_message_id=msg.message_id,
+                            )
+                            if application:
+                                application.create_task(coro)
+                            else:
+                                asyncio.create_task(coro)
+                        else:
+                            has_persona = False
                     except Exception as e:
-                        logger.warning("Не удалось установить user_data для пака: %s", e)
+                        logger.warning("Poll: не удалось запустить пак напрямую для user %s: %s", user_id, e)
+                        asyncio.get_event_loop().create_task(
+                            alert_pack_error(
+                                user_id,
+                                pack_id=pack_id_int if pack_id_int > 0 else None,
+                                pack_title=(offer.get("title") if 'offer' in locals() and isinstance(offer, dict) else None),
+                                stage="payment_launch",
+                                error=str(e),
+                            )
+                        )
+                        has_persona = False
 
-                try:
-                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                    kb = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Сбросить фото пака", callback_data="pl_persona_pack_reset_photos")],
-                    ])
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            f"Оплата получена ✅\n\n"
-                            f"<b>Для запуска фотопака нужно 10 фото</b>\n\n"
-                            f"Отправьте 10 фото этого человека (можно все сразу или по одной)."
-                        ),
-                        parse_mode="HTML",
-                        reply_markup=kb,
-                    )
-                except Exception as e:
-                    logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
+                if not has_persona:
+                    # Нет Персоны — запускаем persona-flow после оплаты фотосета
+                    try:
+                        store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id_int)
+                    except Exception as e:
+                        logger.warning("Не удалось установить pending_pack в БД: %s", e)
+
+                    if application is not None:
+                        try:
+                            from prismalab.bot import (
+                                USERDATA_MODE,
+                                USERDATA_PERSONA_SELECTED_PACK_ID,
+                                USERDATA_PERSONA_WAITING_UPLOAD,
+                                USERDATA_PERSONA_PHOTOS,
+                                USERDATA_PERSONA_UPLOAD_MSG_IDS,
+                            )
+                            ud = application._user_data[user_id]
+                            ud[USERDATA_MODE] = "persona"
+                            ud[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id_int
+                            ud[USERDATA_PERSONA_WAITING_UPLOAD] = False
+                            ud[USERDATA_PERSONA_PHOTOS] = []
+                            ud[USERDATA_PERSONA_UPLOAD_MSG_IDS] = []
+                            logger.info("Установлен state persona rules для user %s (pack %s)", user_id, pack_id)
+                        except Exception as e:
+                            logger.warning("Не удалось установить user_data для пака: %s", e)
+
+                    try:
+                        from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=PERSONA_RULES_MESSAGE,
+                            parse_mode="HTML",
+                            reply_markup=_persona_rules_keyboard(),
+                        )
+                    except Exception as e:
+                        logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
             else:
                 # Текст и клавиатура как в Telegram Payments (bot.handle_successful_payment)
                 msg_text, reply_markup = _yookassa_success_content(bot, store, user_id, product_type, credits)
@@ -346,7 +492,7 @@ async def poll_payment_status(
                     logger.warning("Не удалось отправить сообщение об оплате: %s", e)
 
             # Алерт админу
-            await send_payment_alert(user_id, amount_rub, credits, product_type)
+            await send_payment_alert(user_id, amount_rub, credits, product_type, pack_details=pack_alert_details)
 
             return
 
@@ -407,7 +553,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
     # Логируем платёж для аналитики
     try:
         amount_rub = float(payment_obj.get("amount", {}).get("value", 0))
-        store.log_payment(
+        payment_log_id = store.log_payment(
             user_id=user_id,
             payment_id=payment_id,
             payment_method="yookassa",
@@ -415,8 +561,12 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
             credits=credits,
             amount_rub=amount_rub,
         )
-    except Exception:
-        pass
+        if payment_log_id is None:
+            logger.info("Webhook: платёж %s уже записан, пропускаем дубль", payment_id)
+            return 200, "OK"
+    except Exception as e:
+        logger.exception("Webhook: ошибка записи платежа %s: %s", payment_id, e)
+        return 500, "Error"
 
     if product_type == "fast":
         profile = store.get_user(user_id)
@@ -437,40 +587,56 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
         pack_id_int = int(pack_id) if str(pack_id).isdigit() else 0
 
         profile = store.get_user(user_id)
-        has_persona = bool(getattr(profile, "astria_lora_tune_id", None))
+        has_persona = bool(
+            getattr(profile, "astria_lora_tune_id", None)
+            or getattr(profile, "astria_lora_pack_tune_id", None)
+        )
 
         if has_persona and chat_id:
             # Есть Персона — запускаем пак сразу, без загрузки фото
             try:
-                from prismalab.bot import _run_persona_pack_generation, _find_pack_offer
+                from html import escape
+                from prismalab.bot import _run_persona_pack_generation, _find_pack_offer, _persona_training_keyboard
                 offer = _find_pack_offer(pack_id_int)
                 if offer:
-                    user_data = application._user_data.get(user_id, {}) if application else {}
-                    ctx = type("Context", (), {"bot": bot, "user_data": user_data})()
+                    msg = await bot.send_message(
+                        chat_id=int(chat_id),
+                        text=f"Оплата получена ✅\n\nПриступаю к созданию фотосета <b>«{escape(offer['title'])}»</b>",
+                        parse_mode="HTML",
+                        reply_markup=_persona_training_keyboard(),
+                    )
+                    user_data = application._user_data[user_id] if application else {}
+                    ctx = type("Context", (), {"bot": bot, "user_data": user_data, "application": application})()
                     coro = _run_persona_pack_generation(
                         context=ctx,
                         chat_id=int(chat_id),
                         user_id=user_id,
                         pack_id=pack_id_int,
                         offer=offer,
+                        run_id=payment_id,
+                        status_message_id=msg.message_id,
                     )
                     if application:
                         application.create_task(coro)
                     else:
                         asyncio.create_task(coro)
-                    await bot.send_message(
-                        chat_id=int(chat_id),
-                        text=f"Оплата получена ✅\n\nЗапускаю пак «{offer['title']}».",
-                        parse_mode="HTML",
-                    )
                 else:
                     has_persona = False  # fallback: попросим фото
             except Exception as e:
                 logger.warning("Webhook: не удалось запустить пак напрямую для user %s: %s", user_id, e)
+                asyncio.get_event_loop().create_task(
+                    alert_pack_error(
+                        user_id,
+                        pack_id=pack_id_int if pack_id_int > 0 else None,
+                        pack_title=(offer.get("title") if 'offer' in locals() and isinstance(offer, dict) else None),
+                        stage="payment_launch",
+                        error=str(e),
+                    )
+                )
                 has_persona = False
 
         if not has_persona:
-            # Нет Персоны — просим загрузить 10 фото
+            # Нет Персоны — запускаем persona-flow после оплаты фотосета
             try:
                 store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id_int)
             except Exception as e:
@@ -481,40 +647,39 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
                     from prismalab.bot import (
                         USERDATA_MODE,
                         USERDATA_PERSONA_SELECTED_PACK_ID,
-                        USERDATA_PERSONA_PACK_WAITING_UPLOAD,
-                        USERDATA_PERSONA_PACK_PHOTOS,
-                        USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
+                        USERDATA_PERSONA_WAITING_UPLOAD,
+                        USERDATA_PERSONA_PHOTOS,
+                        USERDATA_PERSONA_UPLOAD_MSG_IDS,
                     )
                     ud = application._user_data[user_id]
-                    ud[USERDATA_MODE] = "persona_pack_upload"
+                    ud[USERDATA_MODE] = "persona"
                     ud[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id_int
-                    ud[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
-                    ud[USERDATA_PERSONA_PACK_PHOTOS] = []
-                    ud[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
-                    logger.info("Webhook: установлен state persona_pack_upload для user %s (pack %s)", user_id, pack_id)
+                    ud[USERDATA_PERSONA_WAITING_UPLOAD] = False
+                    ud[USERDATA_PERSONA_PHOTOS] = []
+                    ud[USERDATA_PERSONA_UPLOAD_MSG_IDS] = []
+                    logger.info("Webhook: установлен state persona rules для user %s (pack %s)", user_id, pack_id)
                 except Exception as e:
                     logger.warning("Webhook: не удалось установить user_data для пака: %s", e)
 
             if chat_id:
                 try:
-                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                    kb = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Сбросить фото пака", callback_data="pl_persona_pack_reset_photos")],
-                    ])
+                    from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
                     await bot.send_message(
                         chat_id=int(chat_id),
-                        text=(
-                            f"Оплата получена ✅\n\n"
-                            f"<b>Для запуска фотопака нужно 10 фото</b>\n\n"
-                            f"Отправьте 10 фото этого человека (можно все сразу или по одной)."
-                        ),
+                        text=PERSONA_RULES_MESSAGE,
                         parse_mode="HTML",
-                        reply_markup=kb,
+                        reply_markup=_persona_rules_keyboard(),
                     )
                 except Exception as e:
                     logger.warning("Не удалось отправить сообщение о покупке пака: %s", e)
 
-        await send_payment_alert(user_id, amount_rub, credits, product_type)
+        await send_payment_alert(
+            user_id,
+            amount_rub,
+            credits,
+            product_type,
+            pack_details=_pack_alert_details_from_metadata(metadata),
+        )
         return 200, "OK"
     else:
         logger.warning("Неизвестный product_type в платеже %s: %s", payment_id, product_type)
@@ -537,7 +702,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
             logger.warning("Не удалось отправить сообщение об оплате: %s", e)
 
     # Алерт админу
-    await send_payment_alert(user_id, amount_rub, credits, product_type)
+    await send_payment_alert(user_id, amount_rub, credits, product_type, pack_details=None)
 
     return 200, "OK"
 
@@ -573,13 +738,122 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
         else:
             logger.info("Health endpoint слушает порт %s (path: /health)", port)
 
+        # Astria pack prompts_callback — присылает готовые prompts
+        if _get_pack_callback_base_url() and ASTRIA_PACK_CALLBACK_SECRET:
+            async def astria_pack_webhook_handler(request: web.Request) -> web.Response:
+                if request.method != "POST":
+                    return web.Response(status=405, text="Method not allowed")
+                try:
+                    q = request.rel_url.query
+                    user_id_s = q.get("user_id", "")
+                    chat_id_s = q.get("chat_id", "")
+                    pack_id_s = q.get("pack_id", "")
+                    run_id_s = q.get("run_id", "")
+                    token = q.get("token", "")
+                    if not user_id_s or not chat_id_s or not pack_id_s or not run_id_s:
+                        return web.Response(status=400, text="Missing user_id/chat_id/pack_id/run_id")
+                    if not _verify_pack_callback_token(user_id_s, chat_id_s, pack_id_s, run_id_s, token):
+                        logger.warning("Astria pack callback: invalid token")
+                        return web.Response(status=403, text="Invalid token")
+                    import time as _time
+                    logger.info(
+                        "Astria pack callback: получен run_id=%s user=%s pack=%s (ts=%.0f)",
+                        run_id_s, user_id_s, pack_id_s, _time.time(),
+                    )
+                    if run_id_s in _pack_delivered:
+                        logger.info("Astria pack callback: run_id=%s уже доставлено (polling/fallback)", run_id_s)
+                        return web.Response(status=200, text="OK")
+                    if run_id_s in _pack_in_progress:
+                        logger.info("Astria pack callback: run_id=%s уже в процессе доставки (polling), пропускаем", run_id_s)
+                        return web.Response(status=200, text="OK")
+                    _pack_in_progress.add(run_id_s)
+                    body = await request.read()
+                    prompts = json.loads(body.decode("utf-8")) if body else []
+                    if not isinstance(prompts, list):
+                        return web.Response(status=400, text="Expected JSON array")
+                    from prismalab.astria_client import collect_prompt_image_urls
+                    from prismalab.bot import _safe_send_document, _find_pack_offer
+                    urls = collect_prompt_image_urls(prompts)
+                    if not urls:
+                        logger.info("Astria pack callback: no images in prompts")
+                        return web.Response(status=200, text="OK")
+                    user_id = int(user_id_s)
+                    chat_id = int(chat_id_s)
+                    pack_id = int(pack_id_s)
+                    offer = _find_pack_offer(pack_id) or {}
+                    pack_title = offer.get("title", "") or str(pack_id)
+                    sent_count = 0
+                    for i, url in enumerate(urls):
+                        try:
+                            out_bytes = await asyncio.to_thread(
+                                lambda u=url: __import__("requests").get(u, timeout=90).content
+                            )
+                            if out_bytes:
+                                bio = io.BytesIO(out_bytes)
+                                bio.name = f"pack_{pack_id}_{sent_count + 1}.png"
+                                caption = f"Фотосет «{pack_title}» ({sent_count + 1}/{len(urls)})" if sent_count == 0 else ""
+                                await _safe_send_document(bot=bot, chat_id=chat_id, document=bio, caption=caption)
+                                sent_count += 1
+                                await asyncio.sleep(0.1)
+                        except Exception as e:
+                            logger.warning("Astria pack callback: download/send failed %s: %s", url[:50], e)
+                    if sent_count > 0:
+                        _pack_delivered.add(run_id_s)
+                        logger.info(
+                            "Astria pack callback: доставлено run_id=%s sent=%s (источник: callback)",
+                            run_id_s, sent_count,
+                        )
+                    _pack_in_progress.discard(run_id_s)
+                    try:
+                        store.log_event(user_id, "pack_callback", {"pack_id": pack_id, "images_sent": sent_count})
+                    except Exception:
+                        pass
+                    from prismalab.bot import _photoset_done_keyboard, _photoset_done_message, _photoset_retry_keyboard
+                    if sent_count > 0:
+                        done_text = _photoset_done_message(include_gift=False)
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=done_text,
+                            reply_markup=_photoset_done_keyboard(),
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                            reply_markup=_photoset_retry_keyboard(pack_id),
+                        )
+                        asyncio.get_event_loop().create_task(
+                            alert_pack_error(
+                                user_id,
+                                pack_id=pack_id,
+                                pack_title=pack_title,
+                                stage="callback",
+                                error="no images delivered",
+                            )
+                        )
+                    return web.Response(status=200, text="OK")
+                except json.JSONDecodeError as e:
+                    _pack_in_progress.discard(run_id_s)
+                    logger.warning("Astria pack callback: invalid JSON: %s", e)
+                    return web.Response(status=400, text="Invalid JSON")
+                except Exception as e:
+                    _pack_in_progress.discard(run_id_s)
+                    logger.exception("Astria pack callback error: %s", e)
+                    return web.Response(status=500, text="Error")
+
+            app.router.add_post("/webhooks/astria-pack", astria_pack_webhook_handler)
+            logger.info("Astria pack callback слушает /webhooks/astria-pack")
+        elif _get_pack_callback_base_url() and not ASTRIA_PACK_CALLBACK_SECRET:
+            logger.warning("Astria pack callback отключен: не задан PRISMALAB_ASTRIA_PACK_CALLBACK_SECRET")
+
         # ASGI bridge для Starlette-приложений (админка, miniapp)
         from aiohttp_asgi import ASGIResource
 
         # Админка на том же порту по пути /admin (один вход, один порт)
         try:
             from prismalab.admin.app import create_admin_app
-            admin_app = create_admin_app(store)
+            admin_app = create_admin_app(store, bot=bot)
             # root_path="" — в scope уходит полный path (/admin/), иначе ASGI может резать и Starlette не матчит
             asgi_resource = ASGIResource(admin_app, root_path="")
 
@@ -622,9 +896,6 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                     return web.json_response({"error": "Invalid init data"}, status=401)
                 profile = miniapp_routes.get_store().get_user(user["user_id"])
                 user_id = user["user_id"]
-                owner_id = miniapp_routes.OWNER_ID
-                if not owner_id or user_id != owner_id:
-                    return web.json_response({"error": "Forbidden"}, status=403)
                 return web.json_response({
                     "user_id": user_id,
                     "first_name": user["first_name"],
@@ -646,8 +917,6 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
                 if not user:
                     return web.json_response({"error": "Invalid init data"}, status=401)
-                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
                 gender = body.get("gender")
                 if gender not in ("male", "female"):
                     return web.json_response({"error": "Invalid gender"}, status=400)
@@ -657,8 +926,8 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
 
             async def _miniapp_api_styles(request: web.Request) -> web.Response:
                 user = _miniapp_get_user(request)
-                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
                 gender = request.query.get("gender", "female")
                 styles = miniapp_routes.FAST_STYLES_FEMALE if gender == "female" else miniapp_routes.FAST_STYLES_MALE
                 return web.json_response({"styles": styles, "gender": gender})
@@ -680,8 +949,6 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
                 if not user:
                     return web.json_response({"error": "Unauthorized"}, status=401)
-                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
 
                 user_id = user["user_id"]
                 s = miniapp_routes.get_store()
@@ -703,8 +970,8 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
 
             async def _miniapp_api_status(request: web.Request) -> web.Response:
                 user = _miniapp_get_user(request)
-                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
                 task_id = request.match_info.get("task_id", "")
                 task = miniapp_routes._generation_tasks.get(task_id)
                 if not task:
@@ -729,30 +996,36 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 return validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
 
             async def _miniapp_api_packs(request: web.Request) -> web.Response:
-                # Паки только для owner
                 user = _miniapp_get_user(request)
-                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"packs": []})
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
                 offers = miniapp_routes._load_pack_offers()
                 if not offers:
                     return web.json_response({"packs": []})
-                result = []
-                for offer in offers:
-                    pack_data = await miniapp_routes._fetch_pack_data(offer["id"])
-                    result.append({
+                sem = asyncio.Semaphore(miniapp_routes._PACKS_FETCH_CONCURRENCY)
+
+                async def _fetch_one(offer):
+                    pack_id = int(offer["id"])
+                    async with sem:
+                        pack_data = await miniapp_routes._fetch_pack_data(pack_id)
+                    expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
+                    return {
                         "id": offer["id"],
                         "title": offer["title"],
                         "price_rub": offer["price_rub"],
-                        "expected_images": offer["expected_images"],
-                        "cover_url": pack_data["cover_url"],
+                        "expected_images": expected_images,
+                        "cover_url": pack_data.get("cover_url", ""),
                         "category": offer.get("category", "female"),
-                    })
-                return web.json_response({"packs": result})
+                    }
+
+                result = await asyncio.gather(*[_fetch_one(o) for o in offers], return_exceptions=True)
+                packs = [r for r in result if isinstance(r, dict)]
+                return web.json_response({"packs": packs})
 
             async def _miniapp_api_pack_detail(request: web.Request) -> web.Response:
                 user = _miniapp_get_user(request)
-                if not user or not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
                 pack_id_str = request.match_info.get("pack_id", "")
                 try:
                     pack_id = int(pack_id_str)
@@ -763,13 +1036,14 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 if not offer:
                     return web.json_response({"error": "Pack not found"}, status=404)
                 pack_data = await miniapp_routes._fetch_pack_data(pack_id)
+                expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
                 return web.json_response({
                     "id": offer["id"],
                     "title": offer["title"],
                     "price_rub": offer["price_rub"],
-                    "expected_images": offer["expected_images"],
-                    "cover_url": pack_data["cover_url"],
-                    "examples": pack_data["examples"],
+                    "expected_images": expected_images,
+                    "cover_url": pack_data.get("cover_url", ""),
+                    "examples": pack_data.get("examples", []),
                 })
 
             async def _miniapp_api_pack_buy(request: web.Request) -> web.Response:
@@ -782,8 +1056,6 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
                 if not user:
                     return web.json_response({"error": "Unauthorized"}, status=401)
-                if not miniapp_routes.OWNER_ID or user["user_id"] != miniapp_routes.OWNER_ID:
-                    return web.json_response({"error": "Forbidden"}, status=403)
                 pack_id_str = request.match_info.get("pack_id", "")
                 try:
                     pack_id = int(pack_id_str)
@@ -793,6 +1065,10 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 offer = next((o for o in offers if o["id"] == pack_id), None)
                 if not offer:
                     return web.json_response({"error": "Pack not found"}, status=404)
+                pack_data = await miniapp_routes._fetch_pack_data(pack_id, use_cache=False)
+                expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
+                pack_cost_field, pack_cost_value = miniapp_routes._resolve_pack_cost_data(offer, pack_data)
+                pack_class = miniapp_routes._resolve_pack_class_key(offer)
                 user_id = user["user_id"]
                 price_rub = offer["price_rub"]
                 amount = apply_test_amount(float(price_rub))
@@ -807,12 +1083,20 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                         "user_id": str(user_id),
                         "chat_id": str(user_id),
                         "product_type": "persona_pack",
-                        "credits": str(offer["expected_images"]),
+                        "credits": str(expected_images),
                         "pack_id": str(pack_id),
+                        "pack_title": str(offer.get("title") or "")[:100],
+                        "pack_class": str(pack_class or "")[:24],
+                        "pack_num_images": str(expected_images),
+                        "pack_cost_field": str(pack_cost_field or "")[:24],
+                        "pack_cost_value": str(pack_cost_value or "")[:64],
                     },
                     return_url=return_url,
                 )
                 if not url:
+                    asyncio.get_event_loop().create_task(
+                        alert_payment_error(user_id, "persona_pack", str(payment_id_or_err or "payment creation failed"))
+                    )
                     return web.json_response({"error": "Payment creation failed"}, status=500)
                 # Запускаем поллинг — bot и application доступны через замыкание run_webhook_server
                 asyncio.get_event_loop().create_task(poll_payment_status(
@@ -821,7 +1105,7 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                     store=store,
                     user_id=user_id,
                     chat_id=user_id,
-                    credits=offer["expected_images"],
+                    credits=expected_images,
                     product_type="persona_pack",
                     amount_rub=amount,
                     application=application,

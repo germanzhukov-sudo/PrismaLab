@@ -315,7 +315,7 @@ async function startGeneration() {
         pollStatus();
     } catch (e) {
         console.error('Generation error:', e);
-        alert('Ошибка генерации: ' + e.message);
+        alert('Ошибка генерации. Попробуйте ещё раз.');
         showScreen('upload');
     }
 }
@@ -489,17 +489,21 @@ function selectPackCategory(category) {
 
 async function loadPacks() {
     const grid = document.getElementById('packs-grid');
-    grid.innerHTML = '';
-    for (let i = 0; i < 4; i++) {
-        const skeleton = document.createElement('div');
-        skeleton.className = 'pack-card skeleton';
-        grid.appendChild(skeleton);
-    }
+    grid.innerHTML = `
+        <div class="packs-loading" style="grid-column: 1/-1;">
+            <div class="packs-prism"></div>
+            <p class="packs-loading-text">Нужно немного времени, чтобы загрузить фотосеты. Пожалуйста, никуда не убегайте</p>
+            <div class="packs-loading-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+    `;
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
     try {
         const headers = {};
         if (state.initData) headers['X-Telegram-Init-Data'] = state.initData;
-        const resp = await fetch('/app/api/packs', { headers });
+        const resp = await fetch(`/app/api/packs?ts=${Date.now()}`, { headers, cache: 'no-store' });
         const data = await resp.json();
         state.packs = data.packs || [];
         state.packCategory = state.packCategory || 'female';
@@ -561,7 +565,7 @@ async function openPackDetail(packId) {
     try {
         const headers = {};
         if (state.initData) headers['X-Telegram-Init-Data'] = state.initData;
-        const resp = await fetch(`/app/api/packs/${packId}`, { headers });
+        const resp = await fetch(`/app/api/packs/${packId}?ts=${Date.now()}`, { headers, cache: 'no-store' });
         const pack = await resp.json();
         state.selectedPack = pack;
 
@@ -618,7 +622,7 @@ async function buyPack() {
         }
     } catch (e) {
         console.error('Buy pack error:', e);
-        alert('Ошибка создания платежа: ' + e.message);
+        alert('Ошибка создания платежа. Попробуйте ещё раз.');
     } finally {
         btn.disabled = false;
         if (state.selectedPack) {

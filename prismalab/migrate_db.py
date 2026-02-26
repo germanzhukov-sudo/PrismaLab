@@ -38,6 +38,8 @@ def main() -> int:
                 astria_tune_id TEXT,
                 astria_lora_tune_id TEXT,
                 astria_lora_tune_id_pending TEXT,
+                astria_lora_pack_tune_id TEXT,
+                astria_lora_pack_tune_id_pending TEXT,
                 free_generation_used INTEGER DEFAULT 0,
                 paid_generations_remaining INTEGER DEFAULT 0,
                 subject_gender TEXT,
@@ -52,7 +54,41 @@ def main() -> int:
         except Exception:
             conn.rollback()
         try:
+            cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS astria_lora_pack_tune_id TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS astria_lora_pack_tune_id_pending TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
             cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS pending_pack_id INTEGER")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            cur.execute("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS persona_lora_class_name TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        # Таблица для восстановления прерванных pack runs (бот рестарт во время обучения pack tune)
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.pending_pack_runs (
+                    user_id BIGINT PRIMARY KEY,
+                    pack_id INTEGER NOT NULL,
+                    chat_id BIGINT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    expected INTEGER NOT NULL,
+                    class_name TEXT NOT NULL,
+                    offer_title TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.commit()
+            cur.execute("ALTER TABLE public.pending_pack_runs ADD COLUMN IF NOT EXISTS offer_title TEXT")
             conn.commit()
         except Exception:
             conn.rollback()

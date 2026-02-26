@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
+from html import escape
 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -36,13 +37,19 @@ async def _send_alert(text: str) -> None:
         logger.warning("Не удалось отправить алерт: %s", e)
 
 
-async def alert_payment(user_id: int, amount_rub: float, credits: int, product_type: str) -> None:
+async def alert_payment(
+    user_id: int,
+    amount_rub: float,
+    credits: int,
+    product_type: str,
+    pack_details: dict[str, str] | None = None,
+) -> None:
     """Алерт о новом платеже."""
     product_names = {
         "fast": "Экспресс",
         "persona_topup": "Персона (пополнение)",
         "persona_create": "Создание Персоны",
-        "persona_pack": "Фотопак",
+        "persona_pack": "Фотосет",
     }
     product_name = product_names.get(product_type, product_type)
 
@@ -53,6 +60,28 @@ async def alert_payment(user_id: int, amount_rub: float, credits: int, product_t
         f"Кредиты: {credits}\n"
         f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>"
     )
+    if product_type == "persona_pack" and isinstance(pack_details, dict):
+        pack_id = str(pack_details.get("pack_id") or "").strip()
+        pack_title = str(pack_details.get("pack_title") or "").strip()
+        pack_class = str(pack_details.get("pack_class") or "").strip()
+        pack_num_images = str(pack_details.get("pack_num_images") or "").strip()
+        pack_cost_field = str(pack_details.get("pack_cost_field") or "").strip()
+        pack_cost_value = str(pack_details.get("pack_cost_value") or "").strip()
+
+        if pack_title or pack_id:
+            title_part = escape(pack_title) if pack_title else "—"
+            id_part = f" #{escape(pack_id)}" if pack_id else ""
+            text += f"\nФотосет: {title_part}{id_part}"
+        if pack_class:
+            text += f"\nКласс: {escape(pack_class)}"
+        if pack_num_images:
+            text += f"\nФото в паке: {escape(pack_num_images)}"
+        if pack_cost_field or pack_cost_value:
+            if pack_cost_field and pack_cost_value:
+                text += f"\nСебестоимость Astria: <code>{escape(pack_cost_field)}={escape(pack_cost_value)}</code>"
+            else:
+                raw = pack_cost_value or pack_cost_field
+                text += f"\nСебестоимость Astria: <code>{escape(raw)}</code>"
     await _send_alert(text)
 
 
@@ -92,7 +121,7 @@ async def alert_payment_error(user_id: int, product_type: str, error: str) -> No
         "fast": "Экспресс",
         "persona_topup": "Персона (пополнение)",
         "persona_create": "Создание Персоны",
-        "persona_pack": "Фотопак",
+        "persona_pack": "Фотосет",
     }
     product_name = product_names.get(product_type, product_type)
     error_short = error[:200] + "..." if len(error) > 200 else error
@@ -103,6 +132,38 @@ async def alert_payment_error(user_id: int, product_type: str, error: str) -> No
         f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
         f"Ошибка: <code>{error_short}</code>"
     )
+    await _send_alert(text)
+
+
+async def alert_pack_error(
+    user_id: int,
+    *,
+    pack_id: int | None = None,
+    pack_title: str | None = None,
+    stage: str = "generation",
+    error: str = "",
+) -> None:
+    """Алерт об ошибке фотосета."""
+    stage_map = {
+        "generation": "Генерация",
+        "callback": "Callback",
+        "fallback": "Fallback",
+        "recovery": "Recovery",
+        "payment_launch": "Запуск после оплаты",
+    }
+    stage_name = stage_map.get(stage, stage)
+    error_short = (error or "")[:300]
+    text = (
+        f"⚠️ <b>Ошибка фотосета</b>\n\n"
+        f"Этап: {escape(stage_name)}\n"
+        f"Юзер: <a href=\"tg://user?id={user_id}\">{user_id}</a>"
+    )
+    if pack_title or pack_id:
+        title_part = escape(str(pack_title or "—"))
+        id_part = f" #{escape(str(pack_id))}" if pack_id else ""
+        text += f"\nФотосет: {title_part}{id_part}"
+    if error_short:
+        text += f"\nОшибка: <code>{escape(error_short)}</code>"
     await _send_alert(text)
 
 

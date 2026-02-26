@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Паки — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-box-seam me-2"></i>Фотопаки</h2>
+    <span class="text-muted">Курс: {{ usd_rub }} ₽/$</span>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Себестоимость сохранена
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if packs %}
+<form method="POST">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Всего паков: {{ packs|length }}</span>
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-check-lg me-1"></i>Сохранить
+            </button>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Название</th>
+                        <th>Класс</th>
+                        <th>Фото</th>
+                        <th>Цена</th>
+                        <th>Себест. ($)</th>
+                        <th>Себест. (₽)</th>
+                        <th>Маржа (₽)</th>
+                        <th>%</th>
+                        <th>Генераций</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in packs %}
+                    <tr>
+                        <td><small class="text-muted">{{ p.id }}</small></td>
+                        <td><strong>{{ p.title }}</strong></td>
+                        <td><code>{{ p.class_name }}</code></td>
+                        <td>{{ p.expected_images }}</td>
+                        <td>₽{{ "%.0f"|format(p.price_rub) }}</td>
+                        <td>
+                            <input type="number" step="0.01" min="0" class="form-control form-control-sm"
+                                   name="cost_{{ p.id }}" value="{{ "%.2f"|format(p.cost_usd) }}"
+                                   style="width: 90px;" onchange="updateRow(this)">
+                        </td>
+                        <td class="cost-rub">₽{{ "%.0f"|format(p.cost_rub) }}</td>
+                        <td class="margin-rub {% if p.margin_rub > 0 %}text-success{% elif p.margin_rub < 0 %}text-danger{% endif %}">
+                            {% if p.cost_usd > 0 %}₽{{ "%.0f"|format(p.margin_rub) }}{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td class="margin-pct">
+                            {% if p.cost_usd > 0 %}{{ p.margin_pct }}%{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if p.generations > 0 %}
+                            <span class="badge bg-primary">{{ p.generations }}</span>
+                            <small class="text-muted">({{ p.total_images }} фото)</small>
+                            {% else %}
+                            <span class="text-muted">0</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-end">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg me-1"></i>Сохранить все
+            </button>
+        </div>
+    </div>
+</form>
+{% else %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>Паки не найдены. Проверьте переменную <code>PRISMALAB_ASTRIA_PACK_OFFERS</code> в окружении.
+</div>
+{% endif %}
+
+<div class="card mt-4">
+    <div class="card-header">
+        <i class="bi bi-info-circle me-2"></i>Информация
+    </div>
+    <div class="card-body">
+        <p>Себестоимость пака — стоимость генерации в Astria (в $). Используется для расчёта маржи на дашборде.</p>
+        <h6>Формула:</h6>
+        <code>Маржа пака = Цена (₽) - Себестоимость ($) × Курс ({{ usd_rub }} ₽/$)</code>
+        <hr>
+        <p class="mb-0 text-muted">
+            <small>Генерации считаются по событиям pack_generation / pack_callback / pack_fallback в user_events.</small>
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const usdRub = {{ usd_rub }};
+
+    function updateRow(input) {
+        const tr = input.closest('tr');
+        const costUsd = parseFloat(input.value) || 0;
+        const priceRub = parseFloat(tr.querySelector('td:nth-child(5)').textContent.replace('₽', '').trim()) || 0;
+        const costRub = costUsd * usdRub;
+        const marginRub = priceRub - costRub;
+        const marginPct = priceRub > 0 && costUsd > 0 ? ((marginRub / priceRub) * 100).toFixed(1) : 0;
+
+        tr.querySelector('.cost-rub').textContent = '₽' + Math.round(costRub);
+
+        const marginEl = tr.querySelector('.margin-rub');
+        const pctEl = tr.querySelector('.margin-pct');
+
+        if (costUsd > 0) {
+            marginEl.textContent = '₽' + Math.round(marginRub);
+            marginEl.className = 'margin-rub ' + (marginRub > 0 ? 'text-success' : marginRub < 0 ? 'text-danger' : '');
+            pctEl.textContent = marginPct + '%';
+        } else {
+            marginEl.innerHTML = '<span class="text-muted">—</span>';
+            marginEl.className = 'margin-rub';
+            pctEl.innerHTML = '<span class="text-muted">—</span>';
+        }
+    }
+</script>
+{% endblock %}

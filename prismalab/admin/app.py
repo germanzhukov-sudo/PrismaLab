@@ -1,7 +1,10 @@
 """FastAPI приложение для админки PrismaLab."""
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger("prismalab.admin")
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -99,6 +102,31 @@ def set_store(store):
     _store.init_admin_tables()
 
 
+# Глобальная ссылка на Telegram Bot (устанавливается при создании приложения)
+_bot = None
+
+
+def get_bot():
+    """Получить Telegram Bot."""
+    global _bot
+    if _bot is None:
+        # Фоллбэк: создать Bot из токена
+        try:
+            from telegram import Bot
+            token = os.getenv("PRISMALAB_BOT_TOKEN") or os.getenv("BOT_TOKEN", "")
+            if token:
+                _bot = Bot(token=token)
+        except Exception:
+            pass
+    return _bot
+
+
+def set_bot(bot):
+    """Установить Telegram Bot (для интеграции с ботом)."""
+    global _bot
+    _bot = bot
+
+
 # ========== Страницы ==========
 
 async def login_page(request: Request):
@@ -165,10 +193,16 @@ async def dashboard(request: Request):
         date_to = request.query_params.get("date_to", today.isoformat())
 
     store = get_store()
-    all_time = store.get_all_time_stats()
-    stats = store.get_dashboard_stats(date_from, date_to)
+
+    # Кэшируем настройки один раз — чтобы all_time и dashboard_stats не дёргали БД повторно
+    _cost_settings = store.get_cost_settings()
+    _pack_costs_map = store.get_pack_costs_map()
+
+    all_time = store.get_all_time_stats(_cost_settings=_cost_settings, _pack_costs_map=_pack_costs_map)
+    stats = store.get_dashboard_stats(date_from, date_to, _cost_settings=_cost_settings, _pack_costs_map=_pack_costs_map)
     chart_data = store.get_chart_data(days=30)
     hourly_data = store.get_hourly_activity(date_from, date_to)
+    pack_stats = store.get_pack_stats(date_from, date_to)
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
@@ -177,6 +211,7 @@ async def dashboard(request: Request):
         "stats": stats,
         "chart_data": chart_data,
         "hourly_data": hourly_data,
+        "pack_stats": pack_stats,
         "period": period,
         "date_from": date_from,
         "date_to": date_to,
@@ -427,12 +462,320 @@ async def settings_post(request: Request):
     return RedirectResponse(url=f"{ADMIN_BASE}/settings?saved=1", status_code=303)
 
 
+_DEFAULT_PACK_OFFERS: list[dict] = [
+    {"id": 248, "title": "Собачий арт", "price_rub": 499, "expected_images": 16, "class_name": "dog"},
+    {"id": 682, "title": "Котомагия", "price_rub": 799, "expected_images": 43, "class_name": "cat"},
+    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499, "expected_images": 19, "class_name": "boy"},
+    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799, "expected_images": 40, "class_name": "girl"},
+    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799, "expected_images": 44, "class_name": "girl"},
+    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499, "expected_images": 80, "class_name": "girl"},
+]
+
+
+def _load_pack_offers() -> list[dict]:
+    """Парсинг PRISMALAB_ASTRIA_PACK_OFFERS из env + дефолтные паки."""
+    import json
+    seen_ids: set[int] = set()
+    offers: list[dict] = []
+
+    raw = (os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS") or "").strip()
+    if raw:
+        try:
+            items = json.loads(raw)
+            if isinstance(items, list):
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    try:
+                        pack_id = int(it.get("id") or 0)
+                        if not pack_id:
+                            continue
+                        seen_ids.add(pack_id)
+                        offers.append({
+                            "id": pack_id,
+                            "title": str(it.get("title") or f"Пак #{pack_id}"),
+                            "price_rub": float(it.get("price_rub") or 0),
+                            "expected_images": int(it.get("expected_images") or 0),
+                            "class_name": str(it.get("class_name") or ""),
+                        })
+                    except Exception:
+                        continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    for p in _DEFAULT_PACK_OFFERS:
+        if p["id"] not in seen_ids:
+            offers.append(dict(p))
+            seen_ids.add(p["id"])
+
+    return offers
+
+
+@require_auth
+async def pack_costs_page(request: Request):
+    """Страница управления себестоимостью паков."""
+    store = get_store()
+    saved = request.query_params.get("saved") == "1"
+
+    # Получаем все паки из env
+    offers = _load_pack_offers()
+    # Получаем сохранённые себестоимости
+    saved_costs = {r["pack_id"]: r for r in store.get_pack_costs()}
+    # Получаем статистику генераций
+    pack_stats_all = store.get_pack_stats()
+    stats_map = {int(s["pack_id"]): s for s in pack_stats_all if s["pack_id"] and str(s["pack_id"]).isdigit()}
+    # Получаем настройки курса
+    cost_settings = store.get_cost_settings()
+    usd_rub = cost_settings["usd_rub"]
+
+    # Собираем данные для шаблона
+    packs = []
+    for offer in offers:
+        pid = int(offer.get("id", 0))
+        cost_usd = float(saved_costs.get(pid, {}).get("cost_usd", 0))
+        price_rub = float(offer.get("price_rub", 0))
+        generations = int(stats_map.get(pid, {}).get("generations", 0))
+        total_images = int(stats_map.get(pid, {}).get("total_images", 0))
+        cost_rub = cost_usd * usd_rub
+        margin_rub = price_rub - cost_rub if cost_usd > 0 else 0
+        margin_pct = round((margin_rub / price_rub) * 100, 1) if price_rub > 0 and cost_usd > 0 else 0
+
+        packs.append({
+            "id": pid,
+            "title": offer.get("title", f"Pack {pid}"),
+            "price_rub": price_rub,
+            "class_name": offer.get("class_name", ""),
+            "expected_images": offer.get("expected_images", 0),
+            "cost_usd": cost_usd,
+            "cost_rub": round(cost_rub, 2),
+            "margin_rub": round(margin_rub, 2),
+            "margin_pct": margin_pct,
+            "generations": generations,
+            "total_images": total_images,
+        })
+
+    return templates.TemplateResponse("pack_costs.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "packs": packs,
+        "usd_rub": usd_rub,
+        "saved": saved,
+    })
+
+
+@require_auth
+async def pack_costs_post(request: Request):
+    """Сохранение себестоимости паков."""
+    store = get_store()
+    form = await request.form()
+    offers = _load_pack_offers()
+
+    items = []
+    for offer in offers:
+        pid = int(offer.get("id", 0))
+        cost_usd = float(form.get(f"cost_{pid}", 0))
+        items.append({
+            "pack_id": pid,
+            "pack_title": offer.get("title", ""),
+            "cost_usd": cost_usd,
+        })
+
+    store.set_pack_costs_bulk(items)
+    return RedirectResponse(url=f"{ADMIN_BASE}/pack-costs?saved=1", status_code=303)
+
+
+# ========== Рассылка ==========
+
+@require_auth
+async def broadcast_page(request: Request):
+    """Страница рассылки."""
+    store = get_store()
+    counts = store.get_broadcast_counts()
+
+    sent = request.query_params.get("sent")
+    failed = request.query_params.get("failed")
+    total = request.query_params.get("total")
+
+    return templates.TemplateResponse("broadcast.html", {
+        "request": request,
+        "admin_base": ADMIN_BASE,
+        "admin": request.state.admin,
+        "counts": counts,
+        "miniapp_url": os.getenv("MINIAPP_URL", ""),
+        "sent": int(sent) if sent else None,
+        "failed": int(failed) if failed else None,
+        "total": int(total) if total else None,
+    })
+
+
+@require_auth
+async def broadcast_post(request: Request):
+    """Отправка рассылки."""
+    import asyncio
+    import io
+
+    token = (os.getenv("PRISMALAB_BOT_TOKEN") or os.getenv("BOT_TOKEN", "")).strip()
+    if not token:
+        return PlainTextResponse("Bot not available. Check PRISMALAB_BOT_TOKEN.", status_code=500)
+
+    store = get_store()
+    form = await request.form()
+
+    # Параметры
+    text = str(form.get("text", "")).strip()
+    filter_type = str(form.get("filter_type", "all"))
+    specific_ids_raw = str(form.get("specific_ids", "")).strip()
+    photo_file = form.get("photo")  # UploadFile or None
+
+    # Кнопка
+    add_button = form.get("add_button") == "1"
+    btn_text = str(form.get("btn_text", "")).strip()
+    btn_type = str(form.get("btn_type", "webapp"))
+    btn_value = str(form.get("btn_value", "")).strip()
+
+    logger.info("Broadcast form: add_button=%r, btn_text=%r, btn_type=%r, btn_value=%r",
+                add_button, btn_text, btn_type, btn_value)
+
+    if not text:
+        return RedirectResponse(url=f"{ADMIN_BASE}/broadcast?error=no_text", status_code=303)
+
+    # Получить список user_id
+    user_ids_list = None
+    if filter_type == "specific":
+        # Парсим ID: разделители — запятая, пробел, новая строка
+        import re
+        raw_ids = re.split(r"[\s,]+", specific_ids_raw)
+        user_ids_list = []
+        for rid in raw_ids:
+            rid = rid.strip()
+            if rid.isdigit():
+                user_ids_list.append(int(rid))
+        if not user_ids_list:
+            return RedirectResponse(url=f"{ADMIN_BASE}/broadcast?error=no_ids", status_code=303)
+
+    target_ids = store.get_user_ids_for_broadcast(filter_type, user_ids_list)
+    if not target_ids:
+        return RedirectResponse(url=f"{ADMIN_BASE}/broadcast?error=no_users", status_code=303)
+
+    # Подготовить фото
+    photo_bytes = None
+    if photo_file and hasattr(photo_file, "read"):
+        content = await photo_file.read()
+        if content and len(content) > 0:
+            photo_bytes = io.BytesIO(content)
+
+    # Подготовить клавиатуру
+    keyboard = None
+    if add_button and btn_text and btn_value:
+        try:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            if btn_type == "webapp":
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, web_app=WebAppInfo(url=btn_value))]])
+            elif btn_type == "url":
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, url=btn_value)]])
+            else:
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, callback_data=btn_value)]])
+            logger.info("Broadcast keyboard created: type=%s, text=%r", btn_type, btn_text)
+        except Exception as e:
+            logger.warning("Broadcast keyboard error: %s", e)
+    else:
+        logger.info("Broadcast: no keyboard (add_button=%r, btn_text=%r, btn_value=%r)", add_button, btn_text, btn_value)
+
+    # Отправка
+    sent = 0
+    failed = 0
+
+    # Важно: создаём отдельный Bot с ограниченным connection pool.
+    # Админка работает в отдельном треде/event loop, поэтому нельзя
+    # использовать бота из основного loop — это ломает httpx-соединения.
+    # Задержка 0.15с между сообщениями снижает нагрузку на Telegram API
+    # и предотвращает "bound to a different event loop" у основного бота.
+    from telegram import Bot
+    from telegram.request import HTTPXRequest
+
+    broadcast_request = HTTPXRequest(
+        connection_pool_size=2,
+        connect_timeout=10.0,
+        read_timeout=15.0,
+        write_timeout=15.0,
+    )
+    async with Bot(token=token, request=broadcast_request) as bot:
+        for uid in target_ids:
+            try:
+                if photo_bytes:
+                    photo_bytes.seek(0)
+                    await bot.send_photo(
+                        chat_id=uid,
+                        photo=photo_bytes,
+                        caption=text,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=uid,
+                        text=text,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    )
+                sent += 1
+            except Exception as e:
+                failed += 1
+                logger.warning("Broadcast to %s failed: %s", uid, e)
+            await asyncio.sleep(0.15)
+
+    logger.info("Broadcast done: sent=%d, failed=%d, total=%d, filter=%s", sent, failed, len(target_ids), filter_type)
+
+    return RedirectResponse(
+        url=f"{ADMIN_BASE}/broadcast?sent={sent}&failed={failed}&total={len(target_ids)}",
+        status_code=303,
+    )
+
+
 # ========== Роуты ==========
 # Полные пути /admin/... — aiohttp передаёт path как есть
 async def _debug_path(request: Request):
     """Отладка: какой path видит Starlette (удалить после починки)."""
     path = request.scope.get("path", "?")
     return PlainTextResponse(f"path={path!r}\nroot_path={request.scope.get('root_path', '')!r}")
+
+
+@require_auth
+async def analytics_page(request: Request):
+    """Страница аналитики: воронки конверсии и популярность."""
+    period = request.query_params.get("period", "week")
+    _MSK = timezone(timedelta(hours=3))
+    today = datetime.now(_MSK).date()
+    if period == "today":
+        date_from = today.isoformat()
+        date_to = today.isoformat()
+    elif period == "yesterday":
+        yesterday = today - timedelta(days=1)
+        date_from = yesterday.isoformat()
+        date_to = yesterday.isoformat()
+    elif period == "week":
+        date_from = (today - timedelta(days=7)).isoformat()
+        date_to = today.isoformat()
+    elif period == "month":
+        date_from = (today - timedelta(days=30)).isoformat()
+        date_to = today.isoformat()
+    else:
+        date_from = request.query_params.get("date_from", (today - timedelta(days=7)).isoformat())
+        date_to = request.query_params.get("date_to", today.isoformat())
+
+    store = get_store()
+    funnels = store.get_funnel_data(date_from, date_to)
+    popularity = store.get_popularity_data(date_from, date_to)
+
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "funnels": funnels,
+        "popularity": popularity,
+        "period": period,
+        "date_from": date_from,
+        "date_to": date_to,
+    })
 
 
 routes = [
@@ -446,7 +789,12 @@ routes = [
     Route("/admin/users/{user_id:int}", user_detail, methods=["GET"]),
     Route("/admin/users/{user_id:int}/credits", user_credits_post, methods=["POST"]),
     Route("/admin/payments", payments_list, methods=["GET"]),
+    Route("/admin/analytics", analytics_page, methods=["GET"]),
     Route("/admin/export", export_csv, methods=["GET"]),
+    Route("/admin/pack-costs", pack_costs_page, methods=["GET"]),
+    Route("/admin/pack-costs", pack_costs_post, methods=["POST"]),
+    Route("/admin/broadcast", broadcast_page, methods=["GET"]),
+    Route("/admin/broadcast", broadcast_post, methods=["POST"]),
     Route("/admin/settings", settings_page, methods=["GET"]),
     Route("/admin/settings", settings_post, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
@@ -455,10 +803,12 @@ routes = [
 ]
 
 
-def create_admin_app(store=None):
+def create_admin_app(store=None, bot=None):
     """Создаёт приложение админки."""
     if store:
         set_store(store)
+    if bot:
+        set_bot(bot)
 
     middleware = [
         Middleware(SessionMiddleware, secret_key=os.getenv("ADMIN_SECRET_KEY", "prismalab-admin-secret-change-me")),

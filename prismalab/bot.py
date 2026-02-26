@@ -20,13 +20,14 @@ import secrets
 import sys
 import threading
 import time
+import uuid
 from typing import Any
 
 import requests
 from PIL import Image, ImageOps
 from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LabeledPrice, Update, WebAppInfo
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, TimedOut
+from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -67,11 +68,14 @@ from prismalab.payment import (
     get_payment_status,
     apply_test_amount,
     _amount_rub,
+    build_pack_callback_url,
+    _pack_delivered as pack_delivered_set,
+    _pack_in_progress as pack_in_progress_set,
 )
 from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
 from prismalab.styles import STYLES, get_style
 from prismalab.storage import PrismaLabStore
-from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report, alert_payment_error
+from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report, alert_payment_error, alert_pack_error
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -84,6 +88,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # Блокировка генерации на уровне user_id (атомарная, вместо USERDATA_JOB_LOCK)
 _user_locks: dict[int, asyncio.Lock] = {}
 _lock_dict_mutex = threading.Lock()
+# Активные pack-polling run_id: блокируем fallback, пока жив основной polling.
+_pack_polling_active: set[str] = set()
 
 
 def _get_user_lock(user_id: int) -> asyncio.Lock:
@@ -131,6 +137,8 @@ USERDATA_PERSONA_RECREATING = "prismalab_persona_recreating"  # True — в пр
 USERDATA_PERSONA_PACK_WAITING_UPLOAD = "prismalab_persona_pack_waiting_upload"  # bool, ждём 10 фото для пака
 USERDATA_PERSONA_PACK_PHOTOS = "prismalab_persona_pack_photos"  # list of file_id для pak-run (10 фото)
 USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS = "prismalab_persona_pack_upload_msg_ids"  # id прогресс-сообщений upload пака
+USERDATA_PERSONA_PACK_IN_PROGRESS = "prismalab_persona_pack_in_progress"  # bool, идёт подготовка/генерация фотосета
+USERDATA_PERSONA_PACK_GIFT_APPLIED = "prismalab_persona_pack_gift_applied"  # bool, за этот flow подарен +1 кредит Персоны
 USERDATA_PROFILE_DELETE_JOB = "prismalab_profile_delete_job"  # Job для автоудаления профиля через 10 сек
 USERDATA_GETFILEID_EXPECTING_PHOTO = "prismalab_getfileid_expecting_photo"  # owner вызвал /getfileid, ждём фото
 USERDATA_EXAMPLES_MEDIA_IDS = "prismalab_examples_media_ids"  # id сообщений текущего альбома (для удаления при навигации)
@@ -138,6 +146,7 @@ USERDATA_EXAMPLES_NAV_MSG_ID = "prismalab_examples_nav_msg_id"  # id сообщ�
 USERDATA_EXAMPLES_PAGE = "prismalab_examples_page"  # последняя просмотренная страница альбомов
 USERDATA_EXAMPLES_INTRO_MSG_ID = "prismalab_examples_intro_msg_id"  # id сообщения с intro (для удаления при возврате)
 USERDATA_PERSONA_SELECTED_PACK_ID = "prismalab_persona_selected_pack_id"  # выбранный pack_id для оплаты
+USERDATA_PERSONA_TRAINING_MSG_ID = "prismalab_persona_training_msg_id"  # id сообщения «Все 10 фото получил» — удалить при переходе к фотосету
 
 # Единое сообщение об ошибке для пользователя (без технических деталей)
 USER_FRIENDLY_ERROR = "Произошла ошибка. Кредит не списали. Попробуйте ещё раз."
@@ -173,6 +182,16 @@ def _dev_pack_train_from_images() -> bool:
     return _is_dev_runtime() and raw in {"1", "true", "yes", "y"}
 
 
+def _use_unified_pack_persona_flow() -> bool:
+    """
+    Новый флоу покупки фотосетов:
+    - если Персоны нет, ведём через стандартный persona-flow (rules -> 10 фото -> person),
+      затем автозапуск фотосета.
+    """
+    raw = (os.getenv("PRISMALAB_UNIFIED_PACK_PERSONA_FLOW") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "n", "off"}
+
+
 def _is_dev_runtime() -> bool:
     """
     Жестко считаем dev только при TABLE_PREFIX=dev_*
@@ -203,12 +222,12 @@ def _guard_dev_only_flags() -> None:
 
 # Паки, которые всегда в списке (Mini App + бот)
 _DEFAULT_PACK_OFFERS: list[dict[str, Any]] = [
-    {"id": 248, "title": "Dog Art", "price_rub": 990.0, "expected_images": 16, "class_name": "dog"},
-    {"id": 682, "title": "Cat Meowgic", "price_rub": 990.0, "expected_images": 43, "class_name": "cat"},
-    {"id": 593, "title": "Kids Halloween", "price_rub": 790.0, "expected_images": 19, "class_name": "boy"},
-    {"id": 859, "title": "Kids Holiday", "price_rub": 790.0, "expected_images": 40, "class_name": "girl"},
-    {"id": 2152, "title": "Nordic Girl", "price_rub": 790.0, "expected_images": 44, "class_name": "girl"},
-    {"id": 2501, "title": "Newborn Dreams", "price_rub": 790.0, "expected_images": 80, "class_name": "girl"},
+    {"id": 248, "title": "Собачий арт", "price_rub": 499.0, "expected_images": 16, "class_name": "dog"},
+    {"id": 682, "title": "Котомагия", "price_rub": 799.0, "expected_images": 43, "class_name": "cat"},
+    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499.0, "expected_images": 19, "class_name": "boy"},
+    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799.0, "expected_images": 40, "class_name": "girl"},
+    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799.0, "expected_images": 44, "class_name": "girl"},
+    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499.0, "expected_images": 80, "class_name": "girl"},
 ]
 
 
@@ -229,7 +248,7 @@ def _pack_offers() -> list[dict[str, Any]]:
                         continue
                     try:
                         pack_id = int(it.get("id"))
-                        title = str(it.get("title") or f"Пак #{pack_id}")
+                        title = str(it.get("title") or f"Фотосет #{pack_id}")
                         price_rub = float(it.get("price_rub"))
                         expected_images = int(it.get("expected_images") or 0)
                         class_name_raw = str(it.get("class_name") or "").strip().lower()
@@ -555,6 +574,48 @@ async def _safe_send_document(
                 connect_timeout=timeout,
             )
             return  # Успешно отправлено
+        except RetryAfter as e:
+            retry_after = float(getattr(e, "retry_after", 1.0) or 1.0)
+            wait_time = max(1.0, retry_after) + 0.5
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "Flood limit при отправке документа (попытка %s/%s), жду %.1fс...",
+                    attempt + 1,
+                    max_retries,
+                    wait_time,
+                )
+                await asyncio.sleep(wait_time)
+                document.seek(0)
+            else:
+                logger.warning("Flood limit после %s попыток, пробую отправить как фото...", max_retries)
+                document.seek(0)
+                try:
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=document,
+                        caption=caption,
+                        read_timeout=timeout,
+                        write_timeout=timeout,
+                        connect_timeout=timeout,
+                    )
+                    return
+                except RetryAfter as photo_retry:
+                    photo_wait = max(1.0, float(getattr(photo_retry, "retry_after", 1.0) or 1.0)) + 0.5
+                    logger.warning("Flood limit и на фото fallback, жду %.1fс и повторяю...", photo_wait)
+                    await asyncio.sleep(photo_wait)
+                    document.seek(0)
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=document,
+                        caption=caption,
+                        read_timeout=timeout,
+                        write_timeout=timeout,
+                        connect_timeout=timeout,
+                    )
+                    return
+                except Exception as photo_err:
+                    logger.error(f"Ошибка при отправке фото (fallback): {photo_err}")
+                    raise
         except TimedOut:
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 2
@@ -674,7 +735,10 @@ def _start_message_text(profile: Any) -> str:
         "<b>Есть два способа сделать фото:</b>\n\n"
         "1) ✨ <b>Персона</b> (с вас 10 фото) – наша фирменная фишка: "
         "нейросеть учится на ваших фото и выдаёт кадры уровня «это я, только в кино»\n\n"
-        "Реальные фотосессии могут начать казаться бессмысленными 🙂\n\n"
+        "После обучения вы можете:\n\n"
+        "– создавать отдельные фото в разделе <b>Персона</b>\n"
+        "– или получать сразу целый фотосет в разделе <b>Готовые фотосеты</b>\n\n"
+        "Такого уровня точности и результата вы, скорее всего, ещё не видели 🙂\n\n"
         "2) ⚡️ <b>Экспресс-фото</b> (с вас 1 фото) – как у большинства ботов в Telegram.\n"
         "По одному фото нейросети сложнее точно сохранить лицо, поэтому есть элемент случайности.\n"
         "Зато если исходник удачный – результат может получиться <b>очень сильным:</b> красиво, аккуратно и иногда прямо с первого раза\n\n"
@@ -721,15 +785,15 @@ def _persona_intro_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("✨ 599 руб – 20 фото", callback_data="pl_persona_buy:20")],
         [InlineKeyboardButton("✨ 999 руб – 40 фото", callback_data="pl_persona_buy:40")],
     ]
-    if _pack_offers() and OWNER_ID and user_id == OWNER_ID:
-        rows.append([InlineKeyboardButton("🎬 Готовые фотопаки", callback_data="pl_persona_packs")])
+    if _pack_offers() and MINIAPP_URL:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
 
-PERSONA_PACKS_MESSAGE = """<b>Готовые фотопаки</b>
+PERSONA_PACKS_MESSAGE = """<b>Готовые фотосеты</b>
 
-Пак = фиксированная цена за серию готовых кадров.
+Фотосет = фиксированная цена за серию готовых кадров.
 После оплаты запускаем генерацию автоматически и присылаем весь результат в чат."""
 
 
@@ -895,7 +959,7 @@ PERSONA_UPLOAD_WAIT_MESSAGE = """<b>Загружайте фото – жду с 
 Можно отправить <b>все сразу</b> или <b>по одной</b>"""
 
 
-PERSONA_PACK_UPLOAD_WAIT_MESSAGE = """<b>Для запуска фотопака нужно 10 фото</b>
+PERSONA_PACK_UPLOAD_WAIT_MESSAGE = """<b>Для запуска фотосета нужно 10 фото</b>
 
 Отправьте 10 фото этого человека (можно все сразу или по одной)."""
 
@@ -908,9 +972,40 @@ PERSONA_TRAINING_MESSAGE = """Все 10 фото получил ✅
 
 
 def _persona_training_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура после отправки на обучение: Проверить статус Персоны."""
+    """Универсальная клавиатура статуса: Проверить статус."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Проверить статус Персоны", callback_data="pl_persona_check_status")],
+        [InlineKeyboardButton("Проверить статус", callback_data="pl_persona_check_status")],
+    ])
+
+
+PHOTOSET_PROGRESS_ALERT = "Подготовка фотосета – ювелирный процесс. Нужно немного подождать"
+
+
+def _photoset_done_message(*, include_gift: bool) -> str:
+    text = (
+        "Фотосет готов! Можете выбрать другой в разделе <b>🎞️ Готовые фотосеты</b>, "
+        "а можете перейти в раздел <b>Персона</b>, где сможете генерировать по одной фотографии в выбранном стиле"
+    )
+    if include_gift:
+        text += ", мы подарили вам одну бесплатную генерацию в любом стиле"
+    return text
+
+
+def _photoset_done_keyboard() -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
+    else:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", callback_data="pl_persona_packs")])
+    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _photoset_retry_keyboard(pack_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Запустить фотосет снова", callback_data=f"pl_persona_pack_retry:{int(pack_id)}")],
+        [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
     ])
 
 
@@ -1019,8 +1114,8 @@ def _persona_styles_keyboard(gender: str, page: int = 0, user_id: int = 0) -> In
     if nav_buttons:
         rows.append(nav_buttons)
 
-    if _pack_offers() and OWNER_ID and user_id == OWNER_ID:
-        rows.append([InlineKeyboardButton("🎬 Готовые фотопаки", callback_data="pl_persona_packs")])
+    if _pack_offers() and MINIAPP_URL:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
 
     return InlineKeyboardMarkup(rows)
 
@@ -1315,14 +1410,14 @@ def _express_button_label(profile: Any | None) -> str:
 def _start_keyboard(profile: Any | None = None) -> InlineKeyboardMarkup:
     """Клавиатура экрана /start: Mini App (только owner), Быстрое фото, Персона, Тарифы, Примеры, FAQ."""
     rows: list[list[InlineKeyboardButton]] = []
-    # Кнопка Mini App Studio — только для owner (боевая аппка пока в тесте)
+    # Кнопка Mini App для всех пользователей (доступ ограничивается Telegram initData в API)
     user_id = getattr(profile, "user_id", None) if profile else None
-    if MINIAPP_URL and MINIAPP_URL.startswith("https://") and OWNER_ID and user_id == OWNER_ID:
-        rows.append([InlineKeyboardButton("🎨 Открыть студию", web_app=WebAppInfo(url=MINIAPP_URL))])
+    if MINIAPP_URL and MINIAPP_URL.startswith("https://"):
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.extend([
         [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
         [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
-        [InlineKeyboardButton("Тарифы", callback_data="pl_start_tariffs")],
+        [InlineKeyboardButton("Тарифы и форматы съёмки", callback_data="pl_start_tariffs")],
         [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
         [InlineKeyboardButton("А точно ли получится круто?", callback_data="pl_start_faq")],
     ])
@@ -1571,6 +1666,10 @@ async def handle_start_fast_callback(update: Update, context: ContextTypes.DEFAU
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_fast")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     known_gender = getattr(profile, "subject_gender", None) or context.user_data.get(USERDATA_SUBJECT_GENDER)
     if known_gender in ("male", "female"):
@@ -1606,9 +1705,29 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
         except Exception:
             pass
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_persona")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     context.user_data[USERDATA_MODE] = "persona"
     logger.info("handle_start_persona: user_id=%s astria_lora_tune_id=%s", user_id, getattr(profile, "astria_lora_tune_id", None))
+
+    if _use_unified_pack_persona_flow() and store.get_pending_pack_upload(user_id) is not None and not getattr(profile, "astria_lora_tune_id", None):
+        if getattr(profile, "astria_lora_tune_id_pending", None):
+            context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+            await query.edit_message_text(
+                PERSONA_TRAINING_MESSAGE,
+                reply_markup=_persona_training_keyboard(),
+                parse_mode="HTML",
+            )
+        else:
+            await query.edit_message_text(
+                PERSONA_RULES_MESSAGE,
+                reply_markup=_persona_rules_keyboard(),
+                parse_mode="HTML",
+            )
+        return
 
     if getattr(profile, "astria_lora_tune_id", None):
         credits = profile.persona_credits_remaining
@@ -1730,6 +1849,11 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_examples")
+    except Exception:
+        pass
     chat_id = query.message.chat_id if query.message else 0
     bot = context.bot
 
@@ -1807,6 +1931,11 @@ async def handle_examples_page_callback(update: Update, context: ContextTypes.DE
         page = int(query.data.split(":")[1])
     except (IndexError, ValueError):
         return
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "examples_page", {"page": page})
+    except Exception:
+        pass
     chat_id = query.message.chat_id if query.message else 0
     bot = context.bot
     nav_msg_id = context.user_data.get(USERDATA_EXAMPLES_NAV_MSG_ID)
@@ -1815,9 +1944,7 @@ async def handle_examples_page_callback(update: Update, context: ContextTypes.DE
 
 TARIFFS_MESSAGE = """<b>Тарифы PrismaLab</b>
 
-Напомним: у нас два формата, и они разные: <b>Персона</b> и <b>Экспресс-фото</b>
-
-В каждом формате <b>1 кредит = 1 фото</b>
+<b>1 кредит = 1 фото</b>
 
 ✨ <b>Персона</b> (с вас 10 фото)
 
@@ -1834,6 +1961,8 @@ TARIFFS_MESSAGE = """<b>Тарифы PrismaLab</b>
 • <b>10 кредитов – 229 ₽</b>
 • <b>20 кредитов – 439 ₽</b>
 • <b>30 кредитов – 629 ₽</b>
+
+Также есть раздел <b>🎞️ Готовые фотосеты</b>, где вы можете получить целую фотосессию из множества снимков в том стиле, который вам понравится
 
 ⚡ <b>Экспресс-фото</b> (с вас 1 фото)
 
@@ -1855,12 +1984,18 @@ async def handle_start_tariffs_callback(update: Update, context: ContextTypes.DE
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_tariffs")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
-        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
-        [InlineKeyboardButton("Назад", callback_data="pl_fast_back")],
-    ])
+    rows = []
+    if _pack_offers() and MINIAPP_URL:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
+    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+    rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
+    kb = InlineKeyboardMarkup(rows)
     await query.edit_message_text(TARIFFS_MESSAGE, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1871,13 +2006,18 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_faq")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     text = (
         "<b>Точно ли получится круто?</b>\n\n"
-        "Круто получится – вопрос насколько и каким способом. <b>Формата два</b>\n\n"
+        "Круто получится – вопрос насколько и каким способом\n\n"
         "✨ <b>Персона (с вас 10 фото)</b>\n\n"
         "<b>Главное отличие PrismaLab</b>. Мы обучаем модель на ваших фото, и лицо сохраняется максимально точно: мимика, черты, ощущение «это я». <b>Результат – как полноценная фотосессия.</b>\n"
         "Бывает, наша нейросеть шалит с пальцами и мелкими деталями – за такие фото <b>мы начисляем дополнительные кредиты</b>\n\n"
+        "Есть формат <b>🎞️ Готовые фотосеты</b> – истинное чудо. На обученной по вашим фото модели мы создаём целые фотосессии. Попробуйте, вы удивитесь. И, надеемся, вдохновитесь вашими новыми образами\n\n"
         "⚡️ <b>Быстрое фото (с вас 1 фото)</b>\n\n"
         "Загружаете один снимок, выбираете стиль, получаете результат.\n"
         "Есть элемент случайности, но при хорошем исходнике <b>наша нейросеть выжмет максимум</b>: красиво, аккуратно и часто очень эффектно\n\n"
@@ -1885,12 +2025,14 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
         "А если хочется <b>стабильно максимального сходства</b> и результата «как фотосессия» – выбирайте <b>Персону</b>\n\n"
         "Самый простой путь – попробовать <b>Экспресс-фото</b>, а если хотите включить «вау-режим» надолго – перейти на <b>Персону</b>"
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
-        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
-        [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
-        [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
-    ])
+    rows = []
+    if _pack_offers() and MINIAPP_URL:
+        rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
+    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+    rows.append([InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")])
+    rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+    kb = InlineKeyboardMarkup(rows)
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1900,6 +2042,11 @@ async def handle_help_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_help")
+    except Exception:
+        pass
     support_url = f"https://t.me/{SUPPORT_BOT_USERNAME}"
     await query.edit_message_text(
         HELP_MESSAGE,
@@ -1925,6 +2072,10 @@ async def handle_profile_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "profile_view")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     await query.edit_message_text(
         _profile_text(profile),
@@ -1941,6 +2092,10 @@ async def handle_profile_toggle_gender_callback(update: Update, context: Context
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "profile_toggle_gender")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     current = profile.subject_gender or "female"
     new_gender = "male" if current == "female" else "female"
@@ -1977,6 +2132,10 @@ async def handle_profile_fast_tariffs_callback(update: Update, context: ContextT
     await query.answer()
     _cancel_profile_delete_job(context)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "profile_fast_tariffs")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     if _generations_count_fast(profile) > 0:
         context.user_data[USERDATA_MODE] = "fast"
@@ -2003,6 +2162,10 @@ async def handle_persona_create_callback(update: Update, context: ContextTypes.D
     await query.answer()
     _cancel_profile_delete_job(context)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_create_start")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     known_gender = getattr(profile, "subject_gender", None) or context.user_data.get(USERDATA_SUBJECT_GENDER)
     if known_gender in ("male", "female"):
@@ -2029,6 +2192,10 @@ async def handle_persona_gender_callback(update: Update, context: ContextTypes.D
     _, gender = query.data.split(":", 1)
     context.user_data[USERDATA_SUBJECT_GENDER] = gender
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_gender_select", {"gender": gender})
+    except Exception:
+        pass
     store.set_subject_gender(user_id, gender)
     context.user_data[USERDATA_MODE] = "persona"
     await query.edit_message_text(
@@ -2069,6 +2236,20 @@ def _pack_classes_text(classes: list[str]) -> str:
     return ", ".join(labels)
 
 
+def _extract_pack_cost_info(class_cost: Any) -> tuple[str, str]:
+    if not isinstance(class_cost, dict):
+        return "", ""
+    for key in ("cost", "cost_mc", "price", "amount"):
+        value = class_cost.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if not value_str:
+            continue
+        return str(key), value_str
+    return "", ""
+
+
 def _pack_wait_timeout_seconds(expected_images: int) -> int:
     """
     Таймаут ожидания паков:
@@ -2086,6 +2267,548 @@ def _pack_wait_timeout_seconds(expected_images: int) -> int:
     return max(1800, expected * 75)
 
 
+async def _fallback_to_pack_photo_upload(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    pack_id: int,
+    status_message_id: int,
+) -> None:
+    """Fallback: если auto-prepare pack tune невозможен, просим 10 фото."""
+    context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id
+    context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
+    context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
+    context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
+    context.user_data[USERDATA_MODE] = "persona_pack_upload"
+    try:
+        store.set_pending_pack_upload(user_id=user_id, pack_id=pack_id)
+    except Exception as e:
+        logger.warning("pack auto-prepare fallback: cannot set pending_pack_id: %s", e)
+    text = (
+        "⚠️ Не удалось автоматически подготовить модель для фотосетов.\n\n"
+        + PERSONA_PACK_UPLOAD_WAIT_MESSAGE
+    )
+    try:
+        await _safe_edit_status(
+            context.bot, chat_id, status_message_id,
+            text=text,
+            reply_markup=_persona_pack_upload_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=_persona_pack_upload_keyboard(),
+            parse_mode="HTML",
+        )
+
+
+async def _start_pending_paid_photoset_after_persona(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+) -> bool:
+    """
+    Если пользователь пришёл из оплаты фотосета без Персоны:
+    - после обучения Персоны автоматически запускаем фотосет;
+    - дарим +1 кредит Персоны (однократно в этом flow).
+    """
+    if not _use_unified_pack_persona_flow():
+        return False
+    pack_id = store.get_pending_pack_upload(user_id)
+    if pack_id is None:
+        return False
+
+    offer = _find_pack_offer(int(pack_id))
+    if not offer:
+        store.clear_pending_pack_upload(user_id)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Не удалось найти оплаченный фотосет. Напишите в поддержку.",
+        )
+        return False
+
+    profile = store.get_user(user_id)
+    gifted = False
+    credits_now = int(getattr(profile, "persona_credits_remaining", 0) or 0)
+    if credits_now <= 0:
+        store.set_persona_credits(user_id, 1)
+        gifted = True
+
+    store.clear_pending_pack_upload(user_id)
+    context.user_data[USERDATA_MODE] = "persona"
+    context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = False
+    context.user_data[USERDATA_PERSONA_PACK_GIFT_APPLIED] = gifted
+    context.user_data[USERDATA_PERSONA_PACK_IN_PROGRESS] = True
+
+    old_msg_id = context.user_data.pop(USERDATA_PERSONA_TRAINING_MSG_ID, None)
+    if old_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+        except Exception:
+            pass
+
+    from html import escape
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "Готово! 🎉 Персональная модель обучена\n\n"
+            f"Приступаю к созданию фотосета <b>«{escape(offer['title'])}»</b>\n\n"
+            "Кстати, вам больше не нужно будет загружать фото заново, мы сохраним модель на <b>30 дней</b>"
+        ),
+        parse_mode="HTML",
+        reply_markup=_persona_training_keyboard(),
+    )
+
+    coro = _run_persona_pack_generation(
+        context=context,
+        chat_id=chat_id,
+        user_id=user_id,
+        pack_id=int(pack_id),
+        offer=offer,
+        run_id=f"paid_{user_id}_{int(pack_id)}_{int(time.time())}",
+        status_message_id=msg.message_id,
+    )
+    app = getattr(context, "application", None)
+    if app:
+        app.create_task(coro)
+    else:
+        asyncio.create_task(coro)
+    return True
+
+
+async def _ensure_pack_lora_tune_id(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    class_name: str,
+    status_message_id: int,
+) -> tuple[int | None, str | None]:
+    """
+    Возвращает tune_id для pack-flow.
+    Для классов man/woman используем отдельный pack tune:
+    - если уже есть → берём его;
+    - если нет → создаём из orig_images persona tune.
+    reason:
+    - None: всё ок
+    - "need_upload": нужен fallback на загрузку 10 фото
+    - "pending": pack tune уже обучается, ждём завершения
+    """
+    if class_name not in {"man", "woman"}:
+        return None, "need_upload"
+
+    profile = store.get_user(user_id)
+    existing_pack_tune_raw = getattr(profile, "astria_lora_pack_tune_id", None)
+    if existing_pack_tune_raw:
+        try:
+            return int(str(existing_pack_tune_raw)), None
+        except Exception:
+            logger.warning("pack tune id is invalid for user %s: %s", user_id, existing_pack_tune_raw)
+
+    settings = load_settings()
+    if not settings.astria_api_key:
+        return None, "need_upload"
+
+    pending_pack_tune_raw = getattr(profile, "astria_lora_pack_tune_id_pending", None)
+    if pending_pack_tune_raw:
+        try:
+            pending_tune_id = str(int(str(pending_pack_tune_raw)))
+            from prismalab.astria_client import _get_tune, _timeout_s
+            pending_obj = await asyncio.to_thread(
+                _get_tune,
+                api_key=settings.astria_api_key,
+                tune_id=pending_tune_id,
+                timeout_s=_timeout_s(30.0),
+            )
+            pending_status = str(pending_obj.get("status") or pending_obj.get("state") or "").lower()
+            pending_trained_at = pending_obj.get("trained_at")
+            if pending_status in {"completed", "succeeded", "ready", "trained", "finished"} or pending_trained_at:
+                store.set_astria_lora_pack_tune(user_id=user_id, tune_id=pending_tune_id)
+                return int(pending_tune_id), None
+            if pending_status in {"failed", "error", "cancelled", "canceled"}:
+                store.clear_astria_lora_pack_tune_pending(user_id)
+            else:
+                logger.info(
+                    "pack tune pending and not ready (user=%s tune=%s status=%s), waiting",
+                    user_id,
+                    pending_tune_id,
+                    pending_status,
+                )
+                return None, "pending"
+        except Exception as e:
+            logger.warning("cannot resolve pending pack tune for user %s: %s", user_id, e)
+            try:
+                store.clear_astria_lora_pack_tune_pending(user_id)
+            except Exception:
+                pass
+
+    persona_tune_raw = getattr(profile, "astria_lora_tune_id", None)
+    if not persona_tune_raw:
+        return None, "need_upload"
+    try:
+        persona_tune_id = str(int(str(persona_tune_raw)))
+    except Exception:
+        return None, "need_upload"
+
+    try:
+        from prismalab.astria_client import _get_tune, _timeout_s, create_lora_tune_and_wait
+        persona_tune_obj = await asyncio.to_thread(
+            _get_tune,
+            api_key=settings.astria_api_key,
+            tune_id=persona_tune_id,
+            timeout_s=_timeout_s(30.0),
+        )
+        raw_orig_images = persona_tune_obj.get("orig_images")
+        orig_images = [str(x) for x in (raw_orig_images or []) if isinstance(x, str) and x.startswith("http")]
+        if len(orig_images) < 4:
+            logger.warning(
+                "pack tune auto-create: orig_images unavailable (user=%s tune=%s size=%s)",
+                user_id,
+                persona_tune_id,
+                len(orig_images),
+            )
+            return None, "need_upload"
+
+        pack_tune_title = f"Pack LoRA user {user_id}"
+        pack_result = await create_lora_tune_and_wait(
+            api_key=settings.astria_api_key,
+            name=class_name,
+            title=pack_tune_title,
+            image_urls=orig_images,
+            base_tune_id="1504944",
+            preset="flux-lora-portrait",
+            on_created=lambda tid: store.set_astria_lora_pack_tune_pending(user_id=user_id, tune_id=tid),
+            max_seconds=7200,
+            poll_seconds=15.0,
+        )
+        store.set_astria_lora_pack_tune(user_id=user_id, tune_id=pack_result.tune_id)
+        return int(str(pack_result.tune_id)), None
+    except Exception as e:
+        logger.exception("pack tune auto-create failed (user=%s): %s", user_id, e)
+        try:
+            store.clear_astria_lora_pack_tune_pending(user_id)
+        except Exception:
+            pass
+        return None, "need_upload"
+
+
+async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Периодическая задача: восстанавливает pack runs, прерванные рестартом бота
+    во время ожидания обучения pack tune (4–5 мин).
+    """
+    rows = store.get_pending_pack_runs_to_recover()
+    if not rows:
+        return
+    settings = load_settings()
+    if not settings.astria_api_key:
+        return
+    from prismalab.astria_client import _get_tune, _timeout_s
+    for row in rows:
+        user_id = int(row["user_id"])
+        pack_id = int(row["pack_id"])
+        chat_id = int(row["chat_id"])
+        run_id = str(row["run_id"] or "")
+        expected = int(row["expected"] or 1)
+        class_name = str(row["class_name"] or "woman")
+        offer_title = str(row.get("offer_title") or "")
+        tune_id = str(row.get("tune_id") or "").strip()
+        if not tune_id or not run_id:
+            continue
+        if run_id in pack_delivered_set:
+            logger.info("pack recovery: уже доставлено run_id=%s", run_id)
+            store.clear_pending_pack_run(user_id)
+            try:
+                store.clear_astria_lora_pack_tune_pending(user_id)
+            except Exception:
+                pass
+            continue
+        if run_id in pack_in_progress_set:
+            logger.info("pack recovery: доставка уже в процессе run_id=%s", run_id)
+            continue
+        if run_id in _pack_polling_active:
+            logger.info("pack recovery: polling уже выполняется run_id=%s", run_id)
+            continue
+        try:
+            pending_obj = await asyncio.to_thread(
+                _get_tune,
+                api_key=settings.astria_api_key,
+                tune_id=tune_id,
+                timeout_s=_timeout_s(30.0),
+            )
+            status = str(pending_obj.get("status") or pending_obj.get("state") or "").lower()
+            trained_at = pending_obj.get("trained_at")
+            if status in {"failed", "error", "cancelled", "canceled"}:
+                store.clear_astria_lora_pack_tune_pending(user_id)
+                store.clear_pending_pack_run(user_id)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Обучение модели для фотосета «{offer_title or str(pack_id)}» завершилось с ошибкой. Попробуйте запустить фотосет снова.",
+                )
+                continue
+            if status not in {"completed", "succeeded", "ready", "trained", "finished"} and not trained_at:
+                continue
+            store.set_astria_lora_pack_tune(user_id=user_id, tune_id=tune_id)
+            store.clear_astria_lora_pack_tune_pending(user_id)
+            offer = {"title": offer_title or f"Фотосет {pack_id}", "expected_images": expected}
+            title = f"{offer['title']} user:{user_id} ts:{int(time.time())}"
+            known_prompt_ids: set[str] | None = None
+            try:
+                known_prompt_ids = await astria_get_tune_prompt_ids(
+                    api_key=settings.astria_api_key,
+                    tune_id=tune_id,
+                )
+            except Exception as e:
+                logger.warning("pack recovery: не удалось получить prompt_ids для tune %s: %s", tune_id, e)
+            callback_url = build_pack_callback_url(user_id, chat_id, pack_id, run_id)
+            await astria_create_tune_from_pack(
+                api_key=settings.astria_api_key,
+                pack_id=pack_id,
+                title=title[:120],
+                name=class_name,
+                tune_ids=[int(tune_id)],
+                prompts_callback=callback_url or None,
+            )
+            from html import escape
+            status_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Приступаю к созданию фотосета <b>«{escape(str(offer.get('title', pack_id)))}»</b>.",
+                parse_mode="HTML",
+                reply_markup=_persona_training_keyboard(),
+            )
+            wait_timeout = _pack_wait_timeout_seconds(expected)
+            logger.info("pack recovery: начинаю polling tune_id=%s run_id=%s timeout=%ss", tune_id, run_id, wait_timeout)
+            _pack_polling_active.add(run_id)
+            try:
+                urls = await astria_wait_pack_images(
+                    api_key=settings.astria_api_key,
+                    tune_id=tune_id,
+                    expected_images=expected,
+                    known_prompt_ids=known_prompt_ids,
+                    max_seconds=wait_timeout,
+                    poll_seconds=6.0,
+                )
+            finally:
+                _pack_polling_active.discard(run_id)
+            store.clear_pending_pack_run(user_id)
+            if not urls:
+                await _safe_edit_status(
+                    context.bot, chat_id, status_msg.message_id,
+                    text="❌ Фотосет завершился без изображений. Попробуйте еще раз.",
+                )
+                continue
+            if run_id in pack_delivered_set:
+                logger.info("pack recovery: уже доставлено через callback run_id=%s", run_id)
+                continue
+            total = len(urls)
+            sent_count = 0
+            pack_title = offer.get("title", "") or str(pack_id)
+            pack_in_progress_set.add(run_id)
+            for i, url in enumerate(urls, start=1):
+                try:
+                    out_bytes = await astria_download_first_image_bytes(
+                        [url],
+                        api_key=settings.astria_api_key,
+                        timeout_s=90.0,
+                    )
+                    if out_bytes:
+                        bio = io.BytesIO(out_bytes)
+                        bio.name = f"pack_{pack_id}_{sent_count + 1}.png"
+                        caption = f"Фотосет «{pack_title}» ({sent_count + 1}/{total})" if sent_count == 0 else ""
+                        await _safe_send_document(
+                            bot=context.bot,
+                            chat_id=chat_id,
+                            document=bio,
+                            caption=caption,
+                        )
+                        sent_count += 1
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.warning("pack recovery: download/send failed %s: %s", url[:50], e)
+            if sent_count <= 0:
+                pack_in_progress_set.discard(run_id)
+                asyncio.create_task(
+                    alert_pack_error(
+                        user_id,
+                        pack_id=pack_id,
+                        pack_title=offer_title or str(pack_id),
+                        stage="recovery",
+                        error="no images delivered",
+                    )
+                )
+                await _safe_edit_status(
+                    context.bot,
+                    chat_id,
+                    status_msg.message_id,
+                    text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                    reply_markup=_photoset_retry_keyboard(pack_id),
+                )
+                continue
+            pack_in_progress_set.discard(run_id)
+            if sent_count > 0:
+                pack_delivered_set.add(run_id)
+            store.log_event(
+                user_id,
+                "pack_generation",
+                {"pack_id": pack_id, "pack_title": pack_title, "images_sent": sent_count, "recovered": True},
+            )
+            try:
+                await _safe_edit_status(
+                    context.bot, chat_id, status_msg.message_id,
+                    text=f"✅ Фотосет «{pack_title}» обработан. Отправлено {sent_count} фото.",
+                )
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=_photoset_done_message(include_gift=False),
+                reply_markup=_photoset_done_keyboard(),
+                parse_mode="HTML",
+            )
+            logger.info("pack recovery: успешно user=%s pack=%s sent=%s (источник: recovery)", user_id, pack_id, sent_count)
+        except Exception as e:
+            logger.exception("pack recovery error (user=%s pack=%s): %s", user_id, pack_id, e)
+            pack_in_progress_set.discard(run_id)
+            asyncio.create_task(
+                alert_pack_error(
+                    user_id,
+                    pack_id=pack_id,
+                    pack_title=offer_title,
+                    stage="recovery",
+                    error=str(e),
+                )
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Ошибка восстановления фотосета. Попробуйте запустить фотосет снова.",
+                )
+            except Exception:
+                pass
+
+
+async def _pack_fallback_polling(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    chat_id: int,
+    pack_id: int,
+    offer: dict[str, Any],
+    lora_tune_id: int,
+    class_name: str,
+    expected: int,
+    run_id: str,
+    known_prompt_ids: set[str] | None = None,
+    delay_min: int | None = None,
+) -> None:
+    """Fallback: опрашиваем prompts фотосета (резерв, если callback/polling не доставили)."""
+    if run_id in pack_delivered_set:
+        logger.info("pack fallback: уже доставлено run_id=%s", run_id)
+        return
+    if run_id in _pack_polling_active:
+        logger.info("pack fallback: основной polling ещё активен run_id=%s", run_id)
+        return
+    if run_id in pack_in_progress_set:
+        logger.info("pack fallback: доставка уже в процессе run_id=%s", run_id)
+        return
+    logger.info(
+        "pack fallback: запуск run_id=%s tune_id=%s delay_min=%s",
+        run_id, lora_tune_id, delay_min,
+    )
+    settings = load_settings()
+    if not settings.astria_api_key:
+        return
+    try:
+        expected = max(1, int(expected))
+        fallback_wait_timeout = max(900, min(3600, _pack_wait_timeout_seconds(expected)))
+        _pack_polling_active.add(run_id)
+        try:
+            urls = await astria_wait_pack_images(
+                api_key=settings.astria_api_key,
+                tune_id=str(lora_tune_id),
+                expected_images=expected,
+                known_prompt_ids=known_prompt_ids,
+                max_seconds=fallback_wait_timeout,
+                poll_seconds=6.0,
+            )
+        finally:
+            _pack_polling_active.discard(run_id)
+        if not urls:
+            logger.info("pack fallback: prompts не найдены (user=%s pack=%s)", user_id, pack_id)
+            return
+        if run_id in pack_delivered_set:
+            logger.info("pack fallback: уже доставлено во время ожидания run_id=%s", run_id)
+            return
+        if run_id in pack_in_progress_set:
+            logger.info("pack fallback: доставка уже стартовала run_id=%s", run_id)
+            return
+        pack_title = offer.get("title", "") or str(pack_id)
+        sent_count = 0
+        pack_in_progress_set.add(run_id)
+        try:
+            for i, url in enumerate(urls):
+                try:
+                    out_bytes = await astria_download_first_image_bytes([url], api_key=settings.astria_api_key, timeout_s=90.0)
+                    if out_bytes:
+                        bio = io.BytesIO(out_bytes)
+                        bio.name = f"pack_{pack_id}_{sent_count + 1}.png"
+                        caption = f"Фотосет «{pack_title}» ({sent_count + 1}/{len(urls)})" if sent_count == 0 else ""
+                        await _safe_send_document(bot=context.bot, chat_id=chat_id, document=bio, caption=caption)
+                        sent_count += 1
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.warning("pack fallback: download/send failed %s: %s", url[:50], e)
+        finally:
+            pack_in_progress_set.discard(run_id)
+        if sent_count > 0:
+            pack_delivered_set.add(run_id)
+        try:
+            store.log_event(user_id, "pack_fallback", {"pack_id": pack_id, "images_sent": sent_count})
+        except Exception:
+            pass
+        if sent_count <= 0:
+            asyncio.create_task(
+                alert_pack_error(
+                    user_id,
+                    pack_id=pack_id,
+                    pack_title=pack_title,
+                    stage="fallback",
+                    error="no images delivered",
+                )
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
+            )
+            return
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=_photoset_done_message(include_gift=False),
+            reply_markup=_photoset_done_keyboard(),
+            parse_mode="HTML",
+        )
+        logger.info(
+            "pack fallback: доставлено %s фото (user=%s pack=%s) (источник: fallback)",
+            sent_count, user_id, pack_id,
+        )
+    except Exception as e:
+        logger.exception("pack fallback error (user=%s pack=%s): %s", user_id, pack_id, e)
+        asyncio.create_task(
+            alert_pack_error(
+                user_id,
+                pack_id=pack_id,
+                pack_title=str(offer.get("title") or ""),
+                stage="fallback",
+                error=str(e),
+            )
+        )
+
+
 async def _run_persona_pack_generation(
     *,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2094,59 +2817,66 @@ async def _run_persona_pack_generation(
     pack_id: int,
     offer: dict[str, Any],
     train_file_ids: list[str] | None = None,
+    run_id: str | None = None,
+    status_message_id: int | None = None,
 ) -> None:
+    run_id = run_id or str(uuid.uuid4())
     gen_lock = await _acquire_user_generation_lock(user_id)
     if gen_lock is None:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="Сейчас уже идет генерация. Повторите запуск пака через минуту.",
+            text="Сейчас уже идет генерация. Повторите запуск фотосета через минуту.",
         )
         return
 
-    status_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"🎬 Запускаю пак «{offer['title']}»...",
-    )
+    context.user_data[USERDATA_PERSONA_PACK_IN_PROGRESS] = True
+    if status_message_id is not None:
+        status_msg = type("StatusMsg", (), {"message_id": status_message_id})()
+    else:
+        from html import escape
+        status_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Приступаю к созданию фотосета <b>«{escape(offer['title'])}»</b>.",
+            parse_mode="HTML",
+            reply_markup=_persona_training_keyboard(),
+        )
     try:
         settings = load_settings()
         if not settings.astria_api_key:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
+            await _safe_edit_status(
+                context.bot, chat_id, status_msg.message_id,
                 text="❌ Сервис генерации не настроен.",
             )
             return
         profile = store.get_user(user_id)
         class_name = _resolve_pack_class_name(offer, profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER))
         pack = await astria_get_pack(api_key=settings.astria_api_key, pack_id=pack_id)
-        expected = int(offer.get("expected_images") or 0)
+        configured_expected = int(offer.get("expected_images") or 0)
+        expected = configured_expected
         try:
             if isinstance(pack.costs, dict) and pack.costs and class_name not in pack.costs:
                 available_classes = [k for k, v in pack.costs.items() if isinstance(v, dict)]
                 if available_classes:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_msg.message_id,
+                    await _safe_edit_status(
+                        context.bot, chat_id, status_msg.message_id,
                         text=(
-                            "❌ Этот пак не поддерживает тип вашей Персоны.\n"
+                            "❌ Этот фотосет не поддерживает тип вашей Персоны.\n"
                             f"Доступные классы: {_pack_classes_text(available_classes)}."
                         ),
                     )
                     return
             class_cost = pack.costs.get(class_name) if isinstance(pack.costs, dict) else None
             if isinstance(class_cost, dict):
-                expected = int(class_cost.get("num_images") or expected)
+                astria_num = int(class_cost.get("num_images") or 0)
+                if astria_num > 0:
+                    expected = max(configured_expected, astria_num)
         except Exception:
             pass
         expected = max(1, expected)
 
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_msg.message_id,
-            text=f"🎬 Пак «{offer['title']}»: запускаю генерацию ({expected} фото)...",
-        )
         title = f"{offer['title']} user:{user_id} ts:{int(time.time())}"
         known_prompt_ids: set[str] = set()
+        poll_tune_id: str
         if train_file_ids:
             image_bytes_list: list[bytes] = []
             for fid in train_file_ids[:10]:
@@ -2159,79 +2889,187 @@ async def _run_persona_pack_generation(
                 name=class_name,
                 image_bytes_list=image_bytes_list,
             )
+            poll_tune_id = str(tune.tune_id)
         else:
-            lora_tune_id_raw = profile.astria_lora_tune_id
-            if not lora_tune_id_raw:
-                await context.bot.edit_message_text(
+            active_tune_id: int | None = None
+            keep_pending_pack_run = False
+            if class_name in {"man", "woman"}:
+                store.set_pending_pack_run(
+                    user_id=user_id,
+                    pack_id=pack_id,
                     chat_id=chat_id,
-                    message_id=status_msg.message_id,
-                    text="❌ У вас еще нет обученной Персоны. Сначала обучите Персону (10 фото).",
+                    run_id=run_id,
+                    expected=expected,
+                    class_name=class_name,
+                    offer_title=offer.get("title", "") or "",
                 )
-                return
             try:
-                lora_tune_id = int(str(lora_tune_id_raw))
-            except ValueError:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_msg.message_id,
-                    text="❌ Не удалось определить ID вашей Персоны. Напишите в поддержку.",
-                )
-                return
-            try:
-                known_prompt_ids = await astria_get_tune_prompt_ids(
+                if class_name in {"man", "woman"}:
+                    active_tune_id, reason = await _ensure_pack_lora_tune_id(
+                        context=context,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        class_name=class_name,
+                        status_message_id=status_msg.message_id,
+                    )
+                    if reason == "need_upload" or active_tune_id is None:
+                        if reason == "pending":
+                            keep_pending_pack_run = True
+                            await _safe_edit_status(
+                                context.bot,
+                                chat_id,
+                                status_msg.message_id,
+                                text=PHOTOSET_PROGRESS_ALERT,
+                                reply_markup=_persona_training_keyboard(),
+                            )
+                            return
+                        await _fallback_to_pack_photo_upload(
+                            context=context,
+                            chat_id=chat_id,
+                            user_id=user_id,
+                            pack_id=pack_id,
+                            status_message_id=status_msg.message_id,
+                        )
+                        return
+                else:
+                    lora_tune_id_raw = profile.astria_lora_tune_id
+                    if not lora_tune_id_raw:
+                        await _safe_edit_status(
+                            context.bot, chat_id, status_msg.message_id,
+                            text="❌ У вас еще нет обученной Персоны. Сначала обучите Персону (10 фото).",
+                        )
+                        return
+                    try:
+                        active_tune_id = int(str(lora_tune_id_raw))
+                    except ValueError:
+                        await _safe_edit_status(
+                            context.bot, chat_id, status_msg.message_id,
+                            text="❌ Не удалось определить ID вашей Персоны. Напишите в поддержку.",
+                        )
+                        return
+                assert active_tune_id is not None
+                known_prompt_ids: set[str] | None = None
+                try:
+                    known_prompt_ids = await astria_get_tune_prompt_ids(
+                        api_key=settings.astria_api_key,
+                        tune_id=str(active_tune_id),
+                    )
+                except Exception as e:
+                    logger.warning("Не удалось получить существующие prompts для tune %s: %s", active_tune_id, e)
+                callback_url = build_pack_callback_url(user_id, chat_id, pack_id, run_id)
+                tune = await astria_create_tune_from_pack(
                     api_key=settings.astria_api_key,
-                    tune_id=str(lora_tune_id),
+                    pack_id=pack_id,
+                    title=title[:120],
+                    name=class_name,
+                    tune_ids=[active_tune_id],
+                    prompts_callback=callback_url or None,
                 )
-            except Exception as e:
-                logger.warning("Не удалось получить существующие prompts для tune %s: %s", lora_tune_id, e)
-            tune = await astria_create_tune_from_pack(
-                api_key=settings.astria_api_key,
-                pack_id=pack_id,
-                title=title[:120],
-                name=class_name,
-                tune_ids=[lora_tune_id],
-            )
+                # Astria может вернуть новый tune_id для generation — prompts там. Иначе используем active_tune_id.
+                poll_tune_id = str(tune.tune_id) if tune.tune_id else str(active_tune_id)
+                if str(tune.tune_id) != str(active_tune_id):
+                    logger.info(
+                        "pack: tune_id из API (%s) != active_tune_id (%s), опрашиваем tune_id из API",
+                        tune.tune_id, active_tune_id,
+                    )
+            finally:
+                if class_name in {"man", "woman"} and not keep_pending_pack_run:
+                    store.clear_pending_pack_run(user_id)
         logger.info(
             "pack: astria create_tune_from_pack response: tune_id=%s status=%s raw=%s",
             tune.tune_id,
             tune.status,
             tune.raw,
         )
+        app = getattr(context, "application", None)
+        job_queue = app.job_queue if app else None
+        if job_queue:
+            def _make_fallback_job(delay_min: int):
+                u, c, p, o, lid, cn, exp, rid, kp = (
+                    user_id,
+                    chat_id,
+                    pack_id,
+                    offer,
+                    int(poll_tune_id),
+                    class_name,
+                    expected,
+                    run_id,
+                    set(known_prompt_ids or set()),
+                )
+                async def job(ctx):
+                    await _pack_fallback_polling(
+                        context=ctx,
+                        user_id=u,
+                        chat_id=c,
+                        pack_id=p,
+                        offer=o,
+                        lora_tune_id=lid,
+                        class_name=cn,
+                        expected=exp,
+                        run_id=rid,
+                        known_prompt_ids=kp,
+                        delay_min=delay_min,
+                    )
+                return job
+            fallback_delay_min = 15
+            job_queue.run_once(
+                _make_fallback_job(fallback_delay_min),
+                when=fallback_delay_min * 60,
+                name=f"pack_fallback_{fallback_delay_min}min_{user_id}_{pack_id}_{run_id}",
+            )
+            logger.info("pack: fallback polling запланирован через %s мин (резерв)", fallback_delay_min)
 
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_msg.message_id,
-            text="⏳ Пак запущен. Жду готовые изображения...",
-        )
         wait_timeout = _pack_wait_timeout_seconds(expected)
-        urls = await astria_wait_pack_images(
-            api_key=settings.astria_api_key,
-            tune_id=tune.tune_id,
-            expected_images=expected,
-            known_prompt_ids=known_prompt_ids,
-            max_seconds=wait_timeout,
-            poll_seconds=6.0,
+        logger.info(
+            "pack: начинаю polling tune_id=%s run_id=%s expected=%s timeout=%ss",
+            poll_tune_id, run_id, expected, wait_timeout,
         )
+        _pack_polling_active.add(run_id)
+        try:
+            urls = await astria_wait_pack_images(
+                api_key=settings.astria_api_key,
+                tune_id=poll_tune_id,
+                expected_images=expected,
+                known_prompt_ids=known_prompt_ids,
+                max_seconds=wait_timeout,
+                poll_seconds=6.0,
+            )
+        finally:
+            _pack_polling_active.discard(run_id)
         if not urls:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="❌ Пак завершился без изображений. Попробуйте еще раз.",
+            await _safe_edit_status(
+                context.bot, chat_id, status_msg.message_id,
+                text="❌ Фотосет завершился без изображений. Попробуйте еще раз.",
             )
             return
+
+        if run_id in pack_delivered_set:
+            logger.info("pack: уже доставлено через callback run_id=%s, пропускаем отправку", run_id)
+            return
+
+        logger.info("pack: доставлено через polling run_id=%s urls=%s", run_id, len(urls) if urls else 0)
+        pack_in_progress_set.add(run_id)
 
         # Сохраняем tune_id как Persona, если у пользователя её ещё нет (пак создал tune из загруженных фото)
         if train_file_ids and tune.tune_id and not profile.astria_lora_tune_id:
             try:
-                store.set_astria_lora_tune(user_id=user_id, tune_id=tune.tune_id)
-                logger.info("pack: сохранён tune_id %s как Persona для user %s", tune.tune_id, user_id)
+                if _use_unified_pack_persona_flow():
+                    logger.info(
+                        "pack: в unified-flow не сохраняем tune_id %s как Persona (user=%s class=%s)",
+                        tune.tune_id,
+                        user_id,
+                        class_name,
+                    )
+                else:
+                    store.set_astria_lora_tune(user_id=user_id, tune_id=tune.tune_id, class_name=class_name)
+                    logger.info("pack: сохранён tune_id %s как Persona для user %s (class=%s)", tune.tune_id, user_id, class_name)
             except Exception as e:
                 logger.warning("pack: не удалось сохранить tune_id для user %s: %s", user_id, e)
 
-        total = min(len(urls), expected)
+        total = len(urls)
         sent_count = 0
         pack_download_timeout = 90.0
-        for i, url in enumerate(urls[:total], start=1):
+        for i, url in enumerate(urls, start=1):
             out_bytes = None
             for attempt in range(3):
                 try:
@@ -2261,55 +3099,105 @@ async def _run_persona_pack_generation(
             if out_bytes:
                 bio = io.BytesIO(out_bytes)
                 bio.name = f"pack_{pack_id}_{sent_count + 1}.png"
-                caption = f"Пак «{offer['title']}» ({sent_count + 1}/{total})" if sent_count == 0 else ""
-                await _safe_send_document(
-                    bot=context.bot,
-                    chat_id=chat_id,
-                    document=bio,
-                    caption=caption,
-                )
-                sent_count += 1
+                caption = f"Фотосет «{offer['title']}» ({sent_count + 1}/{total})" if sent_count == 0 else ""
+                try:
+                    await _safe_send_document(
+                        bot=context.bot,
+                        chat_id=chat_id,
+                        document=bio,
+                        caption=caption,
+                    )
+                    sent_count += 1
+                except Exception as e:
+                    logger.warning("Pack image %s/%s send failed, skipping: %s", i, total, e)
                 await asyncio.sleep(0.1)
 
+        if sent_count <= 0:
+            asyncio.create_task(
+                alert_pack_error(
+                    user_id,
+                    pack_id=pack_id,
+                    pack_title=str(offer.get("title") or ""),
+                    stage="generation",
+                    error="no images delivered",
+                )
+            )
+            await _safe_edit_status(
+                context.bot,
+                chat_id,
+                status_msg.message_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
+            )
+            return
+
+        if sent_count > 0:
+            pack_delivered_set.add(run_id)
         store.log_event(
             user_id,
             "pack_generation",
             {"pack_id": pack_id, "pack_title": offer["title"], "images_sent": sent_count},
         )
-        page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-        gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-        done_text = f"✅ Пак «{offer['title']}» готов. Отправлено {sent_count} фото."
-        if sent_count < total:
-            done_text += f" (не удалось скачать {total - sent_count})"
-        await context.bot.edit_message_text(
+        await _safe_edit_status(
+            context.bot, chat_id, status_msg.message_id,
+            text=f"✅ Фотосет «{offer['title']}» обработан. Отправлено {sent_count} фото.",
+        )
+        include_gift = bool(context.user_data.pop(USERDATA_PERSONA_PACK_GIFT_APPLIED, False))
+        await context.bot.send_message(
             chat_id=chat_id,
-            message_id=status_msg.message_id,
-            text=done_text,
-            reply_markup=_persona_styles_keyboard(gender, page),
+            text=_photoset_done_message(include_gift=include_gift),
+            reply_markup=_photoset_done_keyboard(),
+            parse_mode="HTML",
         )
     except AstriaError as e:
-        logger.exception("Ошибка генерации пака %s (Astria): %s", pack_id, e)
-        details = str(e).strip()
-        short = details[:300] if details else "Ошибка генерации"
+        logger.exception("Ошибка генерации фотосета %s (Astria): %s", pack_id, e)
+        asyncio.create_task(
+            alert_pack_error(
+                user_id,
+                pack_id=pack_id,
+                pack_title=str(offer.get("title") or ""),
+                stage="generation",
+                error=str(e),
+            )
+        )
         try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text=f"❌ Ошибка генерации пака: {short}",
+            await _safe_edit_status(
+                context.bot, chat_id, status_msg.message_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
             )
         except Exception:
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ Ошибка генерации пака: {short}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
+            )
     except Exception as e:
-        logger.exception("Ошибка генерации пака %s: %s", pack_id, e)
+        logger.exception("Ошибка генерации фотосета %s: %s", pack_id, e)
+        asyncio.create_task(
+            alert_pack_error(
+                user_id,
+                pack_id=pack_id,
+                pack_title=str(offer.get("title") or ""),
+                stage="generation",
+                error=str(e),
+            )
+        )
         try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="❌ Ошибка генерации пака. Попробуйте еще раз.",
+            await _safe_edit_status(
+                context.bot, chat_id, status_msg.message_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
             )
         except Exception:
-            await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка генерации пака. Попробуйте еще раз.")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Ошибка генерации фотосета. Попробуйте еще раз.",
+                reply_markup=_photoset_retry_keyboard(pack_id),
+            )
     finally:
+        pack_in_progress_set.discard(run_id)
+        context.user_data[USERDATA_PERSONA_PACK_IN_PROGRESS] = False
         gen_lock.release()
 
 
@@ -2335,18 +3223,28 @@ async def _poll_persona_pack_payment_and_run(
                 return
             amount_rub = apply_test_amount(float(offer["price_rub"]))
             expected_images = int(offer.get("expected_images") or 0)
-            store.log_payment(
-                user_id=user_id,
-                payment_id=payment_id,
-                payment_method="yookassa",
-                product_type="persona_pack",
-                credits=max(1, expected_images),
-                amount_rub=amount_rub,
-            )
+            try:
+                payment_log_id = store.log_payment(
+                    user_id=user_id,
+                    payment_id=payment_id,
+                    payment_method="yookassa",
+                    product_type="persona_pack",
+                    credits=max(1, expected_images),
+                    amount_rub=amount_rub,
+                )
+            except Exception as e:
+                logger.exception("Не удалось записать платеж %s: %s", payment_id, e)
+                await asyncio.sleep(poll_interval)
+                continue
+            if payment_log_id is None:
+                logger.info("Платёж %s уже обработан параллельным обработчиком", payment_id)
+                return
+            from html import escape
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"Оплата получена ✅\n\nЗапускаю пак «{offer['title']}».",
+                text=f"Оплата получена ✅\n\nПриступаю к созданию фотосета <b>«{escape(offer['title'])}»</b>",
                 parse_mode="HTML",
+                reply_markup=_persona_training_keyboard(),
             )
             await _run_persona_pack_generation(
                 context=context,
@@ -2354,6 +3252,7 @@ async def _poll_persona_pack_payment_and_run(
                 user_id=user_id,
                 pack_id=pack_id,
                 offer=offer,
+                run_id=payment_id,
             )
             return
         if status == "canceled":
@@ -2367,18 +3266,23 @@ async def handle_persona_packs_callback(update: Update, context: ContextTypes.DE
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_packs")
+    except Exception:
+        pass
     offers = _pack_offers()
     if not offers:
         await query.edit_message_text(
-            "Паки пока не настроены. Добавьте PRISMALAB_ASTRIA_PACK_OFFERS в .env dev-бота.",
+            "Фотосеты пока не настроены. Добавьте PRISMALAB_ASTRIA_PACK_OFFERS в .env dev-бота.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="pl_persona_back")]]),
         )
         return
     user_id = int(query.from_user.id) if query.from_user else 0
     profile = store.get_user(user_id)
-    if not profile.astria_lora_tune_id and not _dev_pack_train_from_images():
+    if not (profile.astria_lora_tune_id or profile.astria_lora_pack_tune_id) and not _dev_pack_train_from_images():
         await query.edit_message_text(
-            "Паки доступны после обучения Персоны.\n\nСначала оплатите «Персона» и загрузите 10 фото.",
+            "Фотосеты доступны после обучения Персоны.\n\nСначала оплатите «Персона» и загрузите 10 фото.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="pl_persona_back")]]),
         )
         return
@@ -2396,26 +3300,30 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
     logger.info("persona_pack_buy click: user_id=%s data=%s", user_id, query.data)
+    try:
+        store.log_event(user_id, "pack_buy_init", {"raw_data": query.data})
+    except Exception:
+        pass
 
     try:
         parts = query.data.split(":", 1)
         if len(parts) != 2:
-            await query.edit_message_text("Некорректная команда пакета.", reply_markup=_persona_packs_keyboard())
+            await query.edit_message_text("Некорректная команда фотосета.", reply_markup=_persona_packs_keyboard())
             return
         pack_id = int(parts[1])
     except Exception:
-        await query.edit_message_text("Некорректный pack_id.", reply_markup=_persona_packs_keyboard())
+        await query.edit_message_text("Некорректный ID фотосета.", reply_markup=_persona_packs_keyboard())
         return
 
     offer = _find_pack_offer(pack_id)
     logger.info("persona_pack_buy: parsed pack_id=%s offer_found=%s", pack_id, bool(offer))
     if not offer:
-        await query.edit_message_text("Пак не найден в конфиге.", reply_markup=_persona_packs_keyboard())
+        await query.edit_message_text("Фотосет не найден в конфиге.", reply_markup=_persona_packs_keyboard())
         return
     if not use_yookassa():
         logger.info("persona_pack_buy: yookassa disabled")
         await query.edit_message_text(
-            "Для паков в dev включена только оплата по ссылке.",
+            "Для фотосетов в dev включена только оплата по ссылке.",
             reply_markup=_persona_packs_keyboard(),
         )
         return
@@ -2424,7 +3332,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     logger.info("persona_pack_buy: loading profile user_id=%s", user_id)
     profile = store.get_user(user_id)
     logger.info("persona_pack_buy: profile loaded lora_tune_id=%s", getattr(profile, "astria_lora_tune_id", None))
-    if not profile.astria_lora_tune_id and not _dev_pack_train_from_images():
+    if not (profile.astria_lora_tune_id or profile.astria_lora_pack_tune_id) and not _dev_pack_train_from_images():
         await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_intro_keyboard())
         return
 
@@ -2435,7 +3343,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         return
 
     logger.info("persona_pack_buy: edit progress message")
-    await query.edit_message_text("⏳ Проверяю пак и создаю ссылку оплаты…")
+    await query.edit_message_text("⏳ Проверяю фотосет и создаю ссылку оплаты…")
 
     class_name = _resolve_pack_class_name(offer, profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER))
     logger.info("persona_pack_buy: fetching pack from astria pack_id=%s class=%s", pack_id, class_name)
@@ -2448,7 +3356,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     except Exception as e:
         logger.warning("Не удалось получить pack %s перед оплатой: %s", pack_id, e)
         await query.edit_message_text(
-            "❌ Не удалось проверить конфигурацию пака. Попробуйте еще раз.",
+            "❌ Не удалось проверить конфигурацию фотосета. Попробуйте еще раз.",
             reply_markup=_persona_packs_keyboard(),
         )
         return
@@ -2457,12 +3365,21 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         available_text = _pack_classes_text(available_classes) if available_classes else "не определены"
         await query.edit_message_text(
             (
-                "Этот пак не подходит для вашей Персоны.\n"
+                "Этот фотосет не подходит для вашей Персоны.\n"
                 f"Доступные классы: {available_text}."
             ),
             reply_markup=_persona_packs_keyboard(),
         )
         return
+
+    expected_images_for_payment = max(1, int(offer.get("expected_images") or 1))
+    class_cost = pack.costs.get(class_name) if isinstance(pack.costs, dict) else None
+    if isinstance(class_cost, dict):
+        try:
+            expected_images_for_payment = max(1, int(class_cost.get("num_images") or expected_images_for_payment))
+        except Exception:
+            pass
+    pack_cost_field, pack_cost_value = _extract_pack_cost_info(class_cost)
 
     if _dev_pack_train_from_images():
         context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id
@@ -2480,7 +3397,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     if _dev_skip_pack_payment():
         logger.info("persona_pack_buy: dev skip payment enabled, run pack directly user_id=%s pack_id=%s", user_id, pack_id)
         await query.edit_message_text(
-            "🧪 Dev-режим: оплату пропускаю, запускаю пак сразу.",
+            "🧪 Dev-режим: оплату пропускаю, запускаю фотосет сразу.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="pl_persona_packs")]]),
         )
         await _run_persona_pack_generation(
@@ -2489,6 +3406,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
             user_id=user_id,
             pack_id=pack_id,
             offer=offer,
+            run_id=f"dev_{user_id}_{pack_id}_{int(time.time())}",
         )
         return
 
@@ -2501,13 +3419,18 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
             asyncio.to_thread(
                 create_payment,
                 amount_rub=amount,
-                description=f"Пак: {offer['title']}",
+                description=f"Фотосет: {offer['title']}",
                 metadata={
                     "user_id": str(user_id),
                     "chat_id": str(chat_id),
-                    "credits": str(max(1, int(offer.get("expected_images") or 1))),
+                    "credits": str(expected_images_for_payment),
                     "product_type": "persona_pack",
                     "pack_id": str(pack_id),
+                    "pack_title": str(offer.get("title") or "")[:100],
+                    "pack_class": class_name[:24],
+                    "pack_num_images": str(expected_images_for_payment),
+                    "pack_cost_field": pack_cost_field[:24],
+                    "pack_cost_value": pack_cost_value[:64],
                 },
                 return_url=return_url,
             ),
@@ -2537,7 +3460,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
                 reply_markup=_persona_packs_keyboard(),
             )
         else:
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}", reply_markup=_persona_packs_keyboard())
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.", reply_markup=_persona_packs_keyboard())
         return
 
     context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id
@@ -2545,7 +3468,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         (
             f"<b>{offer['title']}</b>\n"
             f"Цена: <b>{int(amount)} ₽</b>\n\n"
-            "Оплатите, после этого бот автоматически запустит пак и пришлет готовые фото."
+            "Оплатите, после этого бот автоматически запустит фотосет и пришлет готовые фото."
         ),
         reply_markup=_payment_yookassa_keyboard(url, "pl_persona_packs"),
         parse_mode="HTML",
@@ -2562,6 +3485,51 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     )
 
 
+async def handle_persona_pack_retry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+
+    try:
+        _, pack_id_str = query.data.split(":", 1)
+        pack_id = int(pack_id_str)
+    except Exception:
+        await query.edit_message_text("Некорректный ID фотосета.", reply_markup=_persona_packs_keyboard())
+        return
+
+    offer = _find_pack_offer(pack_id)
+    if not offer:
+        await query.edit_message_text("Фотосет не найден.", reply_markup=_persona_packs_keyboard())
+        return
+
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "pack_retry", {"pack_id": pack_id})
+    except Exception:
+        pass
+    chat_id = query.message.chat_id if query.message else 0
+    profile = store.get_user(user_id)
+    if not (profile.astria_lora_tune_id or profile.astria_lora_pack_tune_id):
+        await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_intro_keyboard(user_id))
+        return
+
+    await query.edit_message_text(
+        f"Понял. Перезапускаю фотосет «{offer['title']}».",
+        reply_markup=_persona_training_keyboard(),
+    )
+    context.application.create_task(
+        _run_persona_pack_generation(
+            context=context,
+            chat_id=chat_id,
+            user_id=user_id,
+            pack_id=pack_id,
+            offer=offer,
+            run_id=f"retry_{user_id}_{pack_id}_{int(time.time())}",
+        )
+    )
+
+
 async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Выбор тарифа Персоны: сразу инвойс/ссылка/симуляция (без экрана «Нажмите Оплатить»)."""
     query = update.callback_query
@@ -2573,6 +3541,10 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
     context.user_data[USERDATA_PERSONA_CREDITS] = credits
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
+    try:
+        store.log_event(user_id, "persona_buy_init", {"credits": credits})
+    except Exception:
+        pass
 
     if use_yookassa():
         amount = _amount_rub("persona_create", credits)
@@ -2609,7 +3581,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
             asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if use_telegram_payments():
@@ -2648,6 +3620,11 @@ async def handle_persona_back_callback(update: Update, context: ContextTypes.DEF
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_back_persona")
+    except Exception:
+        pass
     context.user_data[USERDATA_MODE] = "persona"
     context.user_data.pop(USERDATA_PERSONA_WAITING_UPLOAD, None)
     context.user_data.pop(USERDATA_PERSONA_PHOTOS, None)
@@ -2666,6 +3643,10 @@ async def handle_persona_show_credits_out_callback(update: Update, context: Cont
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_credits_out")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     text, kb = _persona_credits_out_content(profile)
     await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
@@ -2677,6 +3658,11 @@ async def handle_persona_topup_callback(update: Update, context: ContextTypes.DE
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_topup_view")
+    except Exception:
+        pass
     await query.edit_message_text(
         PERSONA_TOPUP_MESSAGE,
         reply_markup=_persona_topup_keyboard(),
@@ -2694,6 +3680,10 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
     context.user_data[USERDATA_PERSONA_CREDITS] = credits
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
+    try:
+        store.log_event(user_id, "persona_topup_init", {"credits": credits})
+    except Exception:
+        pass
 
     if use_yookassa():
         amount = _amount_rub("persona_topup", credits)
@@ -2730,7 +3720,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
             asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if use_telegram_payments():
@@ -2815,6 +3805,10 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
     credits = int(count_str) if count_str in ("10", "20", "30") else 10
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
+    try:
+        store.log_event(user_id, "persona_topup_confirm", {"credits": credits})
+    except Exception:
+        pass
 
     if use_yookassa():
         amount = _amount_rub("persona_topup", credits)
@@ -2851,7 +3845,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
             asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if use_telegram_payments():
@@ -2932,6 +3926,11 @@ async def handle_persona_recreate_callback(update: Update, context: ContextTypes
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_recreate_start")
+    except Exception:
+        pass
     chat_id = query.message.chat_id if query.message else 0
     bot = context.bot
     intro_msg_id = context.user_data.pop(USERDATA_EXAMPLES_INTRO_MSG_ID, None)
@@ -2961,6 +3960,10 @@ async def handle_persona_recreate_cancel_callback(update: Update, context: Conte
     await query.answer()
     _clear_persona_flow_state(context)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_recreate_cancel")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     await query.edit_message_text(
         _start_message_text(profile),
@@ -2985,6 +3988,8 @@ def _clear_persona_flow_state(context: ContextTypes.DEFAULT_TYPE) -> None:
         USERDATA_PERSONA_PACK_WAITING_UPLOAD,
         USERDATA_PERSONA_PACK_PHOTOS,
         USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
+        USERDATA_PERSONA_PACK_IN_PROGRESS,
+        USERDATA_PERSONA_PACK_GIFT_APPLIED,
         USERDATA_PERSONA_RECREATING,
     ):
         context.user_data.pop(key, None)
@@ -2997,6 +4002,10 @@ async def handle_persona_recreate_confirm_callback(update: Update, context: Cont
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_recreate_confirm")
+    except Exception:
+        pass
     context.user_data[USERDATA_PERSONA_RECREATING] = True
     profile = store.get_user(user_id)
     known_gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
@@ -3056,7 +4065,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
             asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if use_telegram_payments():
@@ -3094,6 +4103,61 @@ async def handle_persona_got_it_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     if not query:
         return
+
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_upload_start")
+    except Exception:
+        pass
+    profile = store.get_user(user_id)
+    training_status = context.user_data.get(USERDATA_PERSONA_TRAINING_STATUS)
+    photos_count = len(list(context.user_data.get(USERDATA_PERSONA_PHOTOS, [])))
+    pending_tune_id = getattr(profile, "astria_lora_tune_id_pending", None)
+    lora_tune_id = getattr(profile, "astria_lora_tune_id", None)
+    pack_tune_pending = getattr(profile, "astria_lora_pack_tune_id_pending", None)
+    pack_in_progress = bool(context.user_data.get(USERDATA_PERSONA_PACK_IN_PROGRESS))
+    message_id = query.message.message_id if query.message else None
+
+    logger.info(
+        "persona_got_it: user_id=%s message_id=%s training_status=%s photos_count=%s pending_tune_id=%s lora_tune_id=%s pack_tune_pending=%s pack_in_progress=%s",
+        user_id,
+        message_id,
+        training_status,
+        photos_count,
+        bool(pending_tune_id),
+        bool(lora_tune_id),
+        bool(pack_tune_pending),
+        pack_in_progress,
+    )
+
+    # Guard от повторного callback: если обучение/пак уже запущены (или уже набрали 10 фото),
+    # не возвращаем пользователя на этап повторной загрузки.
+    if (
+        pending_tune_id
+        or lora_tune_id
+        or training_status == "training"
+        or photos_count >= 10
+        or pack_tune_pending
+        or pack_in_progress
+    ):
+        await query.answer("Обработка уже запущена, проверьте статус.", show_alert=False)
+        context.user_data[USERDATA_MODE] = "persona"
+        context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = False
+        try:
+            await query.edit_message_text(
+                PERSONA_TRAINING_MESSAGE,
+                reply_markup=_persona_training_keyboard(),
+                parse_mode="HTML",
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id if query.message else user_id,
+                text=PERSONA_TRAINING_MESSAGE,
+                reply_markup=_persona_training_keyboard(),
+                parse_mode="HTML",
+            )
+        return
+
     await query.answer()
     context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = True
     context.user_data[USERDATA_PERSONA_PHOTOS] = []
@@ -3111,8 +4175,8 @@ def _persona_upload_keyboard() -> InlineKeyboardMarkup:
 def _persona_pack_upload_keyboard() -> InlineKeyboardMarkup:
     """Кнопки при загрузке фото для запуска пака."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Сбросить фото пака", callback_data="pl_persona_pack_reset_photos")],
-        [InlineKeyboardButton("Назад к пакам", callback_data="pl_persona_packs")],
+        [InlineKeyboardButton("Сбросить фото фотосета", callback_data="pl_persona_pack_reset_photos")],
+        [InlineKeyboardButton("Назад к фотосетам", callback_data="pl_persona_packs")],
     ])
 
 
@@ -3122,6 +4186,11 @@ async def handle_persona_reset_photos_callback(update: Update, context: ContextT
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_reset_photos")
+    except Exception:
+        pass
     context.user_data[USERDATA_PERSONA_PHOTOS] = []
     context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = True
     context.user_data[USERDATA_PERSONA_UPLOAD_MSG_IDS] = []
@@ -3138,6 +4207,11 @@ async def handle_miniapp_pack_upload_callback(update: Update, context: ContextTy
     parts = query.data.split(":")
     pack_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     credits = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 20
+    try:
+        user_id_miniapp = int(query.from_user.id) if query.from_user else 0
+        store.log_event(user_id_miniapp, "miniapp_pack_upload", {"pack_id": pack_id})
+    except Exception:
+        pass
 
     context.user_data[USERDATA_PERSONA_SELECTED_PACK_ID] = pack_id
     context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
@@ -3158,6 +4232,11 @@ async def handle_persona_pack_reset_photos_callback(update: Update, context: Con
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "pack_reset_photos")
+    except Exception:
+        pass
     context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
     context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = True
     context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
@@ -3170,17 +4249,20 @@ async def handle_persona_pack_reset_photos_callback(update: Update, context: Con
 
 
 async def handle_persona_check_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка «Проверить статус Персоны»: проверяет статус, при pending — опрашивает tune (восстановление после рестарта)."""
+    """Кнопка «Проверить статус»: проверяет обучение Персоны и фоновые этапы фотосета."""
     query = update.callback_query
     if not query:
         return
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_check_status")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     pending_tune_id = getattr(profile, "astria_lora_tune_id_pending", None)
 
     # Восстановление: есть pending tune (бот рестартовал во время обучения)
     if pending_tune_id:
-        await query.answer("Проверяю статус…", show_alert=False)
         try:
             from prismalab.astria_client import _get_tune, _timeout_s
             settings = load_settings()
@@ -3193,11 +4275,19 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
             status = str(last.get("status") or last.get("state") or "").lower()
             trained_at = last.get("trained_at")
             if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
-                store.set_astria_lora_tune(user_id=user_id, tune_id=pending_tune_id)
+                store.set_astria_lora_tune(user_id=user_id, tune_id=pending_tune_id, class_name=getattr(profile, "persona_lora_class_name", None) or "person")
                 context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
+                if await _start_pending_paid_photoset_after_persona(
+                    context=context,
+                    chat_id=query.message.chat_id if query.message else user_id,
+                    user_id=user_id,
+                ):
+                    await query.answer("Персональная модель готова. Запускаю фотосет.", show_alert=False)
+                    return
                 credits = profile.persona_credits_remaining
                 gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
                 text = f"Готово! 🎉 Персональная модель обучена\n\nТеперь выберите стиль из списка ниже – у вас {credits} {_fast_credits_word(credits)}\n\n{STYLE_EXAMPLES_FOOTER}"
+                await query.answer("Готово! 🎉", show_alert=False)
                 await query.edit_message_text(
                     text,
                     reply_markup=_persona_styles_keyboard(gender),
@@ -3208,6 +4298,7 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
             if status in {"failed", "error", "cancelled"}:
                 store.clear_astria_lora_tune_pending(user_id)
                 context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "error"
+                await query.answer("При обучении возникла ошибка.", show_alert=True)
                 await query.edit_message_text(
                     "При обучении возникла ошибка. Загрузите 10 фото заново или напишите в поддержку.",
                     parse_mode="HTML",
@@ -3215,6 +4306,10 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
                 return
         except Exception as e:
             logger.warning("Ошибка проверки pending tune %s: %s", pending_tune_id, e)
+
+    if context.user_data.get(USERDATA_PERSONA_PACK_IN_PROGRESS) or getattr(profile, "astria_lora_pack_tune_id_pending", None):
+        await query.answer(PHOTOSET_PROGRESS_ALERT, show_alert=True)
+        return
 
     status = context.user_data.get(USERDATA_PERSONA_TRAINING_STATUS) or "training"
     if status == "training":
@@ -3245,6 +4340,10 @@ async def handle_persona_page_callback(update: Update, context: ContextTypes.DEF
     except ValueError:
         return
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_page", {"page": page})
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     credits = profile.persona_credits_remaining
     gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
@@ -3266,6 +4365,10 @@ async def handle_persona_style_callback(update: Update, context: ContextTypes.DE
         return
     _, style_id = query.data.split(":", 1)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "persona_style_select", {"style_id": style_id})
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     credits = profile.persona_credits_remaining
     if credits <= 0:
@@ -3333,6 +4436,10 @@ async def handle_fast_page_callback(update: Update, context: ContextTypes.DEFAUL
     ctx = int(parts[2]) if len(parts) > 2 else 0  # 0=main, 1=back_to_ready, 2=from_profile
 
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_page", {"page": page})
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     gender = context.user_data.get(USERDATA_SUBJECT_GENDER) or profile.subject_gender or "female"
     credits = _generations_count_fast(profile)
@@ -3360,6 +4467,10 @@ async def handle_fast_gender_callback(update: Update, context: ContextTypes.DEFA
     _, gender = query.data.split(":", 1)
     context.user_data[USERDATA_SUBJECT_GENDER] = gender
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_gender_select", {"gender": gender})
+    except Exception:
+        pass
     store.set_subject_gender(user_id, gender)  # запоминаем пол один раз (смена потом в профиле)
     profile = store.get_user(user_id)
     context.user_data[USERDATA_MODE] = "fast"
@@ -3406,6 +4517,10 @@ async def handle_fast_back_callback(update: Update, context: ContextTypes.DEFAUL
             pass
     _clear_persona_flow_state(context)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "nav_back_main")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     text = _start_message_text(profile)
     kb = _start_keyboard(profile)
@@ -3426,6 +4541,11 @@ async def handle_fast_show_tariffs_callback(update: Update, context: ContextType
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_show_tariffs")
+    except Exception:
+        pass
     await query.edit_message_text(
         FAST_TARIFFS_TARIFFS_MESSAGE,
         reply_markup=_fast_tariff_packages_keyboard(),
@@ -3449,6 +4569,10 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
         count = 5
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
+    try:
+        store.log_event(user_id, "fast_buy_init", {"credits": count})
+    except Exception:
+        pass
 
     if use_yookassa():
         amount = _amount_rub("fast", count)
@@ -3486,7 +4610,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
         else:
             logger.warning("Ошибка создания платежа (fast): %s", payment_id)
             asyncio.create_task(alert_payment_error(user_id, "fast", str(payment_id)))
-            await query.edit_message_text(f"❌ Ошибка оплаты: {payment_id}")
+            await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if use_telegram_payments():
@@ -3571,6 +4695,11 @@ async def handle_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE
         payload = (query.invoice_payload or "").strip()
         if payload.startswith(INVOICE_PAYLOAD_PREFIX):
             await query.answer(ok=True)
+            try:
+                pre_uid = int(query.from_user.id) if query.from_user else 0
+                store.log_event(pre_uid, "pre_checkout", {"payload": payload})
+            except Exception:
+                pass
         else:
             await query.answer(ok=False, error_message="Неизвестный тип платежа")
     except Exception as e:
@@ -3604,10 +4733,16 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             logger.warning("Не удалось распарсить payload: %s", payload)
             return
 
+        # Логируем событие успешной оплаты
+        try:
+            store.log_event(user_id, "payment_success", {"product_type": product_type, "credits": credits, "method": "telegram"})
+        except Exception:
+            pass
+
         # Логируем платёж для аналитики
         try:
             amount_rub = float(msg.successful_payment.total_amount) / 100
-            store.log_payment(
+            payment_log_id = store.log_payment(
                 user_id=user_id,
                 payment_id=msg.successful_payment.telegram_payment_charge_id,
                 payment_method="telegram",
@@ -3615,9 +4750,16 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
                 credits=credits,
                 amount_rub=amount_rub,
             )
+            if payment_log_id is None:
+                logger.info(
+                    "Telegram payment %s уже обработан, пропускаем",
+                    msg.successful_payment.telegram_payment_charge_id,
+                )
+                return
             logger.info("Платёж записан: user=%s, amount=%.2f, type=%s", user_id, amount_rub, product_type)
         except Exception as e:
             logger.exception("Ошибка записи платежа в БД: %s", e)
+            return
 
         if product_type == "fast":
             context.user_data[USERDATA_MODE] = "fast"
@@ -3670,6 +4812,11 @@ async def handle_fast_upload_photo_callback(update: Update, context: ContextType
     if not query:
         return
     await query.answer()
+    user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_upload_rules")
+    except Exception:
+        pass
     await query.edit_message_text(
         FAST_PHOTO_RULES_MESSAGE,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="pl_fast_show_ready")]]),
@@ -3684,6 +4831,10 @@ async def handle_fast_change_style_callback(update: Update, context: ContextType
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_change_style")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     gender = context.user_data.get(USERDATA_SUBJECT_GENDER) or profile.subject_gender or "female"
     credits = _generations_count_fast(profile)
@@ -3707,6 +4858,10 @@ async def handle_fast_show_ready_callback(update: Update, context: ContextTypes.
         return
     await query.answer()
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_show_ready")
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     gender = context.user_data.get(USERDATA_SUBJECT_GENDER) or profile.subject_gender or "female"
     style_id = context.user_data.get(USERDATA_FAST_SELECTED_STYLE)
@@ -3893,6 +5048,10 @@ async def handle_fast_style_callback(update: Update, context: ContextTypes.DEFAU
     _, style_id = query.data.split(":", 1)
     style_label = _fast_style_label(style_id)
     user_id = int(query.from_user.id) if query.from_user else 0
+    try:
+        store.log_event(user_id, "fast_style_select", {"style_id": style_id})
+    except Exception:
+        pass
     profile = store.get_user(user_id)
     if _generations_count_fast(profile) <= 0:
         context.user_data[USERDATA_FAST_SELECTED_STYLE] = style_id
@@ -4006,6 +5165,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     mode = context.user_data.get(USERDATA_MODE) or "normal"
     if mode != "fast":
         return
+    try:
+        store.log_event(user_id, "text_input", {"mode": mode})
+    except Exception:
+        pass
     selected_style = context.user_data.get(USERDATA_FAST_SELECTED_STYLE)
     if selected_style == "custom":
         text = (update.message.text or "").strip()
@@ -4087,7 +5250,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     mode = context.user_data.get(USERDATA_MODE) or "normal"
     # Fallback: Mini App оплата — user_data не доходит из webhook/poll, проверяем БД
-    if mode != "persona_pack_upload":
+    if mode != "persona_pack_upload" and not _use_unified_pack_persona_flow():
         pending_pack_id = store.get_pending_pack_upload(user_id)
         if pending_pack_id is not None:
             context.user_data[USERDATA_MODE] = "persona_pack_upload"
@@ -4096,6 +5259,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
             context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
             mode = "persona_pack_upload"
+    try:
+        store.log_event(user_id, "photo_upload", {"mode": mode})
+    except Exception:
+        pass
     logger.info(f"[Photo Handler] Режим: {mode}, user {update.effective_user.id}")
     photo = update.message.photo[-1]  # самое большое
 
@@ -4108,13 +5275,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if mode == "persona_pack_upload" and context.user_data.get(USERDATA_PERSONA_PACK_WAITING_UPLOAD):
         ids = list(context.user_data.get(USERDATA_PERSONA_PACK_PHOTOS, []))
         if len(ids) >= 10:
-            await update.message.reply_text("Уже загружено 10 фото для пака. Нажмите «Сбросить фото пака» или дождитесь результата.")
+            await update.message.reply_text("Уже загружено 10 фото для фотосета. Нажмите «Сбросить фото фотосета» или дождитесь результата.")
             return
         ids.append(photo.file_id)
         context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = ids
         count = len(ids)
         if count < 10:
-            text = f"Фото для пака {count}/10 получено. Осталось {10 - count}."
+            text = f"Фото для фотосета {count}/10 получено. Осталось {10 - count}."
             msg = await update.message.reply_text(text, reply_markup=_persona_pack_upload_keyboard())
             upload_msg_ids = list(context.user_data.get(USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS, []))
             upload_msg_ids.append(msg.message_id)
@@ -4123,11 +5290,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = False
             context.user_data[USERDATA_MODE] = "persona"
             store.clear_pending_pack_upload(user_id)
-            await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию пака…")
+            await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию фотосета…")
             pack_id = int(context.user_data.get(USERDATA_PERSONA_SELECTED_PACK_ID) or 0)
             offer = _find_pack_offer(pack_id)
             if not offer:
-                await update.message.reply_text("❌ Не удалось найти выбранный пак. Откройте «Готовые фотопаки» и выберите заново.")
+                await update.message.reply_text("❌ Не удалось найти выбранный фотосет. Откройте «Готовые фотосеты» и выберите заново.")
                 return
             context.application.create_task(
                 _run_persona_pack_generation(
@@ -4166,14 +5333,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data[USERDATA_PERSONA_UPLOAD_MSG_IDS] = []
             context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = False
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
-            context.user_data[USERDATA_ASTRIA_LORA_FILE_IDS] = list(ids)
-            await update.message.reply_text(
+            lora_file_ids = list(ids)
+            context.user_data[USERDATA_ASTRIA_LORA_FILE_IDS] = lora_file_ids
+            user_id = int(update.effective_user.id) if update.effective_user else 0
+            msg = await update.message.reply_text(
                 PERSONA_TRAINING_MESSAGE,
                 reply_markup=_persona_training_keyboard(),
             )
-            user_id = int(update.effective_user.id) if update.effective_user else 0
+            if _use_unified_pack_persona_flow() and store.get_pending_pack_upload(user_id) is not None:
+                context.user_data[USERDATA_PERSONA_TRAINING_MSG_ID] = msg.message_id
             context.application.create_task(
-                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True)
+                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
             )
         return
 
@@ -4183,7 +5353,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         profile = store.get_user(user_id)
         credits = getattr(profile, "persona_credits_remaining", 0) or 0
         pending = getattr(profile, "astria_lora_tune_id_pending", None)
-        if credits > 0 and not profile.astria_lora_tune_id:
+        has_pending_paid_photoset = _use_unified_pack_persona_flow() and store.get_pending_pack_upload(user_id) is not None
+        if (credits > 0 or has_pending_paid_photoset) and not profile.astria_lora_tune_id:
             # Есть pending (обучение шло, бот рестартовал) — показать «Проверить статус»
             if pending:
                 context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
@@ -4328,7 +5499,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     mode = context.user_data.get(USERDATA_MODE) or "normal"
-    if mode != "persona_pack_upload":
+    if mode != "persona_pack_upload" and not _use_unified_pack_persona_flow():
         pending_pack_id = store.get_pending_pack_upload(user_id)
         if pending_pack_id is not None:
             context.user_data[USERDATA_MODE] = "persona_pack_upload"
@@ -4337,16 +5508,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = []
             context.user_data[USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS] = []
             mode = "persona_pack_upload"
+    try:
+        store.log_event(user_id, "document_upload", {"mode": mode})
+    except Exception:
+        pass
     if mode == "persona_pack_upload" and context.user_data.get(USERDATA_PERSONA_PACK_WAITING_UPLOAD):
         ids = list(context.user_data.get(USERDATA_PERSONA_PACK_PHOTOS, []))
         if len(ids) >= 10:
-            await update.message.reply_text("Уже загружено 10 фото для пака. Нажмите «Сбросить фото пака» или дождитесь результата.")
+            await update.message.reply_text("Уже загружено 10 фото для фотосета. Нажмите «Сбросить фото фотосета» или дождитесь результата.")
             return
         ids.append(doc.file_id)
         context.user_data[USERDATA_PERSONA_PACK_PHOTOS] = ids
         count = len(ids)
         if count < 10:
-            text = f"Фото для пака {count}/10 получено. Осталось {10 - count}."
+            text = f"Фото для фотосета {count}/10 получено. Осталось {10 - count}."
             msg = await update.message.reply_text(text, reply_markup=_persona_pack_upload_keyboard())
             upload_msg_ids = list(context.user_data.get(USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS, []))
             upload_msg_ids.append(msg.message_id)
@@ -4355,11 +5530,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data[USERDATA_PERSONA_PACK_WAITING_UPLOAD] = False
             context.user_data[USERDATA_MODE] = "persona"
             store.clear_pending_pack_upload(user_id)
-            await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию пака…")
+            await update.message.reply_text("Все 10 фото получил ✅\n\nЗапускаю генерацию фотосета…")
             pack_id = int(context.user_data.get(USERDATA_PERSONA_SELECTED_PACK_ID) or 0)
             offer = _find_pack_offer(pack_id)
             if not offer:
-                await update.message.reply_text("❌ Не удалось найти выбранный пак. Откройте «Готовые фотопаки» и выберите заново.")
+                await update.message.reply_text("❌ Не удалось найти выбранный фотосет. Откройте «Готовые фотосеты» и выберите заново.")
                 return
             context.application.create_task(
                 _run_persona_pack_generation(
@@ -4398,16 +5573,31 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data[USERDATA_PERSONA_UPLOAD_MSG_IDS] = []
             context.user_data[USERDATA_PERSONA_WAITING_UPLOAD] = False
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
-            context.user_data[USERDATA_ASTRIA_LORA_FILE_IDS] = list(ids)
-            await update.message.reply_text(
+            lora_file_ids = list(ids)
+            context.user_data[USERDATA_ASTRIA_LORA_FILE_IDS] = lora_file_ids
+            user_id = int(update.effective_user.id) if update.effective_user else 0
+            msg = await update.message.reply_text(
                 PERSONA_TRAINING_MESSAGE,
                 reply_markup=_persona_training_keyboard(),
             )
-            user_id = int(update.effective_user.id) if update.effective_user else 0
+            if _use_unified_pack_persona_flow() and store.get_pending_pack_upload(user_id) is not None:
+                context.user_data[USERDATA_PERSONA_TRAINING_MSG_ID] = msg.message_id
             context.application.create_task(
-                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True)
+                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
             )
         return
+
+    # Режим Persona: оплата фотосета прошла, но пользователь ещё не нажал «Всё понятно»
+    if mode == "persona" and not context.user_data.get(USERDATA_PERSONA_WAITING_UPLOAD):
+        _user_id = int(update.effective_user.id) if update.effective_user else 0
+        _profile = store.get_user(_user_id)
+        has_pending_paid_photoset = _use_unified_pack_persona_flow() and store.get_pending_pack_upload(_user_id) is not None
+        if has_pending_paid_photoset and not getattr(_profile, "astria_lora_tune_id", None):
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
+            ])
+            await update.message.reply_text("Правила прочитали? 🫶", reply_markup=kb)
+            return
 
     # Режим Persona (превью): показать редирект в Персону или Экспресс
     if mode == "persona":
@@ -4614,8 +5804,12 @@ async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         await query.answer()
         user_id = update.effective_user.id
+        try:
+            store.log_event(user_id, "reset")
+        except Exception:
+            pass
         logger.info(f"Очистка данных для user {user_id}")
-        
+
         # Полная очистка user_data
         context.user_data.pop(USERDATA_PHOTO_FILE_IDS, None)
         context.user_data.pop(USERDATA_ASTRIA_FACEID_FILE_IDS, None)
@@ -4650,7 +5844,8 @@ async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def _start_astria_lora(
-    context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, from_persona: bool = False
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, from_persona: bool = False,
+    file_ids: list | None = None,
 ) -> None:
     """Создаёт LoRA tune из 10 фото через Astria API. from_persona=True — поток Персоны."""
     logger.info(f"[LoRA] ========== НАЧАЛО создания LoRA для user {user_id} ==========")
@@ -4658,7 +5853,7 @@ async def _start_astria_lora(
     if gen_lock is None:
         logger.warning(f"[LoRA] ❌ Lock уже занят для user {user_id}, пропускаю")
         return
-    
+
     try:
         settings = load_settings()
         logger.info(f"[LoRA] Настройки загружены, проверяю API ключ...")
@@ -4667,24 +5862,22 @@ async def _start_astria_lora(
             await context.bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
             return
         logger.info(f"[LoRA] API ключ найден (длина: {len(settings.astria_api_key)})")
-        
-        file_ids = list(context.user_data.get(USERDATA_ASTRIA_LORA_FILE_IDS, []))
-        logger.info(f"[LoRA] Получено file_ids: {len(file_ids)}")
+
+        if file_ids is None:
+            file_ids = list(context.user_data.get(USERDATA_ASTRIA_LORA_FILE_IDS, []))
+            logger.info(f"[LoRA] file_ids из user_data: {len(file_ids)}")
+        else:
+            logger.info(f"[LoRA] file_ids переданы явно: {len(file_ids)}")
         if len(file_ids) < 10:
-            logger.warning(f"[LoRA] ❌ Недостаточно фото: {len(file_ids)}/10")
+            logger.warning(f"[LoRA] ❌ Недостаточно фото: {len(file_ids)}/10, user_id={user_id}")
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"Нужно 10 фото. Сейчас {len(file_ids)}/10. Отправь ещё {10 - len(file_ids)} фото."
             )
             return
         
-        # Исторически обучение шло с class name = "person".
-        # Для dev можно переключить на man/woman через PRISMALAB_PERSONA_LORA_NAME_MODE.
+        # Для persona-flow всегда обучаем как "person" (лучшее качество для стилей).
         name = "person"
-        if from_persona:
-            profile_for_name = store.get_user(user_id)
-            gender_for_name = profile_for_name.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER)
-            name = _persona_lora_name(gender_for_name)
         
         # Скачиваем все 10 фото (с обработкой таймаутов)
         image_bytes_list = []
@@ -4709,6 +5902,10 @@ async def _start_astria_lora(
         logger.info(f"[LoRA] Начинаю создание LoRA tune через Astria API...")
         from prismalab.astria_client import create_lora_tune_and_wait
         
+        def _on_lora_created(tid: str) -> None:
+            store.set_astria_lora_tune_pending(user_id=user_id, tune_id=tid)
+            store.set_persona_lora_class_name(user_id=user_id, class_name=name)
+
         logger.info(f"[LoRA] Вызываю create_lora_tune_and_wait с параметрами: name={name}, base_tune_id=1504944, preset=flux-lora-portrait")
         result = await create_lora_tune_and_wait(
             api_key=settings.astria_api_key,
@@ -4717,7 +5914,7 @@ async def _start_astria_lora(
             image_bytes_list=image_bytes_list,
             base_tune_id="1504944",  # Flux1.dev из галереи (проверенная конфигурация для LoRA)
             preset="flux-lora-portrait",  # Рекомендуется для людей
-            on_created=lambda tid: store.set_astria_lora_tune_pending(user_id=user_id, tune_id=tid),
+            on_created=_on_lora_created,
             max_seconds=7200,  # До 2 часов на training (увеличено с 1 часа)
             poll_seconds=15.0,
         )
@@ -4729,11 +5926,19 @@ async def _start_astria_lora(
             await context.bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
             return
         
-        store.set_astria_lora_tune(user_id=user_id, tune_id=result.tune_id)
+        store.set_astria_lora_tune(user_id=user_id, tune_id=result.tune_id, class_name=name)
         context.user_data.pop(USERDATA_ASTRIA_LORA_FILE_IDS, None)
         
         if from_persona:
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
+            gen_lock.release()
+            gen_lock = None
+            if await _start_pending_paid_photoset_after_persona(
+                context=context,
+                chat_id=chat_id,
+                user_id=user_id,
+            ):
+                return
             profile = store.get_user(user_id)
             credits = profile.persona_credits_remaining
             gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
@@ -4771,7 +5976,8 @@ async def _start_astria_lora(
         msg = "Что-то пошло не так, персона не создалась. Загрузите фото заново или напишите в поддержку." if from_persona else USER_FRIENDLY_ERROR
         await context.bot.send_message(chat_id=chat_id, text=msg)
     finally:
-        gen_lock.release()
+        if gen_lock is not None:
+            gen_lock.release()
 
 
 async def _run_style_job(
@@ -4896,8 +6102,10 @@ async def _run_style_job(
                 lora_weight = 1.1  # Вес LoRA для сходства (1.0–1.2)
                 
                 # Промпт для Astria LoRA (lora_prompt_override — для Персоны)
-                # LoRA обучается с name="person", поэтому всегда "ohwx person"
-                ohwx_token = "ohwx person"
+                # Токен должен совпадать с name при обучении: person (бот) или woman/man (пак)
+                stored_class = getattr(user_profile, "persona_lora_class_name", None) if user_profile else None
+                lora_class = stored_class or "person"
+                ohwx_token = f"ohwx {lora_class}"
                 if lora_prompt_override:
                     english_prompt = lora_prompt_override
                 else:
@@ -6370,6 +7578,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_persona_style_callback, pattern="^pl_persona_style:"))
     application.add_handler(CallbackQueryHandler(handle_persona_packs_callback, pattern="^pl_persona_packs$"))
     application.add_handler(CallbackQueryHandler(handle_persona_pack_buy_callback, pattern="^pl_persona_pack_buy:"))
+    application.add_handler(CallbackQueryHandler(handle_persona_pack_retry_callback, pattern="^pl_persona_pack_retry:"))
     application.add_handler(CallbackQueryHandler(handle_persona_back_callback, pattern="^pl_persona_back$"))
     application.add_handler(CallbackQueryHandler(handle_start_tariffs_callback, pattern="^pl_start_tariffs$"))
     application.add_handler(CallbackQueryHandler(handle_start_examples_callback, pattern="^pl_start_examples$"))
@@ -6423,6 +7632,9 @@ def main() -> None:
             # 21:00 MSK = 18:00 UTC
             job_queue.run_daily(daily_report_job, time=dt_time(hour=18, minute=0, second=0))
             logger.info("Дневной отчёт запланирован на 21:00 MSK")
+            # Восстановление прерванных pack runs каждые 5 мин (бот рестарт во время обучения pack tune)
+            job_queue.run_repeating(_recover_pending_pack_runs, interval=300, first=60)
+            logger.info("Pack recovery job: каждые 5 мин")
 
         default_commands = [
             BotCommand("menu", "🏠 Главное меню"),

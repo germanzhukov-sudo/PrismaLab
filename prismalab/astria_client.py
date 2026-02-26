@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import json
@@ -8,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import requests
+
+logger = logging.getLogger("prismalab")
 
 
 class AstriaError(RuntimeError):
@@ -548,7 +551,8 @@ def _create_lora_tune(
     api_key: str,
     name: str,
     title: str,
-    image_bytes_list: list[bytes],
+    image_bytes_list: list[bytes] | None = None,
+    image_urls: list[str] | None = None,
     base_tune_id: str,  # 1504944 для Flux1.dev (проверенная конфигурация для LoRA)
     preset: str = "flux-lora-portrait",  # flux-lora-portrait для людей
     callback: str | None = None,
@@ -563,12 +567,14 @@ def _create_lora_tune(
         raise AstriaError("PRISMALAB_ASTRIA_API_KEY не задан")
     if not base_tune_id:
         raise AstriaError("base_tune_id обязателен для LoRA (1504944 для Flux1.dev)")
+    if not image_bytes_list and not image_urls:
+        raise AstriaError("Нужны train-изображения: image_bytes_list или image_urls")
     
     url = "https://api.astria.ai/tunes"
     
     # Подготавливаем файлы для multipart/form-data
     files = []
-    for idx, image_bytes in enumerate(image_bytes_list):
+    for idx, image_bytes in enumerate(image_bytes_list or []):
         import imghdr
         image_type = "png"
         if image_bytes:
@@ -601,6 +607,9 @@ def _create_lora_tune(
     logger.info(f"[LoRA] Передаю token='ohwx' для base_tune_id={base_tune_id}")
     if callback:
         data["tune[callback]"] = callback
+    if image_urls:
+        for idx, image_url in enumerate(image_urls):
+            data[f"tune[image_urls][{idx}]"] = str(image_url)
     
     headers = {"Authorization": f"Bearer {api_key}"}
     
@@ -608,7 +617,10 @@ def _create_lora_tune(
     data_for_log = {k: v for k, v in data.items()}
     logger.info(f"[LoRA] Отправляю запрос на создание LoRA: base_tune_id={base_tune_id}, model_type={data.get('tune[model_type]')}, data keys={list(data_for_log.keys())}, token в data: {'tune[token]' in data_for_log}")
     
-    r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
+    if files:
+        r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
+    else:
+        r = requests.post(url, headers=headers, data=data, timeout=timeout_s)
     if r.status_code >= 400:
         error_text = r.text[:500] if r.text else "Нет текста ошибки"
         raise AstriaError(f"Astria HTTP {r.status_code} при создании LoRA tune: {error_text}")
@@ -620,7 +632,8 @@ async def create_lora_tune_and_wait(
     api_key: str,
     name: str,
     title: str,
-    image_bytes_list: list[bytes],
+    image_bytes_list: list[bytes] | None = None,
+    image_urls: list[str] | None = None,
     base_tune_id: str = "1504944",  # Flux1.dev из галереи
     preset: str = "flux-lora-portrait",
     callback: str | None = None,
@@ -649,6 +662,7 @@ async def create_lora_tune_and_wait(
         name=name,
         title=title,
         image_bytes_list=image_bytes_list,
+        image_urls=image_urls,
         base_tune_id=base_tune_id,
         preset=preset,
         callback=callback,
@@ -869,6 +883,11 @@ def _collect_prompt_images(prompts: list[dict[str, Any]]) -> list[str]:
     return uniq
 
 
+def collect_prompt_image_urls(prompts: list[dict[str, Any]]) -> list[str]:
+    """Публичная обёртка: извлекает URL изображений из массива prompts (для callback)."""
+    return _collect_prompt_images(prompts)
+
+
 async def list_gallery_packs(
     *,
     api_key: str,
@@ -954,17 +973,26 @@ async def get_tune_prompt_images(
     return _collect_prompt_images(prompts)
 
 
-async def get_tune_prompt_ids(
+async def get_tune_prompts(
     *,
     api_key: str,
     tune_id: str,
-) -> set[str]:
-    prompts = await asyncio.to_thread(
+) -> list[dict[str, Any]]:
+    """Возвращает сырой список prompts для tune (для fallback polling pack)."""
+    return await asyncio.to_thread(
         _get_tune_prompts,
         api_key=api_key,
         tune_id=tune_id,
         timeout_s=_timeout_s(40.0),
     )
+
+
+async def get_tune_prompt_ids(
+    *,
+    api_key: str,
+    tune_id: str,
+) -> set[str]:
+    prompts = await get_tune_prompts(api_key=api_key, tune_id=tune_id)
     ids: set[str] = set()
     for p in prompts:
         pid = str(p.get("id") or "").strip()
@@ -1026,6 +1054,10 @@ async def wait_pack_images(
                 )
             )
             if transient and time.monotonic() <= deadline:
+                logger.info(
+                    "pack wait_pack_images: transient error tune_id=%s retry: %s",
+                    tune_id, msg[:100],
+                )
                 await asyncio.sleep(poll_seconds)
                 continue
             if time.monotonic() > deadline and last_urls:
@@ -1055,6 +1087,10 @@ async def wait_pack_images(
                 last_progress_at = time.monotonic()
             last_urls = fresh_urls
         if len(fresh_urls) >= target:
+            logger.info(
+                "pack wait_pack_images: готово tune_id=%s urls=%s (источник: polling)",
+                tune_id, len(fresh_urls),
+            )
             return fresh_urls
         all_done = True
         for prompt in relevant_prompts:
@@ -1075,6 +1111,10 @@ async def wait_pack_images(
                 all_done = False
                 break
         if all_done and last_urls:
+            logger.info(
+                "pack wait_pack_images: all_done tune_id=%s urls=%s (источник: polling)",
+                tune_id, len(last_urls),
+            )
             return last_urls
         if all_done and saw_new_prompts and not last_urls:
             raise AstriaError(f"Пак завершился без изображений для tune {tune_id}")

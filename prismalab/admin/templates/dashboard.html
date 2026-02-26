@@ -70,9 +70,25 @@
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card all-time">
                 <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
-                <div class="help-tooltip">Количество покупок Персоны (создание + докупка)</div>
-                <div class="stat-value">{{ all_time.persona_purchases }}</div>
-                <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона</div>
+                <div class="help-tooltip">Покупки Персоны: первое создание модели</div>
+                <div class="stat-value">{{ all_time.persona_create_purchases }}</div>
+                <div class="stat-label"><i class="bi bi-person-plus"></i> Создание персоны</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Докупка кредитов Персоны (без создания модели)</div>
+                <div class="stat-value">{{ all_time.persona_topup_purchases }}</div>
+                <div class="stat-label"><i class="bi bi-person-badge"></i> Докуп кредитов</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Покупки фотопаков</div>
+                <div class="stat-value">{{ all_time.pack_purchases }}</div>
+                <div class="stat-label"><i class="bi bi-box-seam"></i> Покупок паков</div>
             </div>
         </div>
     </div>
@@ -174,10 +190,26 @@
         </div>
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card">
-                <div class="stat-value">{{ stats.payments.persona.count }}</div>
-                <div class="stat-label"><i class="bi bi-person-badge"></i> Покупок Персона (₽{{ "%.0f"|format(stats.payments.persona.revenue) }})</div>
+                <div class="stat-value">{{ stats.payments.persona_create.count }}</div>
+                <div class="stat-label"><i class="bi bi-person-plus"></i> Создание персоны (₽{{ "%.0f"|format(stats.payments.persona_create.revenue) }})</div>
             </div>
         </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.payments.persona_topup.count }}</div>
+                <div class="stat-label"><i class="bi bi-person-badge"></i> Докуп кредитов (₽{{ "%.0f"|format(stats.payments.persona_topup.revenue) }})</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.payments.pack.count }}</div>
+                <div class="stat-label"><i class="bi bi-box-seam"></i> Фотопаки (₽{{ "%.0f"|format(stats.payments.pack.revenue) }})</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Генерации за период -->
+    <div class="row mb-4">
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card">
                 <div class="stat-value">{{ stats.generations.fast }}</div>
@@ -190,6 +222,12 @@
                 <div class="stat-label"><i class="bi bi-person-badge"></i> Фото Персона</div>
             </div>
         </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.free }}</div>
+                <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
+            </div>
+        </div>
     </div>
 
     <!-- Себестоимость за период -->
@@ -200,13 +238,48 @@
                 <div class="stat-label"><i class="bi bi-calculator"></i> Себестоимость</div>
             </div>
         </div>
+        {% if stats.costs.packs > 0 %}
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card">
-                <div class="stat-value">{{ stats.generations.free }}</div>
-                <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.packs) }}</div>
+                <div class="stat-label"><i class="bi bi-box-seam"></i> Себест. паков</div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Топ паков за период -->
+    {% if pack_stats %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <i class="bi bi-box-seam me-2"></i>Паки за период
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Пак</th>
+                                <th>Генераций</th>
+                                <th>Фото отправлено</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for ps in pack_stats %}
+                            <tr>
+                                <td>{{ ps.pack_title or ('Pack ' ~ ps.pack_id) }}</td>
+                                <td>{{ ps.generations }}</td>
+                                <td>{{ ps.total_images }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
+    {% endif %}
 </div>
 
 <!-- Графики -->
@@ -317,10 +390,15 @@
     new Chart(document.getElementById('productsChart'), {
         type: 'doughnut',
         data: {
-            labels: ['Экспресс', 'Персона'],
+            labels: ['Экспресс', 'Создание персоны', 'Докуп кредитов', 'Фотопаки'],
             datasets: [{
-                data: [stats.payments.express.revenue, stats.payments.persona.revenue],
-                backgroundColor: ['#28a745', '#667eea']
+                data: [
+                    stats.payments.express.revenue,
+                    stats.payments.persona_create.revenue,
+                    stats.payments.persona_topup.revenue,
+                    stats.payments.pack.revenue
+                ],
+                backgroundColor: ['#28a745', '#764ba2', '#667eea', '#fd7e14']
             }]
         },
         options: { responsive: true }

@@ -47,6 +47,37 @@
                         <small class="text-muted">Персона</small>
                     </div>
                 </div>
+
+                <hr>
+                <div class="mb-2"><strong>Персона (LoRA)</strong></div>
+                <div class="mb-1">
+                    <small class="text-muted">Tune ID (стили):</small>
+                    {% if profile.astria_lora_tune_id %}
+                    <span class="badge bg-success">{{ profile.astria_lora_tune_id }}</span>
+                    {% elif profile.astria_lora_tune_id_pending %}
+                    <span class="badge bg-warning text-dark">pending: {{ profile.astria_lora_tune_id_pending }}</span>
+                    {% else %}
+                    <span class="text-muted">нет</span>
+                    {% endif %}
+                </div>
+                <div class="mb-1">
+                    <small class="text-muted">Pack Tune ID:</small>
+                    {% if profile.astria_lora_pack_tune_id %}
+                    <span class="badge" style="background: #fd7e14;">{{ profile.astria_lora_pack_tune_id }}</span>
+                    {% elif profile.astria_lora_pack_tune_id_pending %}
+                    <span class="badge bg-warning text-dark">pending: {{ profile.astria_lora_pack_tune_id_pending }}</span>
+                    {% else %}
+                    <span class="text-muted">нет</span>
+                    {% endif %}
+                </div>
+                <div class="mb-1">
+                    <small class="text-muted">Class:</small>
+                    {% if profile.persona_lora_class_name %}
+                    <code>{{ profile.persona_lora_class_name }}</code>
+                    {% else %}
+                    <span class="text-muted">нет</span>
+                    {% endif %}
+                </div>
             </div>
         </div>
 
@@ -102,8 +133,14 @@
                             <td>
                                 {% if p.product_type == 'fast' %}
                                 <span class="badge bg-success">Экспресс</span>
+                                {% elif p.product_type == 'persona_create' %}
+                                <span class="badge" style="background: #764ba2;">Персона New</span>
+                                {% elif p.product_type == 'persona_topup' %}
+                                <span class="badge" style="background: #667eea;">Персона+</span>
+                                {% elif p.product_type == 'persona_pack' %}
+                                <span class="badge bg-warning text-dark">Фотопак</span>
                                 {% else %}
-                                <span class="badge" style="background: #667eea;">Персона</span>
+                                <span class="badge bg-secondary">{{ p.product_type }}</span>
                                 {% endif %}
                             </td>
                             <td>{{ p.credits }}</td>

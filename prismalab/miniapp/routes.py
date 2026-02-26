@@ -28,7 +28,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 BOT_TOKEN = os.getenv("PRISMALAB_BOT_TOKEN", "")
 ASTRIA_API_KEY = os.getenv("PRISMALAB_ASTRIA_API_KEY", "")
 MINIAPP_URL = os.getenv("MINIAPP_URL", "")
-OWNER_ID = int(os.getenv("PRISMALAB_OWNER_ID") or "0")
 
 # Стили (дублируем из bot.py, чтобы не тянуть весь бот)
 FAST_STYLES_MALE = [
@@ -140,7 +139,10 @@ async def api_auth(request: Request):
         },
         "gender": profile.subject_gender,
         "packs_enabled": True,
-        "has_persona": bool(getattr(profile, "astria_lora_tune_id", None)),
+        "has_persona": bool(
+            getattr(profile, "astria_lora_tune_id", None)
+            or getattr(profile, "astria_lora_pack_tune_id", None)
+        ),
         "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
     })
 
@@ -362,14 +364,14 @@ async def api_status(request: Request):
 
 # ========== Паки Astria ==========
 
-# Паки, которые всегда в списке (даже если нет в env)
+# Паки, которые всегда в списке (даже если нет в env). Child и animals — не трогать порядок.
 DEFAULT_PACKS: list[dict] = [
-    {"id": 248, "title": "Dog Art", "price_rub": 990, "expected_images": 16, "class_name": "dog", "category": "animals"},
-    {"id": 682, "title": "Cat Meowgic", "price_rub": 990, "expected_images": 43, "class_name": "cat", "category": "animals"},
-    {"id": 593, "title": "Kids Halloween", "price_rub": 790, "expected_images": 19, "class_name": "boy", "category": "child"},
-    {"id": 859, "title": "Kids Holiday", "price_rub": 790, "expected_images": 40, "class_name": "girl", "category": "child"},
-    {"id": 2152, "title": "Nordic Girl", "price_rub": 790, "expected_images": 44, "class_name": "girl", "category": "child"},
-    {"id": 2501, "title": "Newborn Dreams", "price_rub": 790, "expected_images": 80, "class_name": "girl", "category": "child"},
+    {"id": 248, "title": "Собачий арт", "price_rub": 499, "expected_images": 16, "class_name": "dog", "category": "animals"},
+    {"id": 682, "title": "Котомагия", "price_rub": 799, "expected_images": 43, "class_name": "cat", "category": "animals"},
+    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499, "expected_images": 19, "class_name": "boy", "category": "child"},
+    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799, "expected_images": 40, "class_name": "girl", "category": "child"},
+    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799, "expected_images": 44, "class_name": "girl", "category": "child"},
+    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499, "expected_images": 80, "class_name": "girl", "category": "child"},
 ]
 
 # Маппинг pack_id → category (если не задан в env)
@@ -425,19 +427,189 @@ def _load_pack_offers() -> list[dict]:
     return result
 
 
+# Ручной override обложек для паков, где Astria отдаёт мужчину в cover
+PACK_COVER_OVERRIDES: dict[int, str] = {
+    236: "https://mp.astria.ai/hga2j0ptkyn1unwm1naek1ayf6k0",  # Игра престолов
+    623: "https://mp.astria.ai/asxb0jc3qiwkbknr7m9a71rgnowv",  # Красная дорожка
+    3576: "https://mp.astria.ai/svn1catp91nxirtwot2nmt6mx5op",  # Блеск и бизнес
+}
+
+# Ручной override примеров — только женские фото в ленте пака
+PACK_EXAMPLES_OVERRIDES: dict[int, list[str]] = {
+    236: [
+        "https://mp.astria.ai/hga2j0ptkyn1unwm1naek1ayf6k0",
+        "https://mp.astria.ai/9vtitu8pl1v1bqw4uibj4n3hz80a",
+        "https://mp.astria.ai/f9d14hlp4w11agywmkc4zh772oqc",
+        "https://mp.astria.ai/ohwdtcya4n7od7ye34v7449y4un3",
+        "https://mp.astria.ai/v8irl07y2307mxrr6wy12dktv5ya",
+        "https://mp.astria.ai/3f18jbt6pp7aqo50inredyb5ohw8",
+        "https://mp.astria.ai/ufknksimiibkj3r28to9ws6nkv3e",
+        "https://mp.astria.ai/ir4987ij5qtczduqilk385sdapbc",
+        "https://mp.astria.ai/yeai5u3hb6icn80lti24ujpdv753",
+        "https://mp.astria.ai/x8vqlw5dxxlm92tvv3ppb4ts9jgk",
+    ],
+    623: [
+        "https://mp.astria.ai/asxb0jc3qiwkbknr7m9a71rgnowv",
+        "https://mp.astria.ai/gydbv0tbodkbozvxld2r8a9hv10d",
+        "https://mp.astria.ai/a237lzgc7q46wlin8tfqoh8oey62",
+        "https://mp.astria.ai/jb8mlgus777inyeo694dtu2giwo0",
+        "https://mp.astria.ai/caoms98qwq06jpkp7f291hixd446",
+        "https://mp.astria.ai/yaouuw16b8qqkx17jf3yof80odlj",
+        "https://mp.astria.ai/bfayi5os3t7ihvq8hoinwd58f31v",
+        "https://mp.astria.ai/zj7z475q89486l36mnl4n79tfgjz",
+        "https://mp.astria.ai/cypp0uhf3s73lnq9oc25dpi97dd9",
+        "https://mp.astria.ai/d5q470ovx5mk6bezhy9i33nq96wt",
+        "https://mp.astria.ai/muvbot2a30wcdf3upbg4n6hdw78n",
+        "https://mp.astria.ai/qgsy24f2an4jfwjpk4se926elbfv",
+        "https://mp.astria.ai/8uxtoxuzoaqmwh48pu10t5ykvigd",
+        "https://mp.astria.ai/ct2r8w6hli41i1flwwwh3lx2ivqb",
+        "https://mp.astria.ai/tsddiam7re9bva0dru6e479ds4eb",
+    ],
+    3576: [
+        "https://mp.astria.ai/svn1catp91nxirtwot2nmt6mx5op",
+        "https://mp.astria.ai/3u5q2m35e0ebrv6r3l4bmitd23t6",
+        "https://mp.astria.ai/z3lksic1hmuf9d9xpjiiaknsoy1e",
+        "https://mp.astria.ai/kz8ezioaa4ddvruw54chewmyfom7",
+        "https://mp.astria.ai/v5uxczakvu6kpwr2z62ipcmhebw6",
+        "https://mp.astria.ai/6zqv2zqayvlt8snkie5ly1ts0v8t",
+        "https://mp.astria.ai/iorwtqivrbeb0tl336tri24ww1rx",
+        "https://mp.astria.ai/53mp9ecmrgy2utanvqji5gmzn2qh",
+        "https://mp.astria.ai/084a4ct2g04qpolgdm9avlivxngw",
+        "https://mp.astria.ai/ttlxmq3kbnndgs7waonagco5v29z",
+        "https://mp.astria.ai/y90vdyg26srup67vrq1638hhayi7",
+        "https://mp.astria.ai/8dpii3pjvx2gc76zdk8xv7ja27a8",
+        "https://mp.astria.ai/x39iywqtemkjyzol49pg004nc1hr",
+        "https://mp.astria.ai/52ni4iklqvurqztu0rysn1mys4xg",
+        "https://mp.astria.ai/thxpjl9r6hfvrnawcap0d0joytlv",
+    ],
+}
+
 # Кеш: pack_id → {"data": {...}, "ts": float}
-_pack_cache: dict[int, dict] = {}
+_pack_cache: dict[tuple[int, str], dict] = {}
 _PACK_CACHE_TTL = 3600  # 1 час
+_PACKS_FETCH_CONCURRENCY = 4
+_gallery_cache: dict[str, Any] = {"packs": {}, "ts": 0.0}
+_GALLERY_CACHE_TTL = 300  # 5 минут
 
 
-async def _fetch_pack_data(pack_id: int) -> dict:
-    """Загружает данные пака из Astria API и кеширует на 1 час."""
+def _resolve_pack_class_key(offer: dict) -> str:
+    category = str(offer.get("category") or "").strip().lower()
+    if category == "female":
+        return "woman"
+    class_name = str(offer.get("class_name") or "").strip().lower()
+    aliases = {
+        "female": "woman",
+        "male": "man",
+    }
+    resolved = aliases.get(class_name, class_name)
+    return resolved or "woman"
+
+
+def _extract_pack_cost_info(class_cost: Any) -> tuple[str, str]:
+    if not isinstance(class_cost, dict):
+        return "", ""
+    for key in ("cost", "cost_mc", "price", "amount"):
+        value = class_cost.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if not value_str:
+            continue
+        return str(key), value_str
+    return "", ""
+
+
+def _resolve_pack_expected_images(offer: dict, pack_data: dict, *, pack_id: int | None = None) -> int:
+    """Точное количество фото для пака: сначала из Astria costs[class_name].num_images, потом fallback в конфиг."""
+    try:
+        configured_expected = int(offer.get("expected_images") or 0)
+    except Exception:
+        configured_expected = 0
+
+    class_key = _resolve_pack_class_key(offer)
+
+    by_class = pack_data.get("num_images_by_class")
+    if isinstance(by_class, dict):
+        variants = [class_key]
+        if class_key == "woman":
+            variants.extend(["female", "person"])
+        elif class_key == "man":
+            variants.extend(["male", "person"])
+        elif class_key in ("girl", "boy"):
+            variants.extend(["child", "person", "woman", "man", "female", "male"])
+        elif class_key in ("dog", "cat"):
+            variants.extend(["person", "woman", "man", "female", "male"])
+        elif class_key in {"female", "male"}:
+            variants.append("person")
+        else:
+            variants.extend(["person", "woman", "man", "female", "male"])
+        for key in variants:
+            value = by_class.get(key)
+            if isinstance(value, int) and value > 0:
+                logger.debug("pack %s expected_images=%s (Astria class=%s)", pack_id, value, key)
+                return value
+        default_num_images = pack_data.get("default_num_images")
+        if isinstance(default_num_images, int) and default_num_images > 0:
+            logger.debug("pack %s expected_images=%s (Astria default)", pack_id, default_num_images)
+            return default_num_images
+        # Fallback: если Astria вернул данные, но класс не совпал — берём любое значение из num_images_by_class
+        for v in by_class.values():
+            if isinstance(v, int) and v > 0:
+                logger.debug("pack %s expected_images=%s (Astria fallback, class_key=%s not in %s)", pack_id, v, class_key, list(by_class.keys()))
+                return v
+
+    if configured_expected > 0:
+        logger.debug("pack %s expected_images=%s (config)", pack_id, configured_expected)
+        return configured_expected
+    return 20
+
+
+def _resolve_pack_cost_data(offer: dict, pack_data: dict) -> tuple[str, str]:
+    class_key = _resolve_pack_class_key(offer)
+    by_class = pack_data.get("cost_by_class")
+    if isinstance(by_class, dict):
+        variants = [class_key]
+        if class_key == "woman":
+            variants.extend(["female", "person"])
+        elif class_key == "man":
+            variants.extend(["male", "person"])
+        elif class_key in {"female", "male"}:
+            variants.append("person")
+        else:
+            variants.extend(["person", "woman", "man", "female", "male"])
+        for key in variants:
+            value = by_class.get(key)
+            if isinstance(value, dict):
+                field = str(value.get("field") or "").strip()
+                cost_value = str(value.get("value") or "").strip()
+                if field and cost_value:
+                    return field, cost_value
+        default_cost = pack_data.get("default_cost")
+        if isinstance(default_cost, dict):
+            field = str(default_cost.get("field") or "").strip()
+            cost_value = str(default_cost.get("value") or "").strip()
+            if field and cost_value:
+                return field, cost_value
+    return "", ""
+
+
+async def _fetch_pack_data(pack_id: int, *, use_cache: bool = True, filter_class: str = "") -> dict:
+    """Загружает данные пака из Astria API и кеширует на 1 час. Ключ кэша: (pack_id, filter_class)."""
     import time as _time
-    cached = _pack_cache.get(pack_id)
-    if cached and (_time.time() - cached["ts"]) < _PACK_CACHE_TTL:
-        return cached["data"]
+    cache_key = (pack_id, (filter_class or "").strip().lower())
+    if use_cache:
+        cached = _pack_cache.get(cache_key)
+        if cached and (_time.time() - cached["ts"]) < _PACK_CACHE_TTL:
+            return cached["data"]
     if not ASTRIA_API_KEY:
-        return {"cover_url": "", "examples": []}
+        return {
+            "cover_url": "",
+            "examples": [],
+            "num_images_by_class": {},
+            "cost_by_class": {},
+            "default_num_images": 0,
+            "default_cost": {},
+        }
     try:
         from prismalab.astria_client import _get_pack, _timeout_s
         pack_raw = await asyncio.to_thread(
@@ -447,11 +619,60 @@ async def _fetch_pack_data(pack_id: int) -> dict:
             timeout_s=_timeout_s(30.0),
         )
         cover_url = pack_raw.get("cover_url") or ""
-        # Примеры: prompts_per_class → для нашего class_name → images
+        num_images_by_class: dict[str, int] = {}
+        cost_by_class: dict[str, dict[str, str]] = {}
+        costs = pack_raw.get("costs")
+        if isinstance(costs, dict):
+            for class_name, class_cost in costs.items():
+                if not isinstance(class_cost, dict):
+                    continue
+                cls = str(class_name).strip().lower()
+                if not cls:
+                    continue
+                try:
+                    num_images = int(class_cost.get("num_images") or 0)
+                except Exception:
+                    num_images = 0
+                if num_images > 0:
+                    num_images_by_class[cls] = num_images
+                cost_field, cost_value = _extract_pack_cost_info(class_cost)
+                if cost_field and cost_value:
+                    cost_by_class[cls] = {"field": cost_field, "value": cost_value}
+        default_num_images = 0
+        unique_num_images = sorted(set(v for v in num_images_by_class.values() if isinstance(v, int) and v > 0))
+        if len(unique_num_images) == 1:
+            default_num_images = int(unique_num_images[0])
+        if default_num_images <= 0:
+            try:
+                top_level_num = int(pack_raw.get("num_images") or 0)
+                if top_level_num > 0:
+                    default_num_images = top_level_num
+            except Exception:
+                pass
+        default_cost: dict[str, str] = {}
+        unique_costs = sorted(set((v.get("field"), v.get("value")) for v in cost_by_class.values() if isinstance(v, dict)))
+        if len(unique_costs) == 1:
+            field, value = unique_costs[0]
+            if field and value:
+                default_cost = {"field": str(field), "value": str(value)}
+        # Примеры: prompts_per_class → фильтруем по class_name
         examples: list[str] = []
         prompts_per_class = pack_raw.get("prompts_per_class")
         if isinstance(prompts_per_class, dict):
+            # Определяем какие классы показывать
+            fc = filter_class.strip().lower()
+            allowed_classes = set()
+            if fc:
+                allowed_classes.add(fc)
+                # Алиасы: woman↔female, man↔male
+                aliases = {"woman": "female", "female": "woman", "man": "male", "male": "man"}
+                if fc in aliases:
+                    allowed_classes.add(aliases[fc])
+
             for class_name, prompts_list in prompts_per_class.items():
+                cls = str(class_name).strip().lower()
+                if allowed_classes and cls not in allowed_classes:
+                    continue
                 if not isinstance(prompts_list, list):
                     continue
                 for prompt_obj in prompts_list:
@@ -464,42 +685,229 @@ async def _fetch_pack_data(pack_id: int) -> dict:
                                 examples.append(img)
                     elif isinstance(imgs, str) and imgs.startswith("http"):
                         examples.append(imgs)
-        data = {"cover_url": cover_url, "examples": examples}
-        _pack_cache[pack_id] = {"data": data, "ts": __import__('time').time()}
+        # Для паков с filter_class используем первый пример как cover — чтобы не показывать мужчину в женских паках
+        if filter_class.strip() and examples:
+            cover_url = examples[0]
+        if pack_id in PACK_COVER_OVERRIDES:
+            cover_url = PACK_COVER_OVERRIDES[pack_id]
+        if pack_id in PACK_EXAMPLES_OVERRIDES:
+            examples = PACK_EXAMPLES_OVERRIDES[pack_id]
+        data = {
+            "cover_url": cover_url,
+            "examples": examples,
+            "num_images_by_class": num_images_by_class,
+            "cost_by_class": cost_by_class,
+            "default_num_images": default_num_images,
+            "default_cost": default_cost,
+        }
+        _pack_cache[cache_key] = {"data": data, "ts": __import__('time').time()}
         return data
     except Exception as e:
         logger.warning("Ошибка загрузки пака %s из Astria: %s", pack_id, e)
-        return {"cover_url": "", "examples": []}
+        return {
+            "cover_url": "",
+            "examples": [],
+            "num_images_by_class": {},
+            "cost_by_class": {},
+            "default_num_images": 0,
+            "default_cost": {},
+        }
+
+
+def _pack_data_from_raw(pack_raw: dict[str, Any], *, include_examples: bool, filter_class: str = "") -> dict[str, Any]:
+    cover_url = pack_raw.get("cover_url") or ""
+    num_images_by_class: dict[str, int] = {}
+    cost_by_class: dict[str, dict[str, str]] = {}
+    costs = pack_raw.get("costs")
+    if isinstance(costs, dict):
+        for class_name, class_cost in costs.items():
+            if not isinstance(class_cost, dict):
+                continue
+            cls = str(class_name).strip().lower()
+            if not cls:
+                continue
+            try:
+                num_images = int(class_cost.get("num_images") or 0)
+            except Exception:
+                num_images = 0
+            if num_images > 0:
+                num_images_by_class[cls] = num_images
+            cost_field, cost_value = _extract_pack_cost_info(class_cost)
+            if cost_field and cost_value:
+                cost_by_class[cls] = {"field": cost_field, "value": cost_value}
+
+    default_num_images = 0
+    unique_num_images = sorted(set(v for v in num_images_by_class.values() if isinstance(v, int) and v > 0))
+    if len(unique_num_images) == 1:
+        default_num_images = int(unique_num_images[0])
+    if default_num_images <= 0:
+        try:
+            top_level_num = int(pack_raw.get("num_images") or 0)
+            if top_level_num > 0:
+                default_num_images = top_level_num
+        except Exception:
+            pass
+
+    default_cost: dict[str, str] = {}
+    unique_costs = sorted(set((v.get("field"), v.get("value")) for v in cost_by_class.values() if isinstance(v, dict)))
+    if len(unique_costs) == 1:
+        field, value = unique_costs[0]
+        if field and value:
+            default_cost = {"field": str(field), "value": str(value)}
+
+    examples: list[str] = []
+    if include_examples:
+        prompts_per_class = pack_raw.get("prompts_per_class")
+        if isinstance(prompts_per_class, dict):
+            # Фильтруем по class_name
+            fc = filter_class.strip().lower()
+            allowed_classes = set()
+            if fc:
+                allowed_classes.add(fc)
+                aliases = {"woman": "female", "female": "woman", "man": "male", "male": "man"}
+                if fc in aliases:
+                    allowed_classes.add(aliases[fc])
+
+            for _class_name, prompts_list in prompts_per_class.items():
+                cls = str(_class_name).strip().lower()
+                if allowed_classes and cls not in allowed_classes:
+                    continue
+                if not isinstance(prompts_list, list):
+                    continue
+                for prompt_obj in prompts_list:
+                    if not isinstance(prompt_obj, dict):
+                        continue
+                    imgs = prompt_obj.get("images")
+                    if isinstance(imgs, list):
+                        for img in imgs:
+                            if isinstance(img, str) and img.startswith("http"):
+                                examples.append(img)
+                    elif isinstance(imgs, str) and imgs.startswith("http"):
+                        examples.append(imgs)
+
+    return {
+        "cover_url": cover_url,
+        "examples": examples,
+        "num_images_by_class": num_images_by_class,
+        "cost_by_class": cost_by_class,
+        "default_num_images": default_num_images,
+        "default_cost": default_cost,
+    }
+
+
+async def _fetch_gallery_pack_index(*, use_cache: bool = True) -> dict[int, dict[str, Any]]:
+    import time as _time
+    if use_cache and (_time.time() - float(_gallery_cache.get("ts") or 0.0)) < _GALLERY_CACHE_TTL:
+        packs = _gallery_cache.get("packs")
+        if isinstance(packs, dict):
+            return packs
+    if not ASTRIA_API_KEY:
+        return {}
+    try:
+        from prismalab.astria_client import _get_gallery_packs, _timeout_s
+        gallery_raw = await asyncio.to_thread(
+            _get_gallery_packs,
+            api_key=ASTRIA_API_KEY,
+            public=True,
+            listed=True,
+            timeout_s=_timeout_s(8.0),
+        )
+        index: dict[int, dict[str, Any]] = {}
+        if isinstance(gallery_raw, list):
+            for item in gallery_raw:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pack_id = int(item.get("id") or 0)
+                except Exception:
+                    pack_id = 0
+                if pack_id <= 0:
+                    continue
+                index[pack_id] = _pack_data_from_raw(item, include_examples=False)
+        _gallery_cache["packs"] = index
+        _gallery_cache["ts"] = _time.time()
+        return index
+    except Exception as e:
+        logger.warning("Ошибка загрузки gallery packs из Astria: %s", e)
+        return {}
 
 
 async def api_packs(request: Request):
-    """Список доступных паков с обложками. Только для owner."""
+    """Список доступных паков с обложками."""
     user = _get_user_from_request(request)
-    if not user or not OWNER_ID or user["user_id"] != OWNER_ID:
-        return JSONResponse({"packs": []})
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     offers = _load_pack_offers()
     if not offers:
         return JSONResponse({"packs": []})
-    # Параллельная загрузка всех паков из Astria API
-    pack_datas = await asyncio.gather(*[_fetch_pack_data(o["id"]) for o in offers])
+    # Gallery даёт cover_url, но без num_images (cost_mc_hash вместо costs).
+    # Всегда догружаем GET /p/:id для каждого пака — гарантированно получаем num_images из Astria.
+    gallery_index = await _fetch_gallery_pack_index(use_cache=True)
+    if not gallery_index:
+        try:
+            gallery_index = await asyncio.wait_for(_fetch_gallery_pack_index(use_cache=False), timeout=2.5)
+        except Exception:
+            gallery_index = {}
+
+    # Все паки — доп. запрос GET /p/:id для точного num_images
+    need_detail = [int(o["id"]) for o in offers]
+
+    # Параллельно догружаем детали паков
+    sem = asyncio.Semaphore(_PACKS_FETCH_CONCURRENCY)
+
+    # Маппинг pack_id → class_name из offer
+    _offer_class = {int(o["id"]): str(o.get("class_name") or "").lower() for o in offers}
+
+    async def _fetch_detail(pid: int) -> tuple[int, dict]:
+        async with sem:
+            data = await _fetch_pack_data(pid, filter_class=_offer_class.get(pid, ""))
+            return pid, data
+
+    if need_detail:
+        details = await asyncio.gather(*[_fetch_detail(pid) for pid in need_detail], return_exceptions=True)
+        for d in details:
+            if isinstance(d, Exception):
+                continue
+            pack_id, data = d
+            if isinstance(data, dict) and pack_id:
+                gallery_index[pack_id] = {**(gallery_index.get(pack_id) or {}), **data}
+
     result = []
-    for offer, pack_data in zip(offers, pack_datas):
+    for offer in offers:
+        pack_id = int(offer["id"])
+        pack_data = gallery_index.get(pack_id)
+        if not pack_data:
+            offer_class = str(offer.get("class_name") or "").strip().lower()
+            cache_key = (pack_id, offer_class)
+            cached = _pack_cache.get(cache_key)
+            if isinstance(cached, dict):
+                pack_data = cached.get("data")
+        if not isinstance(pack_data, dict):
+            pack_data = {
+                "cover_url": "",
+                "examples": [],
+                "num_images_by_class": {},
+                "cost_by_class": {},
+                "default_num_images": 0,
+                "default_cost": {},
+            }
+        expected_images = _resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
         result.append({
             "id": offer["id"],
             "title": offer["title"],
             "price_rub": offer["price_rub"],
-            "expected_images": offer["expected_images"],
-            "cover_url": pack_data["cover_url"],
+            "expected_images": expected_images,
+            "cover_url": pack_data.get("cover_url", ""),
             "category": offer.get("category", "female"),
         })
     return JSONResponse({"packs": result})
 
 
 async def api_pack_detail(request: Request):
-    """Детали пака с галереей примеров. Только для owner."""
+    """Детали пака с галереей примеров."""
     user = _get_user_from_request(request)
-    if not user or not OWNER_ID or user["user_id"] != OWNER_ID:
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     pack_id_str = request.path_params.get("pack_id", "")
     try:
         pack_id = int(pack_id_str)
@@ -509,19 +917,21 @@ async def api_pack_detail(request: Request):
     offer = next((o for o in offers if o["id"] == pack_id), None)
     if not offer:
         return JSONResponse({"error": "Pack not found"}, status_code=404)
-    pack_data = await _fetch_pack_data(pack_id)
+    # В карточке тоже используем кеш ради скорости.
+    pack_data = await _fetch_pack_data(pack_id, filter_class=str(offer.get("class_name") or ""))
+    expected_images = _resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
     return JSONResponse({
         "id": offer["id"],
         "title": offer["title"],
         "price_rub": offer["price_rub"],
-        "expected_images": offer["expected_images"],
+        "expected_images": expected_images,
         "cover_url": pack_data["cover_url"],
         "examples": pack_data["examples"],
     })
 
 
 async def api_pack_buy(request: Request):
-    """Создание платежа за пак через ЮKassa. Только для owner."""
+    """Создание платежа за пак через ЮKassa."""
     try:
         body = await request.json()
     except Exception:
@@ -531,8 +941,6 @@ async def api_pack_buy(request: Request):
     user = validate_init_data(init_data, BOT_TOKEN)
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    if not OWNER_ID or user["user_id"] != OWNER_ID:
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
 
     pack_id_str = request.path_params.get("pack_id", "")
     try:
@@ -544,6 +952,10 @@ async def api_pack_buy(request: Request):
     offer = next((o for o in offers if o["id"] == pack_id), None)
     if not offer:
         return JSONResponse({"error": "Pack not found"}, status_code=404)
+    # На покупке берём live-данные без кеша: точные цифры в момент оплаты.
+    pack_data = await _fetch_pack_data(pack_id, use_cache=False)
+    expected_images = _resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
+    pack_cost_field, pack_cost_value = _resolve_pack_cost_data(offer, pack_data)
 
     user_id = user["user_id"]
     price_rub = offer["price_rub"]
@@ -562,14 +974,26 @@ async def api_pack_buy(request: Request):
             "user_id": str(user_id),
             "chat_id": str(user_id),
             "product_type": "persona_pack",
-            "credits": str(offer["expected_images"]),
+            "credits": str(expected_images),
             "pack_id": str(pack_id),
+            "pack_title": str(offer.get("title") or "")[:100],
+            "pack_class": _resolve_pack_class_key(offer)[:24],
+            "pack_num_images": str(expected_images),
+            "pack_cost_field": pack_cost_field[:24],
+            "pack_cost_value": pack_cost_value[:64],
         },
         return_url=return_url,
     )
 
     if not url:
         logger.error("Ошибка создания платежа пака %s: %s", pack_id, payment_id_or_err)
+        try:
+            from prismalab.alerts import alert_payment_error
+            asyncio.get_event_loop().create_task(
+                alert_payment_error(user_id, "persona_pack", str(payment_id_or_err or "payment creation failed"))
+            )
+        except Exception:
+            pass
         return JSONResponse({"error": "Payment creation failed"}, status_code=500)
 
     # Запускаем поллинг платежа

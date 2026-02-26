@@ -48,6 +48,9 @@ class UserProfile:
     astria_tune_id: str | None  # FaceID tune (1 фото)
     astria_lora_tune_id: str | None  # LoRA tune (10+ фото)
     astria_lora_tune_id_pending: str | None  # LoRA tune в процессе обучения (сохраняем сразу при создании)
+    persona_lora_class_name: str | None  # "person" | "woman" | "man" — trigger token для inference
+    astria_lora_pack_tune_id: str | None  # LoRA tune для pack-flow (обычно woman/man)
+    astria_lora_pack_tune_id_pending: str | None  # pack LoRA tune в процессе обучения
     free_generation_used: bool  # потрачена ли 1 бесплатная генерация
     paid_generations_remaining: int  # остаток купленных генераций
     persona_credits_remaining: int  # кредиты Персоны (10 или 20 после оплаты)
@@ -78,6 +81,8 @@ class PrismaLabStore:
         self._user_events_table = f"public.{self._prefix}user_events" if self._use_pg else f"{self._prefix}user_events"
         self._admins_table = f"public.{self._prefix}admins" if self._use_pg else f"{self._prefix}admins"
         self._admin_settings_table = f"public.{self._prefix}admin_settings" if self._use_pg else f"{self._prefix}admin_settings"
+        self._admin_pack_costs_table = f"public.{self._prefix}admin_pack_costs" if self._use_pg else f"{self._prefix}admin_pack_costs"
+        self._pending_pack_runs_table = f"public.{self._prefix}pending_pack_runs" if self._use_pg else f"{self._prefix}pending_pack_runs"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -132,6 +137,8 @@ class PrismaLabStore:
                     training_status TEXT,
                     astria_tune_id TEXT,
                     astria_lora_tune_id TEXT,
+                    astria_lora_pack_tune_id TEXT,
+                    astria_lora_pack_tune_id_pending TEXT,
                     free_generation_used INTEGER DEFAULT 0,
                     paid_generations_remaining INTEGER DEFAULT 0,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -142,6 +149,9 @@ class PrismaLabStore:
                 ("astria_tune_id", "TEXT"),
                 ("astria_lora_tune_id", "TEXT"),
                 ("astria_lora_tune_id_pending", "TEXT"),
+                ("persona_lora_class_name", "TEXT"),
+                ("astria_lora_pack_tune_id", "TEXT"),
+                ("astria_lora_pack_tune_id_pending", "TEXT"),
                 ("free_generation_used", "INTEGER DEFAULT 0"),
                 ("paid_generations_remaining", "INTEGER DEFAULT 0"),
                 ("persona_credits_remaining", "INTEGER DEFAULT 0"),
@@ -152,6 +162,25 @@ class PrismaLabStore:
                     self._execute(conn, f"ALTER TABLE users ADD COLUMN {col} {col_type}")
                 except (sqlite3.OperationalError, Exception):
                     pass
+            # Таблица для восстановления прерванных pack runs
+            try:
+                self._execute(
+                    conn,
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._pending_pack_runs_table} (
+                        user_id INTEGER PRIMARY KEY,
+                        pack_id INTEGER NOT NULL,
+                        chat_id INTEGER NOT NULL,
+                        run_id TEXT NOT NULL,
+                        expected INTEGER NOT NULL,
+                        class_name TEXT NOT NULL,
+                        offer_title TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                )
+            except (sqlite3.OperationalError, Exception):
+                pass
             if not self._use_pg:
                 conn.commit()
 
@@ -168,6 +197,8 @@ class PrismaLabStore:
                     training_status TEXT,
                     astria_tune_id TEXT,
                     astria_lora_tune_id TEXT,
+                    astria_lora_pack_tune_id TEXT,
+                    astria_lora_pack_tune_id_pending TEXT,
                     free_generation_used INTEGER DEFAULT 0,
                     paid_generations_remaining INTEGER DEFAULT 0,
                     subject_gender TEXT,
@@ -180,6 +211,9 @@ class PrismaLabStore:
             for add_col in [
                 ("persona_credits_remaining", "INTEGER DEFAULT 0"),
                 ("astria_lora_tune_id_pending", "TEXT"),
+                ("persona_lora_class_name", "TEXT"),
+                ("astria_lora_pack_tune_id", "TEXT"),
+                ("astria_lora_pack_tune_id_pending", "TEXT"),
                 ("pending_pack_id", "INTEGER"),
             ]:
                 try:
@@ -196,6 +230,21 @@ class PrismaLabStore:
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
                         updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            # Таблица себестоимости паков
+            try:
+                self._execute(
+                    conn,
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._admin_pack_costs_table} (
+                        pack_id INTEGER PRIMARY KEY,
+                        pack_title TEXT,
+                        cost_usd DECIMAL(10,4) DEFAULT 0
                     )
                     """,
                 )
@@ -225,6 +274,9 @@ class PrismaLabStore:
                     astria_tune_id=None,
                     astria_lora_tune_id=None,
                     astria_lora_tune_id_pending=None,
+                    persona_lora_class_name=None,
+                    astria_lora_pack_tune_id=None,
+                    astria_lora_pack_tune_id_pending=None,
                     free_generation_used=False,
                     paid_generations_remaining=0,
                     persona_credits_remaining=0,
@@ -245,6 +297,9 @@ class PrismaLabStore:
                 astria_tune_id=_row_get(row, "astria_tune_id"),
                 astria_lora_tune_id=_row_get(row, "astria_lora_tune_id"),
                 astria_lora_tune_id_pending=_row_get(row, "astria_lora_tune_id_pending"),
+                persona_lora_class_name=_row_get(row, "persona_lora_class_name") or None,
+                astria_lora_pack_tune_id=_row_get(row, "astria_lora_pack_tune_id"),
+                astria_lora_pack_tune_id_pending=_row_get(row, "astria_lora_pack_tune_id_pending"),
                 free_generation_used=_bool("free_generation_used"),
                 paid_generations_remaining=_int("paid_generations_remaining"),
                 persona_credits_remaining=_int("persona_credits_remaining"),
@@ -298,6 +353,74 @@ class PrismaLabStore:
                             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
                         """, (key, str(value)))
                 conn.commit()
+
+    # --- Себестоимость паков ---
+
+    def get_pack_costs(self) -> list[dict]:
+        """Получить себестоимость всех паков из admin_pack_costs."""
+        if not self._use_pg:
+            return []
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT pack_id, pack_title, cost_usd FROM {self._admin_pack_costs_table} ORDER BY pack_id")
+                return [dict(row) for row in cur.fetchall()]
+
+    def get_pack_costs_map(self) -> dict[int, float]:
+        """Получить словарь {pack_id: cost_usd} для расчёта себестоимости."""
+        rows = self.get_pack_costs()
+        return {int(r["pack_id"]): float(r["cost_usd"] or 0) for r in rows}
+
+    def set_pack_costs_bulk(self, items: list[dict]) -> None:
+        """Массовое обновление себестоимости паков. items = [{pack_id, pack_title, cost_usd}, ...]"""
+        if not self._use_pg or not items:
+            return
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                for item in items:
+                    cur.execute(f"""
+                        INSERT INTO {self._admin_pack_costs_table} (pack_id, pack_title, cost_usd)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (pack_id) DO UPDATE SET
+                            pack_title = EXCLUDED.pack_title,
+                            cost_usd = EXCLUDED.cost_usd
+                    """, (int(item["pack_id"]), str(item.get("pack_title", "")), float(item.get("cost_usd", 0))))
+                conn.commit()
+
+    def get_pack_stats(self, date_from: str | None = None, date_to: str | None = None) -> list[dict]:
+        """Статистика по пакам: pack_id, pack_title, generations (количество завершённых)."""
+        if not self._use_pg:
+            return []
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if date_from and date_to:
+                    d_from = str(date_from) + " 00:00:00+03"
+                    d_to = str(date_to) + " 23:59:59+03"
+                    cur.execute(f"""
+                        SELECT event_data->>'pack_id' as pack_id,
+                               MAX(event_data->>'pack_title') as pack_title,
+                               COUNT(*) as generations,
+                               COALESCE(SUM((event_data->>'images_sent')::int), 0) as total_images
+                        FROM {self._user_events_table}
+                        WHERE event_type IN ('pack_generation', 'pack_callback', 'pack_fallback')
+                          AND created_at >= %s AND created_at <= %s
+                        GROUP BY event_data->>'pack_id'
+                        ORDER BY generations DESC
+                    """, (d_from, d_to))
+                else:
+                    cur.execute(f"""
+                        SELECT event_data->>'pack_id' as pack_id,
+                               MAX(event_data->>'pack_title') as pack_title,
+                               COUNT(*) as generations,
+                               COALESCE(SUM((event_data->>'images_sent')::int), 0) as total_images
+                        FROM {self._user_events_table}
+                        WHERE event_type IN ('pack_generation', 'pack_callback', 'pack_fallback')
+                        GROUP BY event_data->>'pack_id'
+                        ORDER BY generations DESC
+                    """)
+                return [dict(row) for row in cur.fetchall()]
 
     def upsert_training(
         self,
@@ -358,24 +481,81 @@ class PrismaLabStore:
                 (int(user_id), str(tune_id)),
             )
 
-    def set_astria_lora_tune(self, *, user_id: int, tune_id: str | None) -> None:
+    def set_astria_lora_tune(
+        self, *, user_id: int, tune_id: str | None, class_name: str | None = None
+    ) -> None:
         if tune_id is None:
             self._run(
-                f"UPDATE {self._users_table} SET astria_lora_tune_id = NULL, astria_lora_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+                f"UPDATE {self._users_table} SET astria_lora_tune_id = NULL, astria_lora_tune_id_pending = NULL, persona_lora_class_name = NULL, astria_lora_pack_tune_id = NULL, astria_lora_pack_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+                (int(user_id),),
+            )
+        else:
+            if class_name:
+                self._run(
+                    f"""
+                    INSERT INTO {self._users_table} (user_id, astria_lora_tune_id, astria_lora_tune_id_pending, persona_lora_class_name, astria_lora_pack_tune_id, astria_lora_pack_tune_id_pending, updated_at)
+                    VALUES (%s, %s, NULL, %s, NULL, NULL, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        astria_lora_tune_id = EXCLUDED.astria_lora_tune_id,
+                        astria_lora_tune_id_pending = NULL,
+                        persona_lora_class_name = EXCLUDED.persona_lora_class_name,
+                        astria_lora_pack_tune_id = NULL,
+                        astria_lora_pack_tune_id_pending = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (int(user_id), str(tune_id), str(class_name)),
+                )
+            else:
+                self._run(
+                    f"""
+                    INSERT INTO {self._users_table} (user_id, astria_lora_tune_id, astria_lora_tune_id_pending, astria_lora_pack_tune_id, astria_lora_pack_tune_id_pending, updated_at)
+                    VALUES (%s, %s, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        astria_lora_tune_id = EXCLUDED.astria_lora_tune_id,
+                        astria_lora_tune_id_pending = NULL,
+                        astria_lora_pack_tune_id = NULL,
+                        astria_lora_pack_tune_id_pending = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (int(user_id), str(tune_id)),
+                )
+
+    def set_astria_lora_pack_tune(self, *, user_id: int, tune_id: str | None) -> None:
+        if tune_id is None:
+            self._run(
+                f"UPDATE {self._users_table} SET astria_lora_pack_tune_id = NULL, astria_lora_pack_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
                 (int(user_id),),
             )
         else:
             self._run(
                 f"""
-                INSERT INTO {self._users_table} (user_id, astria_lora_tune_id, astria_lora_tune_id_pending, updated_at)
+                INSERT INTO {self._users_table} (user_id, astria_lora_pack_tune_id, astria_lora_pack_tune_id_pending, updated_at)
                 VALUES (%s, %s, NULL, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id) DO UPDATE SET
-                    astria_lora_tune_id = EXCLUDED.astria_lora_tune_id,
-                    astria_lora_tune_id_pending = NULL,
+                    astria_lora_pack_tune_id = EXCLUDED.astria_lora_pack_tune_id,
+                    astria_lora_pack_tune_id_pending = NULL,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (int(user_id), str(tune_id)),
             )
+
+    def set_astria_lora_pack_tune_pending(self, *, user_id: int, tune_id: str) -> None:
+        self._run(
+            f"""
+            INSERT INTO {self._users_table} (user_id, astria_lora_pack_tune_id_pending, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                astria_lora_pack_tune_id_pending = EXCLUDED.astria_lora_pack_tune_id_pending,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (int(user_id), str(tune_id)),
+        )
+
+    def clear_astria_lora_pack_tune_pending(self, user_id: int) -> None:
+        self._run(
+            f"UPDATE {self._users_table} SET astria_lora_pack_tune_id_pending = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+            (int(user_id),),
+        )
 
     def set_astria_lora_tune_pending(self, *, user_id: int, tune_id: str) -> None:
         """Сохраняет tune_id сразу после создания (до завершения обучения). Защита от потери при рестарте бота."""
@@ -388,6 +568,19 @@ class PrismaLabStore:
                 updated_at = CURRENT_TIMESTAMP
             """,
             (int(user_id), str(tune_id)),
+        )
+
+    def set_persona_lora_class_name(self, *, user_id: int, class_name: str | None) -> None:
+        """Сохраняет trigger token (person/woman/man) для LoRA inference."""
+        self._run(
+            f"""
+            INSERT INTO {self._users_table} (user_id, persona_lora_class_name, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                persona_lora_class_name = EXCLUDED.persona_lora_class_name,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (int(user_id), str(class_name) if class_name else None),
         )
 
     def clear_astria_lora_tune_pending(self, user_id: int) -> None:
@@ -499,6 +692,9 @@ class PrismaLabStore:
                 personal_trigger_word = NULL,
                 astria_tune_id = NULL,
                 astria_lora_tune_id = NULL,
+                persona_lora_class_name = NULL,
+                astria_lora_pack_tune_id = NULL,
+                astria_lora_pack_tune_id_pending = NULL,
                 training_status = NULL,
                 updated_at = CURRENT_TIMESTAMP
             WHERE user_id = %s
@@ -545,6 +741,70 @@ class PrismaLabStore:
             f"UPDATE {self._users_table} SET pending_pack_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
             (int(user_id),),
         )
+
+    # --- Pending pack run (восстановление после рестарта во время обучения pack tune) ---
+
+    def set_pending_pack_run(
+        self,
+        *,
+        user_id: int,
+        pack_id: int,
+        chat_id: int,
+        run_id: str,
+        expected: int,
+        class_name: str,
+        offer_title: str = "",
+    ) -> None:
+        """Сохранить состояние pack run перед блокирующим ожиданием обучения pack tune."""
+        if not self._use_pg:
+            return
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self._pending_pack_runs_table} (user_id, pack_id, chat_id, run_id, expected, class_name, offer_title)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        pack_id = EXCLUDED.pack_id,
+                        chat_id = EXCLUDED.chat_id,
+                        run_id = EXCLUDED.run_id,
+                        expected = EXCLUDED.expected,
+                        class_name = EXCLUDED.class_name,
+                        offer_title = EXCLUDED.offer_title,
+                        created_at = NOW()
+                    """,
+                    (int(user_id), int(pack_id), int(chat_id), str(run_id), int(expected), str(class_name), str(offer_title or "")),
+                )
+                conn.commit()
+
+    def clear_pending_pack_run(self, user_id: int) -> None:
+        """Очистить после завершения pack run (успех или ошибка)."""
+        if not self._use_pg:
+            return
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"DELETE FROM {self._pending_pack_runs_table} WHERE user_id = %s", (int(user_id),))
+                conn.commit()
+
+    def get_pending_pack_runs_to_recover(self) -> list[dict]:
+        """Юзеры с astria_lora_pack_tune_id_pending и записью в pending_pack_runs — кандидаты на восстановление."""
+        if not self._use_pg:
+            return []
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT p.user_id, p.pack_id, p.chat_id, p.run_id, p.expected, p.class_name, p.offer_title,
+                           u.astria_lora_pack_tune_id_pending as tune_id
+                    FROM {self._pending_pack_runs_table} p
+                    JOIN {self._users_table} u ON u.user_id = p.user_id
+                    WHERE u.astria_lora_pack_tune_id_pending IS NOT NULL
+                    """,
+                )
+                return [dict(row) for row in cur.fetchall()]
 
     def delete_user(self, user_id: int) -> bool:
         """Удалить пользователя полностью из БД. Возвращает True если строка была удалена."""
@@ -612,6 +872,28 @@ class PrismaLabStore:
                         conn.commit()
                     except Exception:
                         conn.rollback()
+                    # Дедуп платежей и уникальность payment_id для идемпотентности
+                    try:
+                        cur.execute(
+                            f"""
+                            DELETE FROM {self._payments_table} p1
+                            USING {self._payments_table} p2
+                            WHERE p1.id < p2.id
+                              AND p1.payment_id IS NOT NULL
+                              AND p1.payment_id = p2.payment_id
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE UNIQUE INDEX IF NOT EXISTS idx_{self._prefix}payments_payment_id_uniq
+                            ON {self._payments_table}(payment_id)
+                            WHERE payment_id IS NOT NULL
+                            """
+                        )
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                        logger.warning("Не удалось обеспечить уникальность payment_id: %s", e)
                     # Индексы
                     try:
                         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}payments_user_id ON {self._payments_table}(user_id)")
@@ -619,6 +901,8 @@ class PrismaLabStore:
                         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_user_id ON {self._user_events_table}(user_id)")
                         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_created_at ON {self._user_events_table}(created_at DESC)")
                         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_user_events_type ON {self._user_events_table}(event_type)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}user_events_type_created ON {self._user_events_table}(event_type, created_at DESC)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}payments_type_created ON {self._payments_table}(product_type, created_at DESC)")
                         conn.commit()
                     except Exception:
                         conn.rollback()
@@ -637,6 +921,25 @@ class PrismaLabStore:
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # Дедуп и уникальность payment_id для идемпотентности
+                try:
+                    conn.execute(
+                        """
+                        DELETE FROM payments
+                        WHERE rowid NOT IN (
+                            SELECT MAX(rowid)
+                            FROM payments
+                            WHERE payment_id IS NOT NULL
+                            GROUP BY payment_id
+                        )
+                        AND payment_id IS NOT NULL
+                        """
+                    )
+                    conn.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id_uniq ON payments(payment_id)"
+                    )
+                except Exception as e:
+                    logger.warning("SQLite: не удалось обеспечить уникальность payment_id: %s", e)
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS user_events (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -697,32 +1000,42 @@ class PrismaLabStore:
         credits: int,
         amount_rub: float,
     ) -> int | None:
-        """Записывает платёж в БД. Возвращает ID записи."""
+        """Записывает платёж в БД. Возвращает ID записи или None при дубле payment_id."""
         with self._connect() as conn:
             if self._use_pg:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {self._payments_table} (user_id, payment_id, payment_method, product_type, credits, amount_rub)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        RETURNING id
+                    try:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {self._payments_table} (user_id, payment_id, payment_method, product_type, credits, amount_rub)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            (int(user_id), payment_id, payment_method, product_type, int(credits), float(amount_rub)),
+                        )
+                        row = cur.fetchone()
+                        conn.commit()
+                        return row["id"] if row else None
+                    except Exception as e:
+                        conn.rollback()
+                        if getattr(e, "pgcode", None) == "23505":
+                            return None
+                        raise
+            else:
+                try:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO payments (user_id, payment_id, payment_method, product_type, credits, amount_rub)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (int(user_id), payment_id, payment_method, product_type, int(credits), float(amount_rub)),
                     )
-                    row = cur.fetchone()
                     conn.commit()
-                    return row["id"] if row else None
-            else:
-                cur = conn.execute(
-                    """
-                    INSERT INTO payments (user_id, payment_id, payment_method, product_type, credits, amount_rub)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (int(user_id), payment_id, payment_method, product_type, int(credits), float(amount_rub)),
-                )
-                conn.commit()
-                return cur.lastrowid
+                    return cur.lastrowid
+                except sqlite3.IntegrityError:
+                    conn.rollback()
+                    return None
 
     # --- Логирование событий ---
 
@@ -754,6 +1067,113 @@ class PrismaLabStore:
                 )
                 conn.commit()
                 return cur.lastrowid
+
+    # --- Аналитика воронок ---
+
+    def _funnel_count(self, cur, event_type: str, d_from: str | None, d_to: str | None,
+                      data_filter: dict | None = None) -> int:
+        """Считает DISTINCT user_id по event_type за период с опциональным фильтром event_data."""
+        conditions = [f"event_type = %s"]
+        params: list = [event_type]
+        if d_from and d_to:
+            conditions.append("created_at >= %s AND created_at <= %s")
+            params.extend([d_from, d_to])
+        if data_filter:
+            for key, val in data_filter.items():
+                conditions.append(f"event_data->>'{key}' = %s")
+                params.append(val)
+        sql = f"SELECT COUNT(DISTINCT user_id) as cnt FROM {self._user_events_table} WHERE " + " AND ".join(conditions)
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return int(row["cnt"]) if row else 0
+
+    def get_funnel_data(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+        """Данные воронок: Персона, Экспресс, Фотосеты."""
+        result = {"persona": [], "fast": [], "packs": []}
+        if not self._use_pg:
+            return result
+        d_from = (str(date_from) + " 00:00:00+03") if date_from else None
+        d_to = (str(date_to) + " 23:59:59+03") if date_to else None
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Воронка Персоны
+                persona_steps = [
+                    ("Зашёл в раздел", "nav_persona", None),
+                    ("Нажал Создать", "persona_create_start", None),
+                    ("Выбрал тариф", "persona_buy_init", None),
+                    ("Оплатил", "payment_success", {"product_type": "persona_create"}),
+                    ("Начал загрузку фото", "persona_upload_start", None),
+                    ("Получил фото", "generation", {"mode": "persona"}),
+                ]
+                for label, evt, filt in persona_steps:
+                    cnt = self._funnel_count(cur, evt, d_from, d_to, filt)
+                    result["persona"].append({"label": label, "count": cnt})
+
+                # Воронка Экспресса
+                fast_steps = [
+                    ("Зашёл в раздел", "nav_fast", None),
+                    ("Выбрал пол", "fast_gender_select", None),
+                    ("Выбрал стиль", "fast_style_select", None),
+                    ("Нажал купить", "fast_buy_init", None),
+                    ("Оплатил", "payment_success", {"product_type": "fast"}),
+                    ("Получил фото", "generation", {"mode": "fast"}),
+                ]
+                for label, evt, filt in fast_steps:
+                    cnt = self._funnel_count(cur, evt, d_from, d_to, filt)
+                    result["fast"].append({"label": label, "count": cnt})
+
+                # Воронка Фотосетов
+                pack_steps = [
+                    ("Зашёл в раздел", "nav_packs", None),
+                    ("Нажал купить", "pack_buy_init", None),
+                    ("Оплатил", "payment_success", {"product_type": "persona_pack"}),
+                    ("Получил фотосет", "pack_generation", None),
+                ]
+                for label, evt, filt in pack_steps:
+                    cnt = self._funnel_count(cur, evt, d_from, d_to, filt)
+                    result["packs"].append({"label": label, "count": cnt})
+        return result
+
+    def get_popularity_data(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+        """Топ стилей и действий за период."""
+        result = {"top_styles": [], "top_actions": []}
+        if not self._use_pg:
+            return result
+        d_from = (str(date_from) + " 00:00:00+03") if date_from else None
+        d_to = (str(date_to) + " 23:59:59+03") if date_to else None
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Топ стилей
+                date_cond = ""
+                params: list = []
+                if d_from and d_to:
+                    date_cond = " AND created_at >= %s AND created_at <= %s"
+                    params = [d_from, d_to]
+                cur.execute(f"""
+                    SELECT event_data->>'style_id' as style_id, COUNT(*) as cnt
+                    FROM {self._user_events_table}
+                    WHERE event_type IN ('persona_style_select', 'fast_style_select')
+                      AND event_data->>'style_id' IS NOT NULL
+                      {date_cond}
+                    GROUP BY event_data->>'style_id'
+                    ORDER BY cnt DESC
+                    LIMIT 15
+                """, params)
+                result["top_styles"] = [dict(r) for r in cur.fetchall()]
+
+                # Топ действий
+                cur.execute(f"""
+                    SELECT event_type, COUNT(*) as cnt
+                    FROM {self._user_events_table}
+                    WHERE 1=1 {date_cond}
+                    GROUP BY event_type
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params)
+                result["top_actions"] = [dict(r) for r in cur.fetchall()]
+        return result
 
     # --- Админы ---
 
@@ -846,6 +1266,63 @@ class PrismaLabStore:
                     row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
                 return int(row["cnt"]) if row else 0
 
+    # ========== Рассылка ==========
+
+    def get_user_ids_for_broadcast(self, filter_type: str = "all", user_ids: list[int] | None = None) -> list[int]:
+        """
+        Получить список user_id по фильтру для рассылки.
+        filter_type: "all" | "has_persona" | "no_persona" | "specific"
+        """
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    if filter_type == "has_persona":
+                        cur.execute(f"SELECT user_id FROM {self._users_table} WHERE astria_lora_tune_id IS NOT NULL")
+                    elif filter_type == "no_persona":
+                        cur.execute(f"SELECT user_id FROM {self._users_table} WHERE astria_lora_tune_id IS NULL")
+                    elif filter_type == "specific" and user_ids:
+                        cur.execute(f"SELECT user_id FROM {self._users_table} WHERE user_id = ANY(%s)", (user_ids,))
+                    else:  # all
+                        cur.execute(f"SELECT user_id FROM {self._users_table}")
+                    return [int(r["user_id"]) for r in cur.fetchall()]
+            else:
+                if filter_type == "has_persona":
+                    rows = conn.execute("SELECT user_id FROM users WHERE astria_lora_tune_id IS NOT NULL").fetchall()
+                elif filter_type == "no_persona":
+                    rows = conn.execute("SELECT user_id FROM users WHERE astria_lora_tune_id IS NULL").fetchall()
+                elif filter_type == "specific" and user_ids:
+                    placeholders = ",".join("?" * len(user_ids))
+                    rows = conn.execute(f"SELECT user_id FROM users WHERE user_id IN ({placeholders})", user_ids).fetchall()
+                else:
+                    rows = conn.execute("SELECT user_id FROM users").fetchall()
+                return [int(r["user_id"]) for r in rows]
+
+    def get_broadcast_counts(self) -> dict:
+        """Количество юзеров по фильтрам для рассылки."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"""
+                        SELECT
+                            COUNT(*) as total,
+                            COUNT(astria_lora_tune_id) as has_persona,
+                            COUNT(*) - COUNT(astria_lora_tune_id) as no_persona
+                        FROM {self._users_table}
+                    """)
+                    row = cur.fetchone()
+                    return dict(row) if row else {"total": 0, "has_persona": 0, "no_persona": 0}
+            else:
+                row = conn.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        COUNT(astria_lora_tune_id) as has_persona,
+                        COUNT(*) - COUNT(astria_lora_tune_id) as no_persona
+                    FROM users
+                """).fetchone()
+                return dict(row) if row else {"total": 0, "has_persona": 0, "no_persona": 0}
+
     def get_payments_paginated(
         self,
         limit: int = 50,
@@ -919,10 +1396,10 @@ class PrismaLabStore:
                 row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE {where_clause}", params).fetchone()
                 return int(row["cnt"]) if row else 0
 
-    def get_all_time_stats(self) -> dict:
+    def get_all_time_stats(self, _cost_settings: dict | None = None, _pack_costs_map: dict | None = None) -> dict:
         """Получить статистику за всё время (для постоянного блока)."""
-        # Себестоимость из настроек
-        cost_settings = self.get_cost_settings()
+        # Себестоимость из настроек (принимаем кэш или грузим)
+        cost_settings = _cost_settings or self.get_cost_settings()
         COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
         COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
         COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
@@ -938,7 +1415,10 @@ class PrismaLabStore:
             "margin": {"amount": 0.0, "percent": 0.0},
             "gens_per_paying_user": 0.0,
             "express_purchases": 0,
-            "persona_purchases": 0,
+            "persona_purchases": 0,  # оставляем для обратной совместимости (итого)
+            "persona_create_purchases": 0,
+            "persona_topup_purchases": 0,
+            "pack_purchases": 0,
             "gender": {"male": 0.0, "female": 0.0, "unknown": 0.0},
             "days_to_first_purchase": 0.0,
         }
@@ -979,15 +1459,21 @@ class PrismaLabStore:
                 if stats["users_total"] > 0:
                     stats["conversion"] = round((stats["paid_users"] / stats["users_total"]) * 100, 2)
 
-                # Покупок Экспресс
-                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'fast'")
-                row = cur.fetchone()
-                stats["express_purchases"] = int(row["cnt"]) if row else 0
-
-                # Покупок Персона
-                cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type LIKE 'persona%%'")
-                row = cur.fetchone()
-                stats["persona_purchases"] = int(row["cnt"]) if row else 0
+                # Покупок по типам (один запрос)
+                cur.execute(f"""SELECT product_type, COUNT(*) as cnt FROM {self._payments_table}
+                               GROUP BY product_type""")
+                for row in cur.fetchall():
+                    pt = row["product_type"]
+                    cnt = int(row["cnt"])
+                    if pt == "fast":
+                        stats["express_purchases"] = cnt
+                    elif pt == "persona_create":
+                        stats["persona_create_purchases"] = cnt
+                    elif pt == "persona_topup":
+                        stats["persona_topup_purchases"] = cnt
+                    elif pt == "persona_pack":
+                        stats["pack_purchases"] = cnt
+                stats["persona_purchases"] = stats["persona_create_purchases"] + stats["persona_topup_purchases"] + stats["pack_purchases"]
 
                 # Для маржи: генерации по типам и создания персон
                 cur.execute(f"""SELECT
@@ -1002,20 +1488,38 @@ class PrismaLabStore:
                 row = cur.fetchone()
                 persona_creates = int(row["cnt"]) if row else 0
 
+                # Себестоимость паков из admin_pack_costs + user_events
+                pack_cost_total_usd = 0.0
+                try:
+                    pack_costs_map = _pack_costs_map if _pack_costs_map is not None else self.get_pack_costs_map()
+                    if pack_costs_map:
+                        cur.execute(f"""
+                            SELECT event_data->>'pack_id' as pack_id, COUNT(*) as cnt
+                            FROM {self._user_events_table}
+                            WHERE event_type IN ('pack_generation', 'pack_callback', 'pack_fallback')
+                            GROUP BY event_data->>'pack_id'
+                        """)
+                        for row in cur.fetchall():
+                            pid = int(row["pack_id"]) if row["pack_id"] and row["pack_id"].isdigit() else 0
+                            if pid in pack_costs_map:
+                                pack_cost_total_usd += pack_costs_map[pid] * int(row["cnt"])
+                except Exception:
+                    pass
+
                 # Расчёт себестоимости и маржи
-                total_cost = (persona_creates * COST_PERSONA_CREATE + fast_gens * COST_FAST_PHOTO + persona_gens * COST_PERSONA_PHOTO) * USD_RUB
+                total_cost = (persona_creates * COST_PERSONA_CREATE + fast_gens * COST_FAST_PHOTO + persona_gens * COST_PERSONA_PHOTO + pack_cost_total_usd) * USD_RUB
                 stats["total_cost"] = round(total_cost, 2)
                 margin = stats["total_revenue"] - total_cost
                 stats["margin"]["amount"] = round(margin, 2)
                 stats["margin"]["percent"] = round((margin / stats["total_revenue"]) * 100, 2) if stats["total_revenue"] > 0 else 0.0
 
-                # Генераций на платящего юзера
+                # Генераций на платящего юзера — INNER JOIN вместо EXISTS
                 total_gens = fast_gens + persona_gens
                 if stats["paid_users"] > 0:
-                    # Считаем генерации только от платящих юзеров
-                    cur.execute(f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
-                                   WHERE ue.event_type = 'generation'
-                                   AND EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""")
+                    cur.execute(f"""SELECT COUNT(*) as cnt
+                                   FROM {self._user_events_table} ue
+                                   INNER JOIN (SELECT DISTINCT user_id FROM {self._payments_table}) p ON p.user_id = ue.user_id
+                                   WHERE ue.event_type = 'generation'""")
                     row = cur.fetchone()
                     paying_gens = int(row["cnt"]) if row else 0
                     stats["gens_per_paying_user"] = round(paying_gens / stats["paid_users"], 1)
@@ -1091,10 +1595,10 @@ class PrismaLabStore:
 
         return result
 
-    def get_dashboard_stats(self, date_from: str | None = None, date_to: str | None = None) -> dict:
+    def get_dashboard_stats(self, date_from: str | None = None, date_to: str | None = None, _cost_settings: dict | None = None, _pack_costs_map: dict | None = None) -> dict:
         """Получить статистику для дашборда с опциональной фильтрацией по датам."""
-        # Себестоимость из настроек
-        cost_settings = self.get_cost_settings()
+        # Себестоимость из настроек (принимаем кэш или грузим)
+        cost_settings = _cost_settings or self.get_cost_settings()
         COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
         COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
         COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
@@ -1102,9 +1606,16 @@ class PrismaLabStore:
 
         stats = {
             "users": {"new": 0},
-            "payments": {"total_count": 0, "total_revenue": 0.0, "avg_check": 0.0, "express": {"count": 0, "revenue": 0.0}, "persona": {"count": 0, "revenue": 0.0}},
+            "payments": {
+                "total_count": 0, "total_revenue": 0.0, "avg_check": 0.0,
+                "express": {"count": 0, "revenue": 0.0},
+                "persona": {"count": 0, "revenue": 0.0},  # обратная совместимость (итого persona*)
+                "persona_create": {"count": 0, "revenue": 0.0},
+                "persona_topup": {"count": 0, "revenue": 0.0},
+                "pack": {"count": 0, "revenue": 0.0},
+            },
             "generations": {"total": 0, "free": 0, "fast": 0, "persona": 0},
-            "costs": {"total": 0.0, "persona_create": 0.0, "fast_photos": 0.0, "persona_photos": 0.0},
+            "costs": {"total": 0.0, "persona_create": 0.0, "fast_photos": 0.0, "persona_photos": 0.0, "packs": 0.0},
             "margin": {"amount": 0.0, "percent": 0.0},
             "conversion": {"paid_users": 0, "percent": 0.0},
         }
@@ -1164,31 +1675,39 @@ class PrismaLabStore:
                     if stats["payments"]["total_count"] > 0:
                         stats["payments"]["avg_check"] = round(stats["payments"]["total_revenue"] / stats["payments"]["total_count"], 2)
 
-                # Экспресс платежи
+                # Платежи по типам (один запрос вместо нескольких)
                 if has_dates:
                     cur.execute(
-                        f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type = 'fast' AND created_at >= %s AND created_at <= %s",
+                        f"SELECT product_type, COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE created_at >= %s AND created_at <= %s GROUP BY product_type",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type = 'fast'")
-                row = cur.fetchone()
-                if row:
-                    stats["payments"]["express"]["count"] = int(row["cnt"])
-                    stats["payments"]["express"]["revenue"] = float(row["total"])
-
-                # Персона платежи (%% для экранирования % в Python)
-                if has_dates:
-                    cur.execute(
-                        f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type LIKE 'persona%%' AND created_at >= %s AND created_at <= %s",
-                        (d_from, d_to),
-                    )
-                else:
-                    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE product_type LIKE 'persona%%'")
-                row = cur.fetchone()
-                if row:
-                    stats["payments"]["persona"]["count"] = int(row["cnt"])
-                    stats["payments"]["persona"]["revenue"] = float(row["total"])
+                    cur.execute(f"SELECT product_type, COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} GROUP BY product_type")
+                persona_total_cnt, persona_total_rev = 0, 0.0
+                for row in cur.fetchall():
+                    pt = row["product_type"]
+                    cnt = int(row["cnt"])
+                    rev = float(row["total"])
+                    if pt == "fast":
+                        stats["payments"]["express"]["count"] = cnt
+                        stats["payments"]["express"]["revenue"] = rev
+                    elif pt == "persona_create":
+                        stats["payments"]["persona_create"]["count"] = cnt
+                        stats["payments"]["persona_create"]["revenue"] = rev
+                        persona_total_cnt += cnt
+                        persona_total_rev += rev
+                    elif pt == "persona_topup":
+                        stats["payments"]["persona_topup"]["count"] = cnt
+                        stats["payments"]["persona_topup"]["revenue"] = rev
+                        persona_total_cnt += cnt
+                        persona_total_rev += rev
+                    elif pt == "persona_pack":
+                        stats["payments"]["pack"]["count"] = cnt
+                        stats["payments"]["pack"]["revenue"] = rev
+                        persona_total_cnt += cnt
+                        persona_total_rev += rev
+                stats["payments"]["persona"]["count"] = persona_total_cnt
+                stats["payments"]["persona"]["revenue"] = persona_total_rev
 
                 # Генерации по типам (fast / persona)
                 if has_dates:
@@ -1216,19 +1735,23 @@ class PrismaLabStore:
                     stats["generations"]["fast"] = int(row["fast"] or 0)
                     stats["generations"]["persona"] = int(row["persona"] or 0)
 
-                # Бесплатные генерации (юзеры без платежей за период)
+                # Бесплатные генерации (юзеры без платежей) — LEFT JOIN вместо NOT EXISTS
                 if has_dates:
                     cur.execute(
-                        f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
-                           WHERE ue.event_type = 'generation'
-                           AND ue.created_at >= %s AND ue.created_at <= %s
-                           AND NOT EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""",
+                        f"""SELECT COUNT(*) as cnt
+                            FROM {self._user_events_table} ue
+                            LEFT JOIN (SELECT DISTINCT user_id FROM {self._payments_table}) p ON p.user_id = ue.user_id
+                            WHERE ue.event_type = 'generation'
+                              AND ue.created_at >= %s AND ue.created_at <= %s
+                              AND p.user_id IS NULL""",
                         (d_from, d_to),
                     )
                 else:
-                    cur.execute(f"""SELECT COUNT(*) as cnt FROM {self._user_events_table} ue
+                    cur.execute(f"""SELECT COUNT(*) as cnt
+                                   FROM {self._user_events_table} ue
+                                   LEFT JOIN (SELECT DISTINCT user_id FROM {self._payments_table}) p ON p.user_id = ue.user_id
                                    WHERE ue.event_type = 'generation'
-                                   AND NOT EXISTS (SELECT 1 FROM {self._payments_table} p WHERE p.user_id = ue.user_id)""")
+                                     AND p.user_id IS NULL""")
                 row = cur.fetchone()
                 stats["generations"]["free"] = int(row["cnt"]) if row else 0
 
@@ -1243,15 +1766,44 @@ class PrismaLabStore:
                 row = cur.fetchone()
                 persona_creates = int(row["cnt"]) if row else 0
 
+                # Себестоимость паков за период
+                pack_cost_usd = 0.0
+                try:
+                    pack_costs_map = _pack_costs_map if _pack_costs_map is not None else self.get_pack_costs_map()
+                    if pack_costs_map:
+                        if has_dates:
+                            cur.execute(f"""
+                                SELECT event_data->>'pack_id' as pack_id, COUNT(*) as cnt
+                                FROM {self._user_events_table}
+                                WHERE event_type IN ('pack_generation', 'pack_callback', 'pack_fallback')
+                                  AND created_at >= %s AND created_at <= %s
+                                GROUP BY event_data->>'pack_id'
+                            """, (d_from, d_to))
+                        else:
+                            cur.execute(f"""
+                                SELECT event_data->>'pack_id' as pack_id, COUNT(*) as cnt
+                                FROM {self._user_events_table}
+                                WHERE event_type IN ('pack_generation', 'pack_callback', 'pack_fallback')
+                                GROUP BY event_data->>'pack_id'
+                            """)
+                        for row in cur.fetchall():
+                            pid = int(row["pack_id"]) if row["pack_id"] and row["pack_id"].isdigit() else 0
+                            if pid in pack_costs_map:
+                                pack_cost_usd += pack_costs_map[pid] * int(row["cnt"])
+                except Exception:
+                    pass
+
                 # Расчёт себестоимости
                 cost_persona_create = persona_creates * COST_PERSONA_CREATE * USD_RUB
                 cost_fast_photos = stats["generations"]["fast"] * COST_FAST_PHOTO * USD_RUB
                 cost_persona_photos = stats["generations"]["persona"] * COST_PERSONA_PHOTO * USD_RUB
-                total_cost = cost_persona_create + cost_fast_photos + cost_persona_photos
+                cost_packs = pack_cost_usd * USD_RUB
+                total_cost = cost_persona_create + cost_fast_photos + cost_persona_photos + cost_packs
 
                 stats["costs"]["persona_create"] = round(cost_persona_create, 2)
                 stats["costs"]["fast_photos"] = round(cost_fast_photos, 2)
                 stats["costs"]["persona_photos"] = round(cost_persona_photos, 2)
+                stats["costs"]["packs"] = round(cost_packs, 2)
                 stats["costs"]["total"] = round(total_cost, 2)
 
                 # Маржа

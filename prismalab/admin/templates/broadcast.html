@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}Рассылка — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-megaphone me-2"></i>Рассылка</h2>
+</div>
+
+{% if sent is not none %}
+<div class="alert {% if failed == 0 %}alert-success{% else %}alert-warning{% endif %} alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>
+    Рассылка завершена: <strong>доставлено {{ sent }}</strong> из {{ total }}
+    {% if failed > 0 %} (ошибок: <span class="text-danger">{{ failed }}</span>){% endif %}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if request.query_params.get('error') == 'no_text' %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <i class="bi bi-exclamation-triangle me-2"></i>Введите текст сообщения
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% elif request.query_params.get('error') == 'no_ids' %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <i class="bi bi-exclamation-triangle me-2"></i>Укажите хотя бы один корректный ID
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% elif request.query_params.get('error') == 'no_users' %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <i class="bi bi-exclamation-triangle me-2"></i>Не найдено пользователей для рассылки
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<form method="POST" enctype="multipart/form-data" id="broadcastForm">
+    <div class="row">
+        <!-- Левая колонка: аудитория -->
+        <div class="col-md-4 mb-4">
+            <div class="card">
+                <div class="card-header">
+                    <i class="bi bi-people me-2"></i>Аудитория
+                </div>
+                <div class="card-body">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="filter_type" id="filterAll" value="all" checked onchange="toggleIds()">
+                        <label class="form-check-label" for="filterAll">
+                            Все пользователи <span class="badge bg-primary ms-1">{{ counts.total }}</span>
+                        </label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="filter_type" id="filterHasPersona" value="has_persona" onchange="toggleIds()">
+                        <label class="form-check-label" for="filterHasPersona">
+                            Есть Персона <span class="badge bg-success ms-1">{{ counts.has_persona }}</span>
+                        </label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="filter_type" id="filterNoPersona" value="no_persona" onchange="toggleIds()">
+                        <label class="form-check-label" for="filterNoPersona">
+                            Нет Персоны <span class="badge bg-secondary ms-1">{{ counts.no_persona }}</span>
+                        </label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="filter_type" id="filterSpecific" value="specific" onchange="toggleIds()">
+                        <label class="form-check-label" for="filterSpecific">
+                            По ID
+                        </label>
+                    </div>
+                    <div id="specificIdsBlock" style="display: none;" class="mt-2">
+                        <textarea name="specific_ids" class="form-control" rows="3"
+                                  placeholder="ID через запятую или с новой строки:&#10;123456789&#10;987654321"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Кнопка -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <i class="bi bi-hand-index me-2"></i>Кнопка (опционально)
+                </div>
+                <div class="card-body">
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="addButton" name="add_button" value="1" onchange="toggleButton()">
+                        <label class="form-check-label" for="addButton">Добавить кнопку</label>
+                    </div>
+                    <div id="buttonBlock" style="display: none;">
+                        <div class="mb-3">
+                            <label class="form-label">Текст кнопки</label>
+                            <input type="text" name="btn_text" class="form-control" placeholder="Открыть студию">
+                        </div>
+                        <div class="mb-3">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="btn_type" id="btnTypeWebapp" value="webapp" checked onchange="toggleBtnType()">
+                                <label class="form-check-label" for="btnTypeWebapp">Mini App</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="btn_type" id="btnTypeUrl" value="url" onchange="toggleBtnType()">
+                                <label class="form-check-label" for="btnTypeUrl">URL</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="btn_type" id="btnTypeCallback" value="callback" onchange="toggleBtnType()">
+                                <label class="form-check-label" for="btnTypeCallback">Callback</label>
+                            </div>
+                        </div>
+                        <div class="mb-0">
+                            <label class="form-label" id="btnValueLabel">URL Mini App</label>
+                            <input type="text" name="btn_value" class="form-control" id="btnValueInput"
+                                   value="{{ miniapp_url }}" placeholder="https://...">
+                            <small class="text-muted" id="btnValueHint">Откроет Mini App внутри Telegram</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Правая колонка: сообщение -->
+        <div class="col-md-8 mb-4">
+            <div class="card">
+                <div class="card-header">
+                    <i class="bi bi-chat-text me-2"></i>Сообщение
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Текст <span class="text-danger">*</span></label>
+                        <textarea name="text" class="form-control" rows="8" required
+                                  placeholder="Текст сообщения (поддерживается HTML)&#10;&#10;<b>Жирный</b>, <i>курсив</i>, <a href='...'>ссылка</a>"></textarea>
+                        <small class="text-muted">HTML-теги: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;a href="..."&gt;, &lt;code&gt;, &lt;pre&gt;</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Фото (опционально)</label>
+                        <input type="file" name="photo" class="form-control" accept="image/*">
+                        <small class="text-muted">Если прикреплено фото, текст будет подписью (caption, макс. 1024 символа)</small>
+                    </div>
+                </div>
+                <div class="card-footer text-end">
+                    <button type="submit" class="btn btn-danger btn-lg" id="submitBtn">
+                        <i class="bi bi-send me-1"></i>Отправить рассылку
+                    </button>
+                </div>
+            </div>
+
+            <!-- Подсказки -->
+            <div class="card mt-4">
+                <div class="card-header">
+                    <i class="bi bi-info-circle me-2"></i>Подсказки
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0">
+                        <li>Рассылка отправляется синхронно, страница будет загружаться до завершения</li>
+                        <li>Скорость: ~20 сообщений/сек (ограничение Telegram API)</li>
+                        <li>Пользователи, заблокировавшие бота, попадут в «ошибки»</li>
+                        <li>При отправке фото: текст = caption (макс. 1024 символа, иначе будет ошибка)</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function toggleIds() {
+        const block = document.getElementById('specificIdsBlock');
+        const radio = document.getElementById('filterSpecific');
+        block.style.display = radio.checked ? 'block' : 'none';
+    }
+
+    function toggleButton() {
+        const block = document.getElementById('buttonBlock');
+        const cb = document.getElementById('addButton');
+        block.style.display = cb.checked ? 'block' : 'none';
+    }
+
+    function toggleBtnType() {
+        const label = document.getElementById('btnValueLabel');
+        const input = document.getElementById('btnValueInput');
+        const hint = document.getElementById('btnValueHint');
+        const isWebapp = document.getElementById('btnTypeWebapp').checked;
+        const isUrl = document.getElementById('btnTypeUrl').checked;
+
+        if (isWebapp) {
+            label.textContent = 'URL Mini App';
+            input.placeholder = 'https://...';
+            input.value = '{{ miniapp_url }}';
+            hint.textContent = 'Откроет Mini App внутри Telegram';
+        } else if (isUrl) {
+            label.textContent = 'URL';
+            input.placeholder = 'https://t.me/...';
+            input.value = '';
+            hint.textContent = 'Откроет ссылку в браузере';
+        } else {
+            label.textContent = 'Callback data';
+            input.placeholder = 'pl_some_action';
+            input.value = '';
+            hint.textContent = 'Бот обработает нажатие (нужен обработчик)';
+        }
+    }
+
+    document.getElementById('broadcastForm').addEventListener('submit', function(e) {
+        const filter = document.querySelector('input[name="filter_type"]:checked').value;
+        let audience = '';
+        if (filter === 'all') audience = 'ВСЕМ пользователям ({{ counts.total }})';
+        else if (filter === 'has_persona') audience = 'пользователям с Персоной ({{ counts.has_persona }})';
+        else if (filter === 'no_persona') audience = 'пользователям без Персоны ({{ counts.no_persona }})';
+        else audience = 'указанным ID';
+
+        if (!confirm('Отправить рассылку ' + audience + '?')) {
+            e.preventDefault();
+            return;
+        }
+
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('submitBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Отправка...';
+    });
+</script>
+{% endblock %}

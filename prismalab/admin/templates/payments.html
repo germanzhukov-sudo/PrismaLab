@@ -21,6 +21,7 @@
                     <option value="fast" {% if product_type == 'fast' %}selected{% endif %}>Экспресс</option>
                     <option value="persona_topup" {% if product_type == 'persona_topup' %}selected{% endif %}>Персона (пополнение)</option>
                     <option value="persona_create" {% if product_type == 'persona_create' %}selected{% endif %}>Персона (создание)</option>
+                    <option value="persona_pack" {% if product_type == 'persona_pack' %}selected{% endif %}>Фотопак</option>
                 </select>
             </div>
             <div class="col-md-3">
@@ -70,6 +71,8 @@
                         <span class="badge" style="background: #667eea;">Персона+</span>
                         {% elif p.product_type == 'persona_create' %}
                         <span class="badge" style="background: #764ba2;">Персона New</span>
+                        {% elif p.product_type == 'persona_pack' %}
+                        <span class="badge bg-warning text-dark">Фотопак</span>
                         {% else %}
                         <span class="badge bg-secondary">{{ p.product_type }}</span>
                         {% endif %}
