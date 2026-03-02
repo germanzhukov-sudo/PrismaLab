@@ -1006,6 +1006,43 @@ async def api_pack_buy(request: Request):
     return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
 
 
+# ========== Стили Персоны ==========
+
+async def api_persona_styles(request: Request):
+    """Каталог стилей персоны (для Mini App)."""
+    gender = request.query_params.get("gender", "")
+    store = get_store()
+    styles = store.get_persona_styles(active_only=True, gender=gender if gender else None)
+    result = []
+    for s in styles:
+        result.append({
+            "id": s["id"],
+            "slug": s["slug"],
+            "title": s["title"],
+            "description": s.get("description") or "",
+            "gender": s["gender"],
+            "image_url": s.get("image_url") or "",
+        })
+    return JSONResponse({"styles": result})
+
+
+async def api_persona_style_detail(request: Request):
+    """Детали одного стиля персоны."""
+    style_id = int(request.path_params["style_id"])
+    store = get_store()
+    s = store.get_persona_style(style_id)
+    if not s:
+        return JSONResponse({"error": "Style not found"}, status_code=404)
+    return JSONResponse({
+        "id": s["id"],
+        "slug": s["slug"],
+        "title": s["title"],
+        "description": s.get("description") or "",
+        "gender": s["gender"],
+        "image_url": s.get("image_url") or "",
+    })
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -1019,6 +1056,8 @@ routes = [
     Route("/app/api/packs", api_packs, methods=["GET"]),
     Route("/app/api/packs/{pack_id:int}", api_pack_detail, methods=["GET"]),
     Route("/app/api/packs/{pack_id:int}/buy", api_pack_buy, methods=["POST"]),
+    Route("/app/api/persona-styles", api_persona_styles, methods=["GET"]),
+    Route("/app/api/persona-styles/{style_id:int}", api_persona_style_detail, methods=["GET"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 

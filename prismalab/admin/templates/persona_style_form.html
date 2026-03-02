@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}{% if style %}Редактировать{% else %}Новый{% endif %} стиль — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>
+        <i class="bi bi-palette me-2"></i>
+        {% if style %}Редактировать стиль{% else %}Новый стиль{% endif %}
+    </h2>
+    <a href="{{ admin_base }}/persona-styles" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Назад
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="POST" action="{{ admin_base }}/persona-styles/save" enctype="multipart/form-data">
+                    {% if style %}
+                    <input type="hidden" name="style_id" value="{{ style.id }}">
+                    <input type="hidden" name="existing_image_url" value="{{ style.image_url or '' }}">
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label class="form-label">Название</label>
+                        <input type="text" class="form-control" name="title"
+                               value="{{ style.title if style else '' }}"
+                               placeholder="Свадебный образ" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Описание</label>
+                        <textarea class="form-control" name="description" rows="3"
+                                  placeholder="Описание стиля для пользователя...">{{ style.description if style else '' }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Промт для Astria</label>
+                        <textarea class="form-control font-monospace" name="prompt" rows="5"
+                                  placeholder="IDENTICAL FACE AND FEATURES from reference photo...">{{ style.prompt if style else '' }}</textarea>
+                        <small class="text-muted">Английский текст для генерации. Если пусто — будет использован дефолтный.</small>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Пол</label>
+                            <select class="form-select" name="gender">
+                                <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
+                                <option value="male" {% if style and style.gender == 'male' %}selected{% endif %}>Male</option>
+                                <option value="unisex" {% if style and style.gender == 'unisex' %}selected{% endif %}>Unisex</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Порядок</label>
+                            <input type="number" class="form-control" name="sort_order"
+                                   value="{{ style.sort_order if style else 1 }}" min="1">
+                            <small class="text-muted">1 = первый в списке</small>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Статус</label>
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                                       {% if not style or style.is_active %}checked{% endif %}>
+                                <label class="form-check-label">Активен</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Картинка</label>
+                        {% if style and style.image_url %}
+                        <div class="mb-2">
+                            <img src="{{ style.image_url }}" alt="{{ style.title }}"
+                                 style="max-width: 200px; max-height: 200px; object-fit: cover; border-radius: 12px;">
+                        </div>
+                        {% endif %}
+                        <input type="file" class="form-control" name="image" accept="image/*">
+                        <small class="text-muted">JPG/PNG, рекомендуемый размер 400x600px. {% if style and style.image_url %}Загрузите новую для замены.{% endif %}</small>
+                    </div>
+
+                    <hr>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>
+                        {% if style %}Сохранить{% else %}Создать{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Подсказка
+            </div>
+            <div class="card-body">
+                <p><strong>Пол</strong> — определяет, кому показывать стиль в каталоге Mini App.</p>
+                <p><strong>Картинка</strong> — загружается в Supabase Storage. Отображается в каталоге Mini App.</p>
+                <p class="mb-0"><strong>Порядок</strong> — стили сортируются по возрастанию. 0 = первый.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

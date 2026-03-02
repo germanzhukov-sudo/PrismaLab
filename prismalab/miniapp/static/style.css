@@ -1068,6 +1068,381 @@ body {
     font-weight: 600;
 }
 
+/* ===== Persona Styles ===== */
+
+.persona-styles-filters {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    background: rgba(10, 10, 15, 0.5);
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.persona-styles-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 16px;
+    padding-bottom: 32px;
+}
+
+.persona-style-card {
+    position: relative;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    cursor: pointer;
+    transition: var(--transition);
+    aspect-ratio: 3/4;
+    border: 1px solid var(--border-glass);
+    animation: fadeInUp 0.4s ease-out both;
+}
+
+.persona-style-card:active {
+    transform: scale(0.96);
+    border-color: var(--accent-purple);
+    box-shadow: var(--shadow-glow);
+}
+
+.persona-style-card.skeleton {
+    background: var(--bg-glass);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.persona-style-card-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+}
+
+.persona-style-card-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 32px 12px 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.75));
+}
+
+.persona-style-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: white;
+}
+
+/* Persona Style — Selected card */
+
+.persona-style-card.selected {
+    border: 2px solid var(--accent-purple);
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+.persona-style-card-checkbox {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.5);
+    background: rgba(0,0,0,0.3);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    z-index: 3;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.persona-style-card-checkbox.checked {
+    background: var(--accent-purple);
+    border-color: var(--accent-purple);
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+}
+
+/* Persona Style — Lightbox */
+
+.persona-style-lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.92);
+    z-index: 9999;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.persona-style-lightbox-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 24px;
+    line-height: 1;
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.persona-style-lightbox-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 100%;
+    max-height: 85vh;
+}
+
+.persona-style-lightbox-content img {
+    max-width: 100%;
+    max-height: 65vh;
+    object-fit: contain;
+    border-radius: var(--radius-lg);
+}
+
+.persona-style-lightbox-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    margin-top: 20px;
+    width: 100%;
+}
+
+.persona-style-lightbox-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: white;
+    text-align: center;
+}
+
+.persona-style-lightbox-desc {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    line-height: 1.4;
+    max-width: 320px;
+}
+
+.persona-style-lightbox-btn {
+    background: var(--accent-purple);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 14px 48px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.persona-style-lightbox-btn:active {
+    transform: scale(0.96);
+    opacity: 0.9;
+}
+
+.persona-style-lightbox-btn.deselect {
+    background: rgba(255,255,255,0.15);
+}
+
+/* ===== Persona Balance Badge (с персоной) ===== */
+
+.persona-balance-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-glass);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    transition: var(--transition);
+}
+
+.persona-balance-badge.low {
+    border-color: rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.persona-balance-badge.empty {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.persona-balance-icon {
+    width: 14px;
+    height: 14px;
+    background: var(--accent-gradient);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    display: inline-block;
+    flex-shrink: 0;
+    animation: prism-pulse 3s ease-in-out infinite;
+}
+
+@keyframes prism-pulse {
+    0%, 100% { opacity: 0.85; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* Disabled checkbox (0 credits) */
+.persona-style-card-checkbox.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+/* Disabled lightbox button (0 credits) */
+.persona-style-lightbox-btn.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+/* ===== Persona Buy — витрина без персоны ===== */
+
+/* Инфо-текст сверху */
+.persona-buy-info {
+    margin: 0 16px 8px;
+    padding: 10px 14px;
+    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.persona-buy-info-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* Фиксированный футер с тарифами */
+.persona-buy-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, var(--bg-primary) 80%, transparent);
+}
+
+.persona-buy-footer-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.persona-buy-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: var(--radius-sm);
+    background: rgba(139, 92, 246, 0.08);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+
+.persona-buy-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.15), rgba(217, 70, 239, 0.1), transparent);
+    animation: tariff-shimmer 4s ease-in-out infinite;
+}
+
+.persona-buy-btn:nth-child(2)::before {
+    animation-delay: 2s;
+}
+
+@keyframes tariff-shimmer {
+    0%, 100% { left: -100%; }
+    50% { left: 100%; }
+}
+
+.persona-buy-btn:active {
+    transform: scale(0.96);
+}
+
+.persona-buy-btn.selected {
+    border-color: var(--accent-purple);
+    background: rgba(139, 92, 246, 0.25);
+    box-shadow: 0 0 16px rgba(139, 92, 246, 0.35);
+}
+
+.persona-buy-btn.selected::before {
+    animation: none;
+    display: none;
+}
+
+.persona-buy-btn-credits {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.persona-buy-btn-price {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+/* Кнопка «Оплатить» */
+.persona-buy-pay-btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink));
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.persona-buy-pay-btn:active {
+    transform: scale(0.97);
+}
+
+.persona-buy-pay-btn:disabled {
+    opacity: 0.5;
+}
+
+/* Showcase mode — карточки без интерактивности выбора */
+.persona-style-card.showcase {
+    cursor: pointer;
+}
+
+/* Отступ снизу для грида чтобы футер не перекрывал карточки */
+#screen-persona-styles .persona-styles-grid {
+    padding-bottom: 120px;
+}
+
 /* ===== Safe area (iPhone notch) ===== */
 
 @supports (padding: max(0px)) {

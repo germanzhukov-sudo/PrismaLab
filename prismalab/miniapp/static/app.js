@@ -14,6 +14,9 @@ const state = {
     packsEnabled: false,
     packs: [],
     selectedPack: null,
+    personaStyles: [],
+    selectedPersonaStyle: null,
+    personaStyleGenderFilter: '',
 };
 
 // === Telegram SDK ===
@@ -111,6 +114,12 @@ function showScreen(name) {
             target.classList.add('active');
         }
     }, 50);
+
+    // Показать/скрыть фиксированный футер тарифов
+    const footer = document.getElementById('persona-buy-footer');
+    if (footer) {
+        footer.style.display = (name === 'persona-styles' && !state.hasPersona) ? 'flex' : 'none';
+    }
 
     // Haptic feedback
     if (tg?.HapticFeedback) {
@@ -642,6 +651,295 @@ function closeLightbox() {
 
 function closeMiniApp() {
     if (tg) {
+        tg.close();
+    }
+}
+
+// === Persona Styles ===
+
+async function goToPersonaStyles() {
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    showScreen('persona-styles');
+    await loadPersonaStyles();
+}
+
+async function loadPersonaStyles() {
+    const grid = document.getElementById('persona-styles-grid');
+    grid.innerHTML = '';
+    for (let i = 0; i < 4; i++) {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'persona-style-card skeleton';
+        grid.appendChild(skeleton);
+    }
+
+    // Показать/скрыть инфо + футер покупки в зависимости от наличия персоны
+    const info = document.getElementById('persona-buy-info');
+    const footer = document.getElementById('persona-buy-footer');
+    if (info) info.style.display = state.hasPersona ? 'none' : 'block';
+    if (footer) footer.style.display = state.hasPersona ? 'none' : 'flex';
+
+    // Показать баланс-бейдж если есть персона
+    updatePersonaBalanceDisplay();
+
+    // Грид padding: с футером — 120px, без — 32px
+    grid.style.paddingBottom = state.hasPersona ? '32px' : '120px';
+
+    // Сбросить выбор тарифа при загрузке
+    state.selectedTariff = null;
+    if (!state.selectedPersonaStyles) state.selectedPersonaStyles = [];
+    updateTariffSelection();
+
+    try {
+        // Всегда грузим ВСЕ стили, фильтруем на клиенте
+        const resp = await fetch('/app/api/persona-styles');
+        const data = await resp.json();
+        state.allPersonaStyles = Array.isArray(data) ? data : (data.styles || []);
+
+        // Показываем/скрываем фильтры по наличию полов
+        const hasMale = state.allPersonaStyles.some(s => s.gender === 'male');
+        const hasFemale = state.allPersonaStyles.some(s => s.gender === 'female');
+        const filtersEl = document.getElementById('persona-styles-filters');
+        filtersEl.style.display = (hasMale && hasFemale) ? 'flex' : 'none';
+
+        // Если фильтры скрыты — сбросить фильтр
+        if (!(hasMale && hasFemale)) state.personaStyleGenderFilter = '';
+
+        applyPersonaStyleFilter();
+    } catch (e) {
+        console.error('Load persona styles error:', e);
+        grid.innerHTML = '<p style="color: var(--text-secondary); padding: 20px; text-align: center; grid-column: 1/-1;">Ошибка загрузки стилей</p>';
+    }
+}
+
+function renderPersonaStyles() {
+    const grid = document.getElementById('persona-styles-grid');
+    grid.innerHTML = '';
+
+    const styles = state.personaStyles;
+    if (!styles.length) {
+        grid.innerHTML = '<p style="color: var(--text-secondary); padding: 40px 20px; text-align: center; grid-column: 1/-1;">Стили скоро появятся</p>';
+        return;
+    }
+
+    if (!state.selectedPersonaStyles) state.selectedPersonaStyles = [];
+
+    const hasPersona = !!state.hasPersona;
+    const canSelect = state.personaCredits > 0;
+
+    styles.forEach((style, index) => {
+        const card = document.createElement('div');
+        card.className = 'persona-style-card';
+        if (!hasPersona) card.classList.add('showcase');
+        card.dataset.styleId = style.id;
+        card.style.animationDelay = `${index * 0.05}s`;
+
+        const isSelected = hasPersona && state.selectedPersonaStyles.some(s => s.id === style.id);
+        if (isSelected) card.classList.add('selected');
+
+        const imgStyle = style.image_url
+            ? `background-image: url('${style.image_url}')`
+            : `background: linear-gradient(135deg, hsl(${(index * 47 + 200) % 360}, 50%, 30%), hsl(${((index * 47 + 200) % 360 + 50) % 360}, 60%, 20%))`;
+
+        // Чекбокс показываем только если есть персона
+        // Дизейблим если баланс = 0 и стиль не выбран (выбранные можно убирать)
+        const isDisabled = hasPersona && !isSelected && !canSelect;
+        const checkboxHtml = hasPersona
+            ? `<div class="persona-style-card-checkbox ${isSelected ? 'checked' : ''} ${isDisabled ? 'disabled' : ''}" onclick="event.stopPropagation(); togglePersonaStyle(${style.id})">${isSelected ? '✓' : ''}</div>`
+            : '';
+
+        card.innerHTML = `
+            <div class="persona-style-card-img" style="${imgStyle}"></div>
+            <div class="persona-style-card-overlay">
+                <div class="persona-style-card-title">${style.title}</div>
+            </div>
+            ${checkboxHtml}
+        `;
+
+        // Тап по карточке — лайтбокс для просмотра
+        card.onclick = () => openPersonaStyleLightbox(style);
+
+        grid.appendChild(card);
+    });
+}
+
+function togglePersonaStyle(styleId) {
+    if (!state.selectedPersonaStyles) state.selectedPersonaStyles = [];
+    const idx = state.selectedPersonaStyles.findIndex(s => s.id === styleId);
+    if (idx >= 0) {
+        // Убираем — возвращаем кредит
+        state.selectedPersonaStyles.splice(idx, 1);
+        state.personaCredits++;
+        if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    } else {
+        // Добавляем — проверяем баланс
+        if (state.personaCredits <= 0) {
+            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+            return;
+        }
+        const style = state.personaStyles.find(s => s.id === styleId);
+        if (style) {
+            state.selectedPersonaStyles.push(style);
+            state.personaCredits--;
+            if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+        }
+    }
+    updatePersonaBalanceDisplay();
+    renderPersonaStyles();
+}
+
+function openPersonaStyleLightbox(style) {
+    state._lightboxStyle = style;
+    const lb = document.getElementById('persona-style-lightbox');
+    document.getElementById('persona-style-lightbox-img').src = style.image_url || '';
+    document.getElementById('persona-style-lightbox-title').textContent = style.title;
+    document.getElementById('persona-style-lightbox-desc').textContent = style.description || '';
+
+    const btn = document.getElementById('persona-style-lightbox-btn');
+    if (state.hasPersona) {
+        // С персоной — можно выбирать/убирать
+        const isSelected = (state.selectedPersonaStyles || []).some(s => s.id === style.id);
+        btn.textContent = isSelected ? 'Убрать' : 'Выбрать';
+        btn.className = 'persona-style-lightbox-btn' + (isSelected ? ' deselect' : '');
+        // Дизейблим «Выбрать» если нет кредитов и стиль ещё не выбран
+        if (!isSelected && state.personaCredits <= 0) {
+            btn.classList.add('disabled');
+        }
+        btn.style.display = 'block';
+    } else {
+        // Без персоны — только просмотр, кнопку скрываем
+        btn.style.display = 'none';
+    }
+
+    lb.style.display = 'flex';
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+}
+
+function closePersonaStyleLightbox(e) {
+    if (e && e.target !== e.currentTarget && !e.target.classList.contains('persona-style-lightbox-close')) return;
+    document.getElementById('persona-style-lightbox').style.display = 'none';
+    state._lightboxStyle = null;
+}
+
+function selectPersonaStyleFromLightbox() {
+    const style = state._lightboxStyle;
+    if (!style) return;
+
+    togglePersonaStyle(style.id);
+
+    // Закрыть лайтбокс
+    document.getElementById('persona-style-lightbox').style.display = 'none';
+    state._lightboxStyle = null;
+}
+
+function applyPersonaStyleFilter() {
+    const gender = state.personaStyleGenderFilter || '';
+    const all = state.allPersonaStyles || [];
+    state.personaStyles = gender ? all.filter(s => s.gender === gender) : all;
+    renderPersonaStyles();
+}
+
+function filterPersonaStyles(gender) {
+    state.personaStyleGenderFilter = gender;
+    document.querySelectorAll('#persona-styles-filters .category-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.gender === gender);
+    });
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    applyPersonaStyleFilter();
+}
+
+// === Баланс персоны ===
+
+function updatePersonaBalanceDisplay() {
+    const badge = document.getElementById('persona-balance-badge');
+    const count = document.getElementById('persona-balance-count');
+    if (!badge || !count) return;
+
+    if (state.hasPersona) {
+        badge.style.display = 'flex';
+        count.textContent = state.personaCredits;
+        // Подсветка если мало кредитов
+        badge.classList.toggle('low', state.personaCredits <= 2 && state.personaCredits > 0);
+        badge.classList.toggle('empty', state.personaCredits === 0);
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+// === Покупка персоны из витрины ===
+
+function selectPersonaTariff(credits) {
+    if (state.selectedTariff === credits) {
+        // Повторный тап — снять выбор
+        state.selectedTariff = null;
+    } else {
+        state.selectedTariff = credits;
+    }
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    updateTariffSelection();
+}
+
+function updateTariffSelection() {
+    const btns = document.querySelectorAll('.persona-buy-btn');
+    btns.forEach(b => {
+        const c = parseInt(b.dataset.credits);
+        b.classList.toggle('selected', c === state.selectedTariff);
+    });
+    const payBtn = document.getElementById('persona-buy-pay-btn');
+    if (payBtn) {
+        payBtn.style.display = state.selectedTariff ? 'block' : 'none';
+    }
+}
+
+async function buyPersona() {
+    const credits = state.selectedTariff;
+    if (!credits) return;
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+
+    const payBtn = document.getElementById('persona-buy-pay-btn');
+    payBtn.disabled = true;
+    payBtn.textContent = 'Создаём платёж...';
+
+    try {
+        const resp = await fetch('/app/api/persona/buy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, credits }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(data.error || 'Payment failed');
+        }
+
+        if (data.payment_url && tg) {
+            tg.openLink(data.payment_url);
+        } else if (data.payment_url) {
+            window.open(data.payment_url, '_blank');
+        }
+    } catch (e) {
+        console.error('Buy persona error:', e);
+        alert('Ошибка создания платежа: ' + e.message);
+    } finally {
+        payBtn.disabled = false;
+        payBtn.textContent = 'Оплатить';
+    }
+}
+
+// Старая функция selectPersonaStyle — теперь не используется, sendData вызывается отдельно
+function selectPersonaStyle() {
+    const style = state.selectedPersonaStyle;
+    if (!style) return;
+
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+
+    if (tg) {
+        tg.sendData(JSON.stringify({
+            action: 'persona_style_selected',
+            style_id: style.id,
+            style_slug: style.slug,
+            style_title: style.title,
+        }));
         tg.close();
     }
 }

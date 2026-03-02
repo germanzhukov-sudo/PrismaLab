@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PrismaLab Studio</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/static/style.css">
+    <link rel="stylesheet" href="/app/static/style.css?v=14">
 </head>
 <body>
     <div id="app">
@@ -29,6 +29,10 @@
                     <button class="main-card" onclick="goToPacks()">
                         <div class="main-card-icon">📸</div>
                         <div class="main-card-title">Готовые фотосеты</div>
+                    </button>
+                    <button class="main-card" onclick="goToPersonaStyles()">
+                        <div class="main-card-icon">🎭</div>
+                        <div class="main-card-title">Стили Персоны</div>
                     </button>
                     <button class="main-card main-card-profile" onclick="goToProfile()">
                         <div class="main-card-icon">👤</div>
@@ -89,6 +93,45 @@
                 <h2 class="nocredits-title">Оплата прошла!</h2>
                 <p class="nocredits-text">Перейдите в бот — там всё продолжится.</p>
                 <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+            </div>
+        </div>
+
+        <!-- Screen: Persona Styles Catalog -->
+        <div id="screen-persona-styles" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Стили Персоны</h2>
+                <div class="persona-balance-badge" id="persona-balance-badge" style="display: none;">
+                    <span id="persona-balance-count">0</span>
+                    <span class="persona-balance-icon"></span>
+                </div>
+            </div>
+            <!-- Инфо-текст (без персоны) -->
+            <div class="persona-buy-info" id="persona-buy-info" style="display: none;">
+                <div class="persona-buy-info-text">1 кредит = 1 фото. Образы станут доступны после оплаты тарифа</div>
+            </div>
+            <div class="persona-styles-filters" id="persona-styles-filters">
+                <button class="category-tab active" data-gender="" onclick="filterPersonaStyles('')">Все</button>
+                <button class="category-tab" data-gender="female" onclick="filterPersonaStyles('female')">Женские</button>
+                <button class="category-tab" data-gender="male" onclick="filterPersonaStyles('male')">Мужские</button>
+            </div>
+            <div class="persona-styles-grid" id="persona-styles-grid">
+                <!-- Стили загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Lightbox: Persona Style Preview -->
+        <div id="persona-style-lightbox" class="persona-style-lightbox" onclick="closePersonaStyleLightbox(event)">
+            <button class="persona-style-lightbox-close" onclick="closePersonaStyleLightbox()">&times;</button>
+            <div class="persona-style-lightbox-content" onclick="event.stopPropagation()">
+                <img id="persona-style-lightbox-img" src="" alt="">
+                <div class="persona-style-lightbox-bottom">
+                    <div class="persona-style-lightbox-title" id="persona-style-lightbox-title"></div>
+                    <div class="persona-style-lightbox-desc" id="persona-style-lightbox-desc"></div>
+                    <button class="persona-style-lightbox-btn" id="persona-style-lightbox-btn" onclick="selectPersonaStyleFromLightbox()">Выбрать</button>
+                </div>
             </div>
         </div>
 
@@ -247,11 +290,26 @@
         </div>
     </div>
 
+    <!-- Фиксированный футер с тарифами (без персоны) -->
+    <div class="persona-buy-footer" id="persona-buy-footer" style="display: none;">
+        <div class="persona-buy-footer-buttons">
+            <button class="persona-buy-btn" data-credits="20" onclick="selectPersonaTariff(20)">
+                <span class="persona-buy-btn-price">599 ₽</span>
+                <span class="persona-buy-btn-credits">20 кредитов</span>
+            </button>
+            <button class="persona-buy-btn" data-credits="40" onclick="selectPersonaTariff(40)">
+                <span class="persona-buy-btn-price">999 ₽</span>
+                <span class="persona-buy-btn-credits">40 кредитов</span>
+            </button>
+        </div>
+        <button class="persona-buy-pay-btn" id="persona-buy-pay-btn" style="display: none;" onclick="buyPersona()">Оплатить</button>
+    </div>
+
     <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Закрыть">×</button>
     </div>
 
-    <script src="/app/static/app.js"></script>
+    <script src="/app/static/app.js?v=14"></script>
 </body>
 </html>

@@ -778,6 +778,119 @@ async def analytics_page(request: Request):
     })
 
 
+# ========== Стили Персоны ==========
+
+@require_auth
+async def persona_styles_page(request: Request):
+    """Список стилей персоны."""
+    store = get_store()
+    styles = store.get_persona_styles()
+    saved = request.query_params.get("saved") == "1"
+    deleted = request.query_params.get("deleted") == "1"
+
+    return templates.TemplateResponse("persona_styles.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "styles": styles,
+        "saved": saved,
+        "deleted": deleted,
+    })
+
+
+@require_auth
+async def persona_style_form(request: Request):
+    """Форма создания/редактирования стиля."""
+    style_id = request.path_params.get("style_id")
+    store = get_store()
+    style = None
+    if style_id:
+        style = store.get_persona_style(int(style_id))
+        if not style:
+            return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles", status_code=302)
+
+    return templates.TemplateResponse("persona_style_form.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "style": style,
+    })
+
+
+@require_auth
+async def persona_style_save(request: Request):
+    """Сохранение стиля (создание или обновление)."""
+    store = get_store()
+    form = await request.form()
+
+    style_id = form.get("style_id", "").strip()
+    title = form.get("title", "").strip()
+    description = form.get("description", "").strip()
+    prompt = form.get("prompt", "").strip()
+    gender = form.get("gender", "female")
+    sort_order = int(form.get("sort_order", 0) or 0)
+    is_active = form.get("is_active") == "1"
+
+    # Auto-generate slug from title
+    import re, time as _time
+    _translit = {"а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"}
+    slug = "".join(_translit.get(c, c) for c in title.lower())
+    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_") or f"style_{int(_time.time())}"
+
+    # Обработка загрузки картинки
+    image_url = form.get("existing_image_url", "").strip()
+    image_file = form.get("image")
+    if image_file and hasattr(image_file, "read"):
+        file_bytes = await image_file.read()
+        if file_bytes and len(file_bytes) > 0:
+            from prismalab.supabase_storage import upload_image
+            content_type = getattr(image_file, "content_type", "image/jpeg") or "image/jpeg"
+            filename = getattr(image_file, "filename", "style.jpg") or "style.jpg"
+            new_url = upload_image(file_bytes, filename, content_type)
+            if new_url:
+                # Удалить старую картинку если была
+                if image_url:
+                    from prismalab.supabase_storage import delete_image
+                    delete_image(image_url)
+                image_url = new_url
+
+    if style_id:
+        # Обновление — сдвинуть остальные если порядок занят
+        store._shift_persona_style_sort_order(sort_order, exclude_id=int(style_id))
+        store.update_persona_style(
+            int(style_id),
+            slug=slug, title=title, description=description,
+            prompt=prompt, gender=gender, image_url=image_url,
+            sort_order=sort_order, is_active=is_active,
+        )
+    else:
+        # Создание
+        if not title:
+            return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles/new", status_code=302)
+        store._shift_persona_style_sort_order(sort_order)
+        store.create_persona_style(
+            slug=slug, title=title, description=description,
+            prompt=prompt, gender=gender, image_url=image_url,
+            sort_order=sort_order,
+        )
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?saved=1", status_code=303)
+
+
+@require_auth
+async def persona_style_delete(request: Request):
+    """Удаление стиля."""
+    style_id = int(request.path_params["style_id"])
+    store = get_store()
+
+    # Получить стиль для удаления картинки из Storage
+    style = store.get_persona_style(style_id)
+    if style and style.get("image_url"):
+        from prismalab.supabase_storage import delete_image
+        delete_image(style["image_url"])
+
+    store.delete_persona_style(style_id)
+    return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?deleted=1", status_code=303)
+
+
 routes = [
     Route("/admin", dashboard, methods=["GET"]),  # без слэша — тот же дашборд
     Route("/admin/", dashboard, methods=["GET"]),
@@ -797,6 +910,11 @@ routes = [
     Route("/admin/broadcast", broadcast_post, methods=["POST"]),
     Route("/admin/settings", settings_page, methods=["GET"]),
     Route("/admin/settings", settings_post, methods=["POST"]),
+    Route("/admin/persona-styles", persona_styles_page, methods=["GET"]),
+    Route("/admin/persona-styles/new", persona_style_form, methods=["GET"]),
+    Route("/admin/persona-styles/{style_id:int}/edit", persona_style_form, methods=["GET"]),
+    Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
+    Route("/admin/persona-styles/{style_id:int}/delete", persona_style_delete, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
     Route("/admin/api/chart", api_chart_data, methods=["GET"]),
     Mount("/admin/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static"),

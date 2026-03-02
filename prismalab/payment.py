@@ -858,9 +858,11 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
             asgi_resource = ASGIResource(admin_app, root_path="")
 
             async def _admin_handler(request: web.Request) -> web.StreamResponse:
-                logger.info("Admin request: %s %s -> handling", request.method, request.path)
+                # Fix: aiohttp_asgi/yarl ломается на Host с портом (localhost:8080)
+                host = request.headers.get("Host", "")
+                if ":" in host:
+                    request = request.clone(headers={**request.headers, "Host": host.split(":")[0]})
                 resp = await asgi_resource._handle(request)
-                logger.info("Admin response: %s", resp.status)
                 return resp
 
             # Тест: если /admin/ping отдаёт 200 — aiohttp матчит /admin/*, иначе проблема в роутере
@@ -1112,6 +1114,91 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 ))
                 return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
 
+            async def _miniapp_api_persona_buy(request: web.Request) -> web.Response:
+                """Покупка персоны из Mini App: создаёт платёж ЮKassa и возвращает URL для оплаты."""
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+                # credits: 20 или 40
+                try:
+                    credits = int(body.get("credits", 0))
+                except (ValueError, TypeError):
+                    return web.json_response({"error": "Invalid credits"}, status=400)
+                if credits not in PRICES_PERSONA_CREATE:
+                    return web.json_response({"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_CREATE.keys())}"}, status=400)
+                user_id = user["user_id"]
+                price_rub = PRICES_PERSONA_CREATE[credits]
+                amount = apply_test_amount(float(price_rub))
+                # return_url → бот (после оплаты юзер попадает в бота для загрузки фото)
+                return_url = YOOKASSA_RETURN_URL
+                url, payment_id_or_err = create_payment(
+                    amount_rub=amount,
+                    description=f"PrismaLab — Создание персоны ({credits} фото)",
+                    metadata={
+                        "user_id": str(user_id),
+                        "chat_id": str(user_id),
+                        "product_type": "persona_create",
+                        "credits": str(credits),
+                    },
+                    return_url=return_url,
+                )
+                if not url:
+                    asyncio.get_event_loop().create_task(
+                        alert_payment_error(user_id, "persona_create", str(payment_id_or_err or "payment creation failed"))
+                    )
+                    return web.json_response({"error": "Payment creation failed"}, status=500)
+                asyncio.get_event_loop().create_task(poll_payment_status(
+                    payment_id=payment_id_or_err,
+                    bot=bot,
+                    store=store,
+                    user_id=user_id,
+                    chat_id=user_id,
+                    credits=credits,
+                    product_type="persona_create",
+                    amount_rub=amount,
+                    application=application,
+                ))
+                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
+
+            async def _miniapp_api_persona_styles(request: web.Request) -> web.Response:
+                gender = request.query.get("gender", "")
+                styles = store.get_persona_styles(active_only=True, gender=gender if gender else None)
+                return web.json_response([
+                    {
+                        "id": s["id"],
+                        "slug": s["slug"],
+                        "title": s["title"],
+                        "description": s.get("description", ""),
+                        "gender": s.get("gender", ""),
+                        "image_url": s.get("image_url", ""),
+                    }
+                    for s in styles
+                ])
+
+            async def _miniapp_api_persona_style_detail(request: web.Request) -> web.Response:
+                style_id_str = request.match_info.get("style_id", "")
+                try:
+                    style_id = int(style_id_str)
+                except (ValueError, TypeError):
+                    return web.json_response({"error": "Invalid style_id"}, status=400)
+                s = store.get_persona_style(style_id)
+                if not s:
+                    return web.json_response({"error": "Style not found"}, status=404)
+                return web.json_response({
+                    "id": s["id"],
+                    "slug": s["slug"],
+                    "title": s["title"],
+                    "description": s.get("description", ""),
+                    "gender": s.get("gender", ""),
+                    "image_url": s.get("image_url", ""),
+                })
+
             # Статика Mini App
             from pathlib import Path
             miniapp_static_path = str(Path(__file__).parent / "miniapp" / "static")
@@ -1125,6 +1212,9 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
             app.router.add_get("/app/api/packs", _miniapp_api_packs)
             app.router.add_get("/app/api/packs/{pack_id}", _miniapp_api_pack_detail)
             app.router.add_post("/app/api/packs/{pack_id}/buy", _miniapp_api_pack_buy)
+            app.router.add_get("/app/api/persona-styles", _miniapp_api_persona_styles)
+            app.router.add_get("/app/api/persona-styles/{style_id}", _miniapp_api_persona_style_detail)
+            app.router.add_post("/app/api/persona/buy", _miniapp_api_persona_buy)
             app.router.add_static("/app/static", miniapp_static_path)
             logger.info("Mini App доступен на порту %s (path: /app/)", port)
         except ImportError as e:

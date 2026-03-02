@@ -7531,6 +7531,64 @@ async def handle_style_callback(update: Update, context: ContextTypes.DEFAULT_TY
     context.application.create_task(runner())
 
 
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик данных из Mini App (tg.sendData)."""
+    user_id = update.effective_user.id
+    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
+        return
+    data_str = update.effective_message.web_app_data.data
+    try:
+        data = json.loads(data_str)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Invalid web_app_data from user %s: %s", user_id, data_str[:200])
+        return
+
+    action = data.get("action", "")
+    logger.info("web_app_data from user %s: action=%s", user_id, action)
+
+    if action == "persona_style_selected":
+        style_id = data.get("style_id")
+        style_slug = data.get("style_slug", "")
+        style_title = data.get("style_title", "")
+
+        store.log_event(user_id, "persona_style_selected", {
+            "style_id": style_id,
+            "style_slug": style_slug,
+            "style_title": style_title,
+        })
+
+        # Проверяем, есть ли у юзера Персона
+        profile = store.get_user(user_id)
+        has_persona = bool(
+            getattr(profile, "astria_lora_tune_id", None)
+            or getattr(profile, "astria_lora_pack_tune_id", None)
+        )
+
+        if has_persona:
+            await update.effective_message.reply_text(
+                f"Вы выбрали стиль: *{style_title}*\n\n"
+                "У вас уже есть Персона. Генерация фото в выбранном стиле будет доступна скоро!",
+                parse_mode="Markdown",
+            )
+        else:
+            # Сохраняем выбранный стиль в user_data для дальнейшего флоу
+            context.user_data["pending_persona_style_id"] = style_id
+            context.user_data["pending_persona_style_slug"] = style_slug
+            context.user_data["pending_persona_style_title"] = style_title
+
+            await update.effective_message.reply_text(
+                f"Вы выбрали стиль: *{style_title}*\n\n"
+                "Для генерации фото в этом стиле нужно сначала создать Персону. "
+                "Нажмите /newpersona, чтобы начать.",
+                parse_mode="Markdown",
+            )
+
+    elif action == "buy_credits":
+        await update.effective_message.reply_text(
+            "Используйте /menu для покупки кредитов."
+        )
+
+
 def main() -> None:
     settings = load_settings()
     _guard_dev_only_flags()
@@ -7600,6 +7658,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(handle_fast_change_style_callback, pattern="^pl_fast_change_style$"))
     application.add_handler(CallbackQueryHandler(handle_fast_show_ready_callback, pattern="^pl_fast_show_ready$"))
     application.add_handler(CallbackQueryHandler(handle_fast_style_callback, pattern="^pl_fast_style:"))
+    application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))

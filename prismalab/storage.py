@@ -83,6 +83,7 @@ class PrismaLabStore:
         self._admin_settings_table = f"public.{self._prefix}admin_settings" if self._use_pg else f"{self._prefix}admin_settings"
         self._admin_pack_costs_table = f"public.{self._prefix}admin_pack_costs" if self._use_pg else f"{self._prefix}admin_pack_costs"
         self._pending_pack_runs_table = f"public.{self._prefix}pending_pack_runs" if self._use_pg else f"{self._prefix}pending_pack_runs"
+        self._persona_styles_table = f"public.{self._prefix}persona_styles" if self._use_pg else f"{self._prefix}persona_styles"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -866,6 +867,29 @@ class PrismaLabStore:
                             created_at TIMESTAMPTZ DEFAULT NOW()
                         )
                     """)
+                    # Таблица стилей персоны
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._persona_styles_table} (
+                            id SERIAL PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            title TEXT NOT NULL,
+                            description TEXT,
+                            gender TEXT NOT NULL DEFAULT 'female',
+                            image_url TEXT,
+                            prompt TEXT,
+                            sort_order INTEGER DEFAULT 0,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        )
+                    """)
+                    conn.commit()
+                    # Добавить prompt в persona_styles если нет
+                    try:
+                        cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN prompt TEXT")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
                     # Добавить created_at в users если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._users_table} ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()")
@@ -1943,3 +1967,124 @@ class PrismaLabStore:
             self.set_persona_credits(user_id, new_value)
             return True
         return False
+
+    # ========================================
+    # СТИЛИ ПЕРСОНЫ
+    # ========================================
+
+    def get_persona_styles(self, *, active_only: bool = False, gender: str | None = None) -> list[dict]:
+        """Получить список стилей персоны."""
+        if not self._use_pg:
+            return []
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                conditions = []
+                params: list = []
+                if active_only:
+                    conditions.append("is_active = TRUE")
+                if gender:
+                    conditions.append("gender = %s")
+                    params.append(gender)
+                where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+                cur.execute(f"SELECT * FROM {self._persona_styles_table}{where} ORDER BY sort_order, id", params)
+                return [dict(row) for row in cur.fetchall()]
+
+    def get_persona_style(self, style_id: int) -> dict | None:
+        """Получить один стиль по id."""
+        if not self._use_pg:
+            return None
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def get_persona_style_by_slug(self, slug: str) -> dict | None:
+        """Получить один стиль по slug."""
+        if not self._use_pg:
+            return None
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE slug = %s", (slug,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def _shift_persona_style_sort_order(self, sort_order: int, exclude_id: int | None = None) -> None:
+        """Сдвинуть sort_order >= заданного на +1, чтобы освободить место."""
+        if not self._use_pg:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                if exclude_id is not None:
+                    cur.execute(
+                        f"UPDATE {self._persona_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= %s AND id != %s",
+                        (int(sort_order), int(exclude_id)),
+                    )
+                else:
+                    cur.execute(
+                        f"UPDATE {self._persona_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= %s",
+                        (int(sort_order),),
+                    )
+                conn.commit()
+
+    def create_persona_style(self, *, slug: str, title: str, description: str = "",
+                             gender: str = "female", image_url: str = "",
+                             prompt: str = "", sort_order: int = 0) -> int | None:
+        """Создать стиль. Возвращает id."""
+        if not self._use_pg:
+            return None
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"""
+                    INSERT INTO {self._persona_styles_table} (slug, title, description, gender, image_url, prompt, sort_order)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (slug, title, description, gender, image_url, prompt, int(sort_order)))
+                row = cur.fetchone()
+                conn.commit()
+                return int(row["id"]) if row else None
+
+    def update_persona_style(self, style_id: int, **kwargs) -> bool:
+        """Обновить стиль. Допустимые поля: slug, title, description, gender, image_url, sort_order, is_active."""
+        if not self._use_pg:
+            return False
+        allowed = {"slug", "title", "description", "gender", "image_url", "prompt", "sort_order", "is_active"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return False
+        fields["updated_at"] = "NOW()"
+        set_parts = []
+        params: list = []
+        for k, v in fields.items():
+            if v == "NOW()":
+                set_parts.append(f"{k} = NOW()")
+            else:
+                set_parts.append(f"{k} = %s")
+                params.append(v)
+        params.append(int(style_id))
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"UPDATE {self._persona_styles_table} SET {', '.join(set_parts)} WHERE id = %s",
+                    params,
+                )
+                updated = cur.rowcount > 0
+                conn.commit()
+                return updated
+
+    def delete_persona_style(self, style_id: int) -> bool:
+        """Удалить стиль."""
+        if not self._use_pg:
+            return False
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"DELETE FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
+                deleted = cur.rowcount > 0
+                conn.commit()
+                return deleted

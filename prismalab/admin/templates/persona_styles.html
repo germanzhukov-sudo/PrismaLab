@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Стили Персоны — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-palette me-2"></i>Стили Персоны</h2>
+    <a href="{{ admin_base }}/persona-styles/new" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-1"></i>Добавить стиль
+    </a>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Стиль сохранён
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if deleted %}
+<div class="alert alert-warning alert-dismissible fade show" role="alert">
+    <i class="bi bi-trash me-2"></i>Стиль удалён
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th style="width: 60px">№</th>
+                    <th style="width: 80px">Фото</th>
+                    <th>Название</th>
+                    <th>Пол</th>
+                    <th>Статус</th>
+                    <th style="width: 120px">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in styles %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>
+                        {% if s.image_url %}
+                        <img src="{{ s.image_url }}" alt="" style="width: 50px; height: 50px; object-fit: cover; border-radius: 8px;">
+                        {% else %}
+                        <div style="width: 50px; height: 50px; background: #eee; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-image text-muted"></i>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ s.title }}</strong>
+                        {% if s.description %}
+                        <br><small class="text-muted">{{ s.description[:60] }}{% if s.description|length > 60 %}...{% endif %}</small>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if s.gender == 'male' %}
+                        <span class="badge bg-primary">M</span>
+                        {% elif s.gender == 'female' %}
+                        <span class="badge bg-danger">F</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ s.gender }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if s.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Off</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ admin_base }}/persona-styles/{{ s.id }}/edit" class="btn btn-sm btn-outline-primary me-1">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                        <form method="POST" action="{{ admin_base }}/persona-styles/{{ s.id }}/delete"
+                              style="display: inline" onsubmit="return confirm('Удалить стиль «{{ s.title }}»?')">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not styles %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">
+                        Стилей пока нет. <a href="{{ admin_base }}/persona-styles/new">Добавить первый</a>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
