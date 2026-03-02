@@ -854,10 +854,10 @@ def _persona_credits_out_content(profile: Any) -> tuple[str, InlineKeyboardMarku
 
 
 def _persona_app_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура: кнопка ✨ Персона (Mini App) + Главное меню."""
+    """Клавиатура: кнопка Персона (Mini App) + Главное меню."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1006,7 +1006,8 @@ def _photoset_done_keyboard() -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
     else:
         rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", callback_data="pl_persona_packs")])
-    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1161,16 +1162,17 @@ def _fast_tariff_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
+        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_fast_back")],
     ])
 
 
 def _fast_tariff_persona_only_keyboard() -> InlineKeyboardMarkup:
     """Только кнопка Персона (первое сообщение при 0 кредитах)."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
-    ])
+    rows: list[list[InlineKeyboardButton]] = []
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+    return InlineKeyboardMarkup(rows)
 
 
 def _fast_tariff_packages_keyboard(*, back_callback: str = "pl_fast_back") -> InlineKeyboardMarkup:
@@ -1321,7 +1323,7 @@ def _fast_style_choice_keyboard(
         back_data = "pl_fast_show_ready" if back_to_ready else "pl_fast_back"
     if include_tariffs:
         rows.append([
-            InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona"),
+            *([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))] if MINIAPP_URL else []),
             InlineKeyboardButton("Назад", callback_data=back_data),
         ])
     else:
@@ -1423,8 +1425,9 @@ def _start_keyboard(profile: Any | None = None) -> InlineKeyboardMarkup:
     user_id = getattr(profile, "user_id", None) if profile else None
     if MINIAPP_URL and MINIAPP_URL.startswith("https://"):
         rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.extend([
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
         [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
         [InlineKeyboardButton("Тарифы и форматы съёмки", callback_data="pl_start_tariffs")],
         [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
@@ -1452,9 +1455,10 @@ def _profile_keyboard(profile: Any) -> InlineKeyboardMarkup:
     """Клавиатура Профиля: Изменить пол, Экспресс-фото, Персона."""
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("Изменить пол", callback_data="pl_profile_toggle_gender")],
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
-        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_profile_fast_tariffs")],
     ]
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+    rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_profile_fast_tariffs")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1464,7 +1468,7 @@ def _fast_tariff_keyboard_from_profile() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        [InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")],
+        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_profile")],
     ])
 
@@ -1635,14 +1639,14 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 [InlineKeyboardButton("✨ 30 кредитов – 629 руб", callback_data="pl_persona_topup_buy:30")],
             ]
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         else:
             text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(remaining)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         await context.bot.send_message(
@@ -1839,7 +1843,7 @@ async def handle_start_fast_callback(update: Update, context: ContextTypes.DEFAU
 
 
 async def handle_start_persona_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка «✨ Персона»: если модель уже есть — сразу стили, иначе вводный экран."""
+    """Кнопка «Персона»: если модель уже есть — сразу стили, иначе вводный экран."""
     query = update.callback_query
     if not query:
         return
@@ -2026,13 +2030,12 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
     if not albums:
         user_id = int(query.from_user.id) if query.from_user else 0
         profile = store.get_user(user_id)
-        empty_kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona"),
-                InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast"),
-            ],
-            [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
-        ])
+        empty_rows: list[list[InlineKeyboardButton]] = []
+        if MINIAPP_URL:
+            empty_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        empty_rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+        empty_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+        empty_kb = InlineKeyboardMarkup(empty_rows)
         await query.edit_message_text(
             intro + "\n\n<b>Хотите попробовать?</b>",
             reply_markup=empty_kb,
@@ -2137,7 +2140,8 @@ async def handle_start_tariffs_callback(update: Update, context: ContextTypes.DE
     rows = []
     if _pack_offers() and MINIAPP_URL:
         rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
-    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
     rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
     kb = InlineKeyboardMarkup(rows)
@@ -2173,7 +2177,8 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
     rows = []
     if _pack_offers() and MINIAPP_URL:
         rows.append([InlineKeyboardButton("🎞️ Готовые фотосеты", web_app=WebAppInfo(url=MINIAPP_URL))])
-    rows.append([InlineKeyboardButton("✨ Персона", callback_data="pl_start_persona")])
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
     rows.append([InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
@@ -3932,7 +3937,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
         text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4059,7 +4064,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
         text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4931,7 +4936,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             await msg.reply_text(
                 text,
@@ -5538,7 +5543,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✨ Персона", callback_data="pl_persona_create")],
+                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
                 [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -5768,7 +5773,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✨ Персона", callback_data="pl_persona_create")],
+                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
                 [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -6105,7 +6110,7 @@ async def _start_astria_lora(
                 chat_id=chat_id,
                 text="✅ Готово! LoRA модель создана на Flux1.dev.\n"
                 f"ID модели: {result.tune_id}\n"
-                "Теперь нажми «✨ Персона» — я буду генерировать сцены с высоким качеством.",
+                "Теперь нажми «Персона» — я буду генерировать сцены с высоким качеством.",
                 reply_markup=_start_keyboard(profile),
             )
     except AstriaError as e:
