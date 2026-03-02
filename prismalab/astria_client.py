@@ -1093,21 +1093,16 @@ async def wait_pack_images(
             )
             return fresh_urls
         all_done = True
+        _done_statuses = {
+            "completed", "succeeded", "ready", "failed", "error",
+            "cancelled", "canceled", "finished", "done", "stopped", "skipped",
+        }
         for prompt in relevant_prompts:
             status = str(prompt.get("status") or prompt.get("state") or "").lower()
-            if status not in {
-                "completed",
-                "succeeded",
-                "ready",
-                "failed",
-                "error",
-                "cancelled",
-                "canceled",
-                "finished",
-                "done",
-                "stopped",
-                "skipped",
-            }:
+            has_images = bool(_extract_image_urls(prompt))
+            has_trained_at = bool(prompt.get("trained_at"))
+            # Astria pack prompts часто без status/state; считаем готовым по images или trained_at
+            if status not in _done_statuses and not has_images and not has_trained_at:
                 all_done = False
                 break
         if all_done and last_urls:
