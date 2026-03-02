@@ -126,6 +126,7 @@ def _post_prompt(
     color_grading: str | None = None,
     film_grain: bool | None = None,
     seed: int | None = None,
+    aspect_ratio: str | None = None,
     timeout_s: float,
 ) -> dict[str, Any]:
     if not api_key:
@@ -164,6 +165,8 @@ def _post_prompt(
         data["prompt[film_grain]"] = "true" if film_grain else "false"
     if seed is not None:
         data["prompt[seed]"] = str(int(seed))
+    if aspect_ratio is not None:
+        data["prompt[aspect_ratio]"] = aspect_ratio
 
     files = None
     if input_image_bytes:
@@ -223,6 +226,7 @@ async def run_prompt_and_wait(
     color_grading: str | None = None,
     film_grain: bool | None = None,
     seed: int | None = None,
+    aspect_ratio: str | None = None,
     max_seconds: int = 300,
     poll_seconds: float = 2.0,
 ) -> AstriaPromptResult:
@@ -252,6 +256,7 @@ async def run_prompt_and_wait(
                 color_grading=color_grading,
                 film_grain=film_grain,
                 seed=seed,
+                aspect_ratio=aspect_ratio,
                 timeout_s=timeout_s,
             )
             break

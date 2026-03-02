@@ -216,6 +216,7 @@ class PrismaLabStore:
                 ("astria_lora_pack_tune_id", "TEXT"),
                 ("astria_lora_pack_tune_id_pending", "TEXT"),
                 ("pending_pack_id", "INTEGER"),
+                ("pending_persona_batch", "TEXT"),
             ]:
                 try:
                     self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN {add_col[0]} {add_col[1]}")
@@ -670,6 +671,48 @@ class PrismaLabStore:
                 row = cur.fetchone()
                 conn.commit()
                 return int(row[0]) if row else 0
+
+    def set_pending_persona_batch(self, user_id: int, styles_json: str) -> None:
+        """Сохраняет pending batch генерации персоны (JSON-строка со списком стилей)."""
+        self._run(
+            f"""
+            UPDATE {self._users_table}
+            SET pending_persona_batch = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            """,
+            (styles_json, int(user_id)),
+        )
+
+    def get_pending_persona_batch(self, user_id: int) -> str | None:
+        """Возвращает pending batch JSON или None."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"SELECT pending_persona_batch FROM {self._users_table} WHERE user_id = %s",
+                        (int(user_id),),
+                    )
+                    row = cur.fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT pending_persona_batch FROM users WHERE user_id = ?",
+                    (int(user_id),),
+                ).fetchone()
+            if not row:
+                return None
+            return _row_get(row, "pending_persona_batch")
+
+    def clear_pending_persona_batch(self, user_id: int) -> None:
+        """Очищает pending batch."""
+        self._run(
+            f"""
+            UPDATE {self._users_table}
+            SET pending_persona_batch = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            """,
+            (int(user_id),),
+        )
 
     def set_subject_gender(self, user_id: int, gender: str) -> None:
         if gender not in ("male", "female"):
@@ -2012,6 +2055,49 @@ class PrismaLabStore:
                 row = cur.fetchone()
                 return dict(row) if row else None
 
+    def swap_persona_style_order(self, style_id_a: int, style_id_b: int) -> bool:
+        """Поменять sort_order двух стилей местами и перенумеровать."""
+        if not self._use_pg:
+            return False
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"SELECT id, sort_order FROM {self._persona_styles_table} WHERE id IN (%s, %s)",
+                    (int(style_id_a), int(style_id_b)),
+                )
+                rows = cur.fetchall()
+                if len(rows) != 2:
+                    return False
+                a, b = rows[0], rows[1]
+                cur.execute(
+                    f"UPDATE {self._persona_styles_table} SET sort_order = %s, updated_at = NOW() WHERE id = %s",
+                    (b["sort_order"], a["id"]),
+                )
+                cur.execute(
+                    f"UPDATE {self._persona_styles_table} SET sort_order = %s, updated_at = NOW() WHERE id = %s",
+                    (a["sort_order"], b["id"]),
+                )
+                conn.commit()
+        self._renumber_persona_styles()
+        return True
+
+    def _renumber_persona_styles(self) -> None:
+        """Перенумеровать sort_order всех стилей подряд 1, 2, 3, ..."""
+        if not self._use_pg:
+            return
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT id FROM {self._persona_styles_table} ORDER BY sort_order, id")
+                rows = cur.fetchall()
+                for i, row in enumerate(rows, start=1):
+                    cur.execute(
+                        f"UPDATE {self._persona_styles_table} SET sort_order = %s WHERE id = %s",
+                        (i, row["id"]),
+                    )
+                conn.commit()
+
     def _shift_persona_style_sort_order(self, sort_order: int, exclude_id: int | None = None) -> None:
         """Сдвинуть sort_order >= заданного на +1, чтобы освободить место."""
         if not self._use_pg:
@@ -2029,6 +2115,7 @@ class PrismaLabStore:
                         (int(sort_order),),
                     )
                 conn.commit()
+        self._renumber_persona_styles()
 
     def create_persona_style(self, *, slug: str, title: str, description: str = "",
                              gender: str = "female", image_url: str = "",

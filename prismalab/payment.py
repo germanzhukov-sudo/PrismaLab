@@ -286,21 +286,20 @@ def _yookassa_success_content(
         return text, kb
 
     if product_type == "persona_topup":
-        from prismalab.bot import (
-            _format_balance_persona,
-            _persona_styles_keyboard,
-            STYLE_EXAMPLES_FOOTER,
-        )
+        from prismalab.bot import _format_balance_persona, MINIAPP_URL
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
         profile = store.get_user(user_id)
         new_total = profile.persona_credits_remaining
-        gender = getattr(profile, "subject_gender", None) or "female"
         text = (
-            f"Оплата получена ✅\n\n"
-            f"<b>Выберите стиль</b> 👇\n\n"
-            f"{_format_balance_persona(new_total)}\n\n"
-            f"{STYLE_EXAMPLES_FOOTER}"
+            f"<b>Оплата получена</b> ✅\n\n"
+            f"Выберите стиль в приложении <b>Персона</b> 👇\n\n"
+            f"{_format_balance_persona(new_total)}"
         )
-        kb = _persona_styles_keyboard(gender, page=0)
+        kb_rows = []
+        if MINIAPP_URL:
+            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+        kb = InlineKeyboardMarkup(kb_rows)
         return text, kb
 
     if product_type == "persona_create":
@@ -707,7 +706,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
     return 200, "OK"
 
 
-def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
+def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_username: str | None = None) -> None:
     """Запускает HTTP-сервер на порту 8080: GET /health для healthcheck Docker; при наличии ЮKassa — POST /payment/webhook; /admin/* — админка."""
     import threading
 
@@ -898,6 +897,9 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                     return web.json_response({"error": "Invalid init data"}, status=401)
                 profile = miniapp_routes.get_store().get_user(user["user_id"])
                 user_id = user["user_id"]
+                _pc = getattr(profile, "persona_credits_remaining", 0)
+                _hp = bool(getattr(profile, "astria_lora_tune_id", None))
+                logger.info("AUTH user=%s has_persona=%s persona_credits_raw=%s", user_id, _hp, _pc)
                 return web.json_response({
                     "user_id": user_id,
                     "first_name": user["first_name"],
@@ -1166,6 +1168,94 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
                 ))
                 return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
 
+            async def _miniapp_api_persona_topup(request: web.Request) -> web.Response:
+                """Докуп кредитов персоны из Mini App."""
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+                try:
+                    credits = int(body.get("credits", 0))
+                except (ValueError, TypeError):
+                    return web.json_response({"error": "Invalid credits"}, status=400)
+                if credits not in PRICES_PERSONA_TOPUP:
+                    return web.json_response({"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_TOPUP.keys())}"}, status=400)
+                user_id = user["user_id"]
+                price_rub = PRICES_PERSONA_TOPUP[credits]
+                amount = apply_test_amount(float(price_rub))
+                return_url = YOOKASSA_RETURN_URL
+                url, payment_id_or_err = create_payment(
+                    amount_rub=amount,
+                    description=f"PrismaLab — Докуп кредитов персоны ({credits} фото)",
+                    metadata={
+                        "user_id": str(user_id),
+                        "chat_id": str(user_id),
+                        "product_type": "persona_topup",
+                        "credits": str(credits),
+                    },
+                    return_url=return_url,
+                )
+                if not url:
+                    asyncio.get_event_loop().create_task(
+                        alert_payment_error(user_id, "persona_topup", str(payment_id_or_err or "payment creation failed"))
+                    )
+                    return web.json_response({"error": "Payment creation failed"}, status=500)
+                asyncio.get_event_loop().create_task(poll_payment_status(
+                    payment_id=payment_id_or_err,
+                    bot=bot,
+                    store=store,
+                    user_id=user_id,
+                    chat_id=user_id,
+                    credits=credits,
+                    product_type="persona_topup",
+                    amount_rub=amount,
+                    application=application,
+                ))
+                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
+
+            async def _miniapp_api_persona_generate(request: web.Request) -> web.Response:
+                """Сохраняет батч стилей для генерации и возвращает deeplink в бот."""
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+                user_id = user["user_id"]
+                styles = body.get("styles", [])
+                if not styles or not isinstance(styles, list):
+                    return web.json_response({"error": "No styles selected"}, status=400)
+                # Проверяем персону и кредиты
+                profile = store.get_user(user_id)
+                has_persona = bool(getattr(profile, "astria_lora_tune_id", None))
+                if not has_persona:
+                    return web.json_response({"error": "No persona"}, status=400)
+                credits = profile.persona_credits_remaining
+                if credits <= 0:
+                    return web.json_response({"error": "No credits"}, status=402)
+                # Ограничиваем батч кредитами и обогащаем промптами из БД
+                batch = styles[:credits]
+                all_db_styles = store.get_persona_styles(active_only=False)
+                db_by_slug = {s["slug"]: s for s in all_db_styles}
+                for item in batch:
+                    db_style = db_by_slug.get(item.get("slug", ""))
+                    if db_style and db_style.get("prompt"):
+                        item["prompt"] = db_style["prompt"]
+                import json as _json
+                store.set_pending_persona_batch(user_id, _json.dumps(batch))
+                logger.info("Persona batch saved for user %s: %d styles", user_id, len(batch))
+                # Deeplink в бот
+                bot_link = f"https://t.me/{bot_username}?start=persona_batch"
+                return web.json_response({"ok": True, "count": len(batch), "bot_link": bot_link})
+
             async def _miniapp_api_persona_styles(request: web.Request) -> web.Response:
                 gender = request.query.get("gender", "")
                 styles = store.get_persona_styles(active_only=True, gender=gender if gender else None)
@@ -1215,6 +1305,8 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None) -> None:
             app.router.add_get("/app/api/persona-styles", _miniapp_api_persona_styles)
             app.router.add_get("/app/api/persona-styles/{style_id}", _miniapp_api_persona_style_detail)
             app.router.add_post("/app/api/persona/buy", _miniapp_api_persona_buy)
+            app.router.add_post("/app/api/persona/topup", _miniapp_api_persona_topup)
+            app.router.add_post("/app/api/persona/generate", _miniapp_api_persona_generate)
             app.router.add_static("/app/static", miniapp_static_path)
             logger.info("Mini App доступен на порту %s (path: /app/)", port)
         except ImportError as e:

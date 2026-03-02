@@ -876,6 +876,24 @@ async def persona_style_save(request: Request):
 
 
 @require_auth
+async def persona_style_move(request: Request):
+    """Переместить стиль вверх/вниз (swap с соседом)."""
+    style_id = int(request.path_params["style_id"])
+    direction = request.path_params.get("direction", "")  # up или down
+    store = get_store()
+
+    styles = store.get_persona_styles()  # уже отсортированы по sort_order, id
+    idx = next((i for i, s in enumerate(styles) if s["id"] == style_id), None)
+    if idx is not None:
+        if direction == "up" and idx > 0:
+            store.swap_persona_style_order(styles[idx]["id"], styles[idx - 1]["id"])
+        elif direction == "down" and idx < len(styles) - 1:
+            store.swap_persona_style_order(styles[idx]["id"], styles[idx + 1]["id"])
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles", status_code=303)
+
+
+@require_auth
 async def persona_style_delete(request: Request):
     """Удаление стиля."""
     style_id = int(request.path_params["style_id"])
@@ -914,6 +932,7 @@ routes = [
     Route("/admin/persona-styles/new", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/{style_id:int}/edit", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
+    Route("/admin/persona-styles/{style_id:int}/move/{direction}", persona_style_move, methods=["POST"]),
     Route("/admin/persona-styles/{style_id:int}/delete", persona_style_delete, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
     Route("/admin/api/chart", api_chart_data, methods=["GET"]),

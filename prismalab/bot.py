@@ -853,6 +853,15 @@ def _persona_credits_out_content(profile: Any) -> tuple[str, InlineKeyboardMarku
     return text, kb
 
 
+def _persona_app_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура: кнопка ✨ Персона (Mini App) + Главное меню."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if MINIAPP_URL:
+        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+    rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+    return InlineKeyboardMarkup(rows)
+
+
 def _persona_credits_out_keyboard(*, with_express: bool = False, profile: Any | None = None) -> InlineKeyboardMarkup:
     """Клавиатура при закончившихся кредитах: тарифы, [Экспресс-фото], Главное меню."""
     rows: list[list[InlineKeyboardButton]] = [
@@ -1500,11 +1509,150 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         store.log_event(user_id, "start")
     except Exception:
         pass
+
+    # Deep link: /start persona_batch — запуск батч-генерации из Mini App
+    args = context.args
+    if args and args[0] == "persona_batch":
+        pending_json = store.get_pending_persona_batch(user_id)
+        if pending_json:
+            store.clear_pending_persona_batch(user_id)
+            try:
+                styles_list = json.loads(pending_json)
+            except (json.JSONDecodeError, TypeError):
+                styles_list = []
+            if styles_list:
+                await _run_persona_batch(update, context, user_id, styles_list)
+                return
+        # Нет pending batch — обычный старт
+        await update.message.reply_text(
+            "Нет запланированных генераций. Откройте Mini App и выберите стили.",
+        )
+        return
+
     await update.message.reply_text(
         _start_message_text(profile),
         reply_markup=_start_keyboard(profile),
         parse_mode="HTML",
     )
+
+
+async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, styles_list: list) -> None:
+    """Запускает батч-генерацию стилей персоны."""
+    profile = store.get_user(user_id)
+    has_persona = bool(
+        getattr(profile, "astria_lora_tune_id", None)
+        or getattr(profile, "astria_lora_pack_tune_id", None)
+    )
+    if not has_persona:
+        await update.message.reply_text("Для генерации нужна Персона. Нажмите /newpersona.")
+        return
+
+    credits = profile.persona_credits_remaining
+    if credits <= 0:
+        await update.message.reply_text("У вас 0 кредитов Персоны. Докупите кредиты в Mini App.")
+        return
+
+    batch = styles_list[:credits]
+    total = len(batch)
+
+    store.log_event(user_id, "persona_generate_batch", {
+        "styles_count": total,
+        "styles": [{"slug": s.get("slug"), "title": s.get("title")} for s in batch],
+    })
+
+    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
+    settings = load_settings()
+
+    async def batch_runner():
+        for i, style_data in enumerate(batch, 1):
+            slug = style_data.get("slug", "")
+            title = style_data.get("title", slug)
+            # Промпт из БД (обогащён API endpoint), фоллбэк на словарь
+            prompt = style_data.get("prompt") or _persona_style_prompt(slug, title)
+
+            # Проверяем кредиты перед каждой генерацией
+            current_profile = store.get_user(user_id)
+            if current_profile.persona_credits_remaining <= 0:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"Кредиты закончились после {i-1}/{total} фото."
+                )
+                break
+
+            gen_lock = await _acquire_user_generation_lock(user_id)
+            if gen_lock is None:
+                await asyncio.sleep(5)
+                gen_lock = await _acquire_user_generation_lock(user_id)
+                if gen_lock is None:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⏳ Не удалось запустить «{title}» — предыдущая ещё выполняется. Пропускаю."
+                    )
+                    continue
+
+            status_msg = await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🎨 <i>Создаю изображение {i}/{total}: {title}...</i>",
+                parse_mode="HTML",
+            )
+
+            try:
+                await _run_style_job(
+                    bot=context.bot,
+                    chat_id=user_id,
+                    photo_file_ids=[],
+                    style_id=slug,
+                    settings=settings,
+                    status_message_id=status_msg.message_id,
+                    prompt_strength=0.7,
+                    user_id=user_id,
+                    subject_gender=gender,
+                    use_personal_requested=False,
+                    test_prompt=None,
+                    lora_prompt_override=prompt,
+                    style_title_override=title,
+                    is_persona_style=True,
+                    context=context,
+                    skip_post_message=True,
+                )
+            except Exception as e:
+                logger.error("Batch gen error user %s style %s: %s", user_id, slug, e, exc_info=True)
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=f"Ошибка при «{title}». Продолжаю...")
+                except Exception:
+                    pass
+            finally:
+                gen_lock.release()
+
+        final_profile = store.get_user(user_id)
+        remaining = final_profile.persona_credits_remaining if final_profile else 0
+        if remaining <= 0:
+            # Кредиты закончились — тарифы + Персона + Главное меню
+            text = PERSONA_CREDITS_OUT_MESSAGE
+            kb_rows = [
+                [InlineKeyboardButton("✨ 10 кредитов – 229 руб", callback_data="pl_persona_topup_buy:10")],
+                [InlineKeyboardButton("✨ 20 кредитов – 439 руб", callback_data="pl_persona_topup_buy:20")],
+                [InlineKeyboardButton("✨ 30 кредитов – 629 руб", callback_data="pl_persona_topup_buy:30")],
+            ]
+            if MINIAPP_URL:
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+            kb = InlineKeyboardMarkup(kb_rows)
+        else:
+            text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(remaining)}"
+            kb_rows = []
+            if MINIAPP_URL:
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
+            kb = InlineKeyboardMarkup(kb_rows)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+
+    context.application.create_task(batch_runner())
 
 
 async def newpersona_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1735,14 +1883,11 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
             text, kb = _persona_credits_out_content(profile)
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
             return
-        gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
         await query.edit_message_text(
-            f"<b>Выберите стиль из списка ниже</b> 👇\n\n{_format_balance_persona(credits)}\n\n{STYLE_EXAMPLES_FOOTER}",
-            reply_markup=_persona_styles_keyboard(gender, page=0),
+            f"Выберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}",
+            reply_markup=_persona_app_keyboard(),
             parse_mode="HTML",
-            disable_web_page_preview=True,
         )
-        context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
         context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
         return
 
@@ -3784,14 +3929,16 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
 
         context.application.create_task(runner())
     else:
-        text = f"<b>Оплата получена</b> ✅\n\n<b>Выберите стиль</b> 👇\n\n{_format_balance_persona(new_total)}\n\n{STYLE_EXAMPLES_FOOTER}"
+        text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+        kb_rows = []
+        if MINIAPP_URL:
+            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
-            reply_markup=_persona_styles_keyboard(gender, page=0),
+            reply_markup=InlineKeyboardMarkup(kb_rows),
             parse_mode="HTML",
-            disable_web_page_preview=True,
         )
-        context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
 
 
@@ -3909,14 +4056,16 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
 
         context.application.create_task(runner())
     else:
-        text = f"<b>Оплата получена</b> ✅\n\n<b>Выберите стиль</b> 👇\n\n{_format_balance_persona(new_total)}\n\n{STYLE_EXAMPLES_FOOTER}"
+        text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+        kb_rows = []
+        if MINIAPP_URL:
+            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
-            reply_markup=_persona_styles_keyboard(gender, page=0),
+            reply_markup=InlineKeyboardMarkup(kb_rows),
             parse_mode="HTML",
-            disable_web_page_preview=True,
         )
-        context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = 0
 
 
@@ -4285,14 +4434,12 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
                     await query.answer("Персональная модель готова. Запускаю фотосет.", show_alert=False)
                     return
                 credits = profile.persona_credits_remaining
-                gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                text = f"Готово! 🎉 Персональная модель обучена\n\nТеперь выберите стиль из списка ниже – у вас {credits} {_fast_credits_word(credits)}\n\n{STYLE_EXAMPLES_FOOTER}"
+                text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите стиль в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
                 await query.answer("Готово! 🎉", show_alert=False)
                 await query.edit_message_text(
                     text,
-                    reply_markup=_persona_styles_keyboard(gender),
+                    reply_markup=_persona_app_keyboard(),
                     parse_mode="HTML",
-                    disable_web_page_preview=True,
                 )
                 return
             if status in {"failed", "error", "cancelled"}:
@@ -4347,12 +4494,11 @@ async def handle_persona_page_callback(update: Update, context: ContextTypes.DEF
     profile = store.get_user(user_id)
     credits = profile.persona_credits_remaining
     gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-    text = f"<b>Выберите стиль из списка ниже</b> 👇\n\n{_format_balance_persona(credits)}\n\n{STYLE_EXAMPLES_FOOTER}"
+    text = f"Выберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}"
     await query.edit_message_text(
         text,
-        reply_markup=_persona_styles_keyboard(gender, page),
+        reply_markup=_persona_app_keyboard(),
         parse_mode="HTML",
-        disable_web_page_preview=True,
     )
     context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = query.message.message_id
     context.user_data[USERDATA_PERSONA_STYLE_PAGE] = page
@@ -4782,12 +4928,15 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             new_total = profile.persona_credits_remaining + credits
             store.set_persona_credits(user_id, new_total)
             gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-            text = f"Оплата получена ✅\n\n<b>Выберите стиль</b> 👇\n\n{_format_balance_persona(new_total)}\n\n{STYLE_EXAMPLES_FOOTER}"
+            text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+            kb_rows = []
+            if MINIAPP_URL:
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             await msg.reply_text(
                 text,
-                reply_markup=_persona_styles_keyboard(gender, page=0),
+                reply_markup=InlineKeyboardMarkup(kb_rows),
                 parse_mode="HTML",
-                disable_web_page_preview=True,
             )
         elif product_type == "persona_create":
             context.user_data[USERDATA_MODE] = "persona"
@@ -5941,14 +6090,12 @@ async def _start_astria_lora(
                 return
             profile = store.get_user(user_id)
             credits = profile.persona_credits_remaining
-            gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-            text = f"Готово! 🎉 Персональная модель обучена\n\nТеперь выберите стиль из списка ниже – у вас {credits} {_fast_credits_word(credits)}\n\n{STYLE_EXAMPLES_FOOTER}"
+            text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите стиль в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
-                reply_markup=_persona_styles_keyboard(gender),
+                reply_markup=_persona_app_keyboard(),
                 parse_mode="HTML",
-                disable_web_page_preview=True,
             )
         else:
             context.user_data[USERDATA_MODE] = "normal"
@@ -5997,6 +6144,7 @@ async def _run_style_job(
     style_title_override: str | None = None,
     is_persona_style: bool = False,
     context: ContextTypes.DEFAULT_TYPE | None = None,
+    skip_post_message: bool = False,
 ) -> None:
     try:
         use_test_prompt = test_prompt is not None
@@ -6022,10 +6170,7 @@ async def _run_style_job(
                 err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else "Неизвестный стиль."
                 extra = {}
                 if is_persona_style and context:
-                    profile = store.get_user(user_id)
-                    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                    page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-                    extra["reply_markup"] = _persona_styles_keyboard(gender, page)
+                    extra["reply_markup"] = _persona_app_keyboard()
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
                 return
 
@@ -6044,10 +6189,7 @@ async def _run_style_job(
             err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else "Не нашёл фото для обработки."
             extra = {}
             if is_persona_style and context:
-                profile = store.get_user(user_id)
-                gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-                extra["reply_markup"] = _persona_styles_keyboard(gender, page)
+                extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
             return
 
@@ -6062,10 +6204,7 @@ async def _run_style_job(
                 err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else USER_FRIENDLY_ERROR
                 extra = {}
                 if is_persona_style and context:
-                    profile = store.get_user(user_id)
-                    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                    page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-                    extra["reply_markup"] = _persona_styles_keyboard(gender, page)
+                    extra["reply_markup"] = _persona_app_keyboard()
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
                 return
             # Проверяем, есть ли у пользователя FaceID или LoRA tune
@@ -6087,10 +6226,7 @@ async def _run_style_job(
                 )
                 extra = {}
                 if is_persona_style and context:
-                    profile = store.get_user(user_id)
-                    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                    page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-                    extra["reply_markup"] = _persona_styles_keyboard(gender, page)
+                    extra["reply_markup"] = _persona_app_keyboard()
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
                 return
             # Определяем тип генерации: FaceID или LoRA
@@ -6244,6 +6380,7 @@ async def _run_style_job(
                 color_grading=use_color_grading,
                 film_grain=use_film_grain,
                 seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
+                aspect_ratio="3:4",
                 max_seconds=settings.astria_max_seconds,
                 poll_seconds=2.0,
             )
@@ -6277,22 +6414,19 @@ async def _run_style_job(
                 except Exception:
                     pass
                 credits = store.decrement_persona_credits(user_id)
-                profile = store.get_user(user_id)
-                if credits <= 0:
-                    text, reply_markup = _persona_credits_out_content(profile)
-                else:
-                    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                    page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
-                    credits_word = _fast_credits_word(credits)
-                    text = f"<b>Готово!</b>\n\nМожете выбрать <b>другой стиль</b> или снова <b>попробовать тот же</b>\n\n{_format_balance_persona(credits)}"
-                    reply_markup = _persona_styles_keyboard(gender, page)
-                msg = await bot.send_message(
+                if not skip_post_message:
+                    if credits <= 0:
+                        profile = store.get_user(user_id)
+                        text, reply_markup = _persona_credits_out_content(profile)
+                    else:
+                        text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(credits)}"
+                        reply_markup = _persona_app_keyboard()
+                    await bot.send_message(
                         chat_id=chat_id,
-                    text=text,
-                    reply_markup=reply_markup,
-                    parse_mode="HTML",
+                        text=text,
+                        reply_markup=reply_markup,
+                        parse_mode="HTML",
                     )
-                context.user_data[USERDATA_PERSONA_STYLE_MSG_ID] = msg.message_id
             else:
                 profile = store.get_user(user_id)
                 await bot.edit_message_text(
@@ -6959,12 +7093,9 @@ async def _run_style_job(
         await alert_generation_error(user_id, str(e), gen_type)
         err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else USER_FRIENDLY_ERROR
         if is_persona_style and context:
-            profile = store.get_user(user_id)
-            gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-            page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
             await _safe_edit_status(
                 bot, chat_id, status_message_id, text=err_msg,
-                reply_markup=_persona_styles_keyboard(gender, page),
+                reply_markup=_persona_app_keyboard(),
             )
         else:
             await _safe_edit_status(bot, chat_id, status_message_id, text=err_msg)
@@ -6976,12 +7107,9 @@ async def _run_style_job(
             if is_persona_style:
                 err_text = PERSONA_ERROR_MESSAGE
                 if context:
-                    profile = store.get_user(user_id)
-                    gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-                    page = context.user_data.get(USERDATA_PERSONA_STYLE_PAGE, 0)
                     await _safe_edit_status(
                         bot, chat_id, status_message_id, text=err_text,
-                        reply_markup=_persona_styles_keyboard(gender, page),
+                        reply_markup=_persona_app_keyboard(),
                     )
                 else:
                     await _safe_edit_status(bot, chat_id, status_message_id, text=err_text)
@@ -7679,7 +7807,8 @@ def main() -> None:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="prismalab")
         loop.set_default_executor(executor)
 
-        run_webhook_server(app.bot, store, application=app)
+        bot_me = await app.bot.get_me()
+        run_webhook_server(app.bot, store, application=app, bot_username=bot_me.username)
 
         # Дневной отчёт в 21:00 по Москве (UTC+3)
         async def daily_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:

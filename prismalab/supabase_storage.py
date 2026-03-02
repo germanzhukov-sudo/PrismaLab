@@ -16,16 +16,22 @@ import requests
 
 logger = logging.getLogger("prismalab.supabase_storage")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-
 BUCKET = "persona-styles"
 
 
+def _supabase_url() -> str:
+    return os.getenv("SUPABASE_URL", "").rstrip("/")
+
+
+def _supabase_key() -> str:
+    return os.getenv("SUPABASE_SERVICE_KEY", "")
+
+
 def _headers() -> dict[str, str]:
+    key = _supabase_key()
     return {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
     }
 
 
@@ -35,7 +41,9 @@ def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jp
     filename — имя файла в бакете (например, 'wedding.jpg'). Для уникальности
     добавляется uuid-префикс.
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    base_url = _supabase_url()
+    service_key = _supabase_key()
+    if not base_url or not service_key:
         logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
         return None
 
@@ -43,14 +51,14 @@ def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jp
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
     storage_path = f"{uuid.uuid4().hex[:12]}.{ext}"
 
-    url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{storage_path}"
+    url = f"{base_url}/storage/v1/object/{BUCKET}/{storage_path}"
     headers = _headers()
     headers["Content-Type"] = content_type
 
     try:
         resp = requests.post(url, headers=headers, data=file_bytes, timeout=30)
         if resp.status_code in (200, 201):
-            public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET}/{storage_path}"
+            public_url = f"{base_url}/storage/v1/object/public/{BUCKET}/{storage_path}"
             logger.info("Uploaded %s → %s", filename, public_url)
             return public_url
         logger.error("Upload failed: %s %s", resp.status_code, resp.text[:200])
@@ -62,7 +70,8 @@ def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jp
 
 def delete_image(public_url: str) -> bool:
     """Удаляет файл из Supabase Storage по публичному URL."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    base_url = _supabase_url()
+    if not base_url or not _supabase_key():
         return False
 
     # Извлекаем путь из URL: .../object/public/persona-styles/abc123.jpg → abc123.jpg
@@ -73,7 +82,7 @@ def delete_image(public_url: str) -> bool:
         return False
     storage_path = public_url[idx + len(prefix):]
 
-    url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET}"
+    url = f"{base_url}/storage/v1/object/{BUCKET}"
     headers = _headers()
     headers["Content-Type"] = "application/json"
 

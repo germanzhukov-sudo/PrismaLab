@@ -55,6 +55,7 @@ async function authenticate() {
             state.packsEnabled = !!data.packs_enabled;
             state.hasPersona = !!data.has_persona;
             state.personaCredits = data.persona_credits || 0;
+            state.personaCreditsOriginal = state.personaCredits;
             updateCreditsDisplay();
 
             // Проверяем возврат из ЮKassa после оплаты пака
@@ -115,10 +116,29 @@ function showScreen(name) {
         }
     }, 50);
 
-    // Показать/скрыть фиксированный футер тарифов
-    const footer = document.getElementById('persona-buy-footer');
-    if (footer) {
-        footer.style.display = (name === 'persona-styles' && !state.hasPersona) ? 'flex' : 'none';
+    // Показать/скрыть фиксированные футеры тарифов и генерации
+    const createFooter = document.getElementById('persona-buy-footer');
+    const topupFooter = document.getElementById('persona-topup-footer');
+    const generateFooter = document.getElementById('persona-generate-footer');
+    if (name === 'persona-styles') {
+        if (!state.hasPersona) {
+            if (createFooter) createFooter.style.display = 'flex';
+            if (topupFooter) topupFooter.style.display = 'none';
+            if (generateFooter) generateFooter.style.display = 'none';
+        } else if (state.personaCredits === 0) {
+            if (createFooter) createFooter.style.display = 'none';
+            if (topupFooter) topupFooter.style.display = 'flex';
+            if (generateFooter) generateFooter.style.display = 'none';
+        } else {
+            if (createFooter) createFooter.style.display = 'none';
+            if (topupFooter) topupFooter.style.display = 'none';
+            // Генерация показывается только если выбраны стили
+            updateGenerateButton();
+        }
+    } else {
+        if (createFooter) createFooter.style.display = 'none';
+        if (topupFooter) topupFooter.style.display = 'none';
+        if (generateFooter) generateFooter.style.display = 'none';
     }
 
     // Haptic feedback
@@ -672,22 +692,53 @@ async function loadPersonaStyles() {
         grid.appendChild(skeleton);
     }
 
-    // Показать/скрыть инфо + футер покупки в зависимости от наличия персоны
+    // Три стейта:
+    // 1) нет персоны → витрина + тарифы создания
+    // 2) есть персона, 0 кредитов → витрина + тарифы докупа
+    // 3) есть персона, credits > 0 → чекбоксы + баланс
+    const needFooter = !state.hasPersona || (state.hasPersona && state.personaCredits === 0);
     const info = document.getElementById('persona-buy-info');
-    const footer = document.getElementById('persona-buy-footer');
-    if (info) info.style.display = state.hasPersona ? 'none' : 'block';
-    if (footer) footer.style.display = state.hasPersona ? 'none' : 'flex';
+    const createFooter = document.getElementById('persona-buy-footer');
+    const topupFooter = document.getElementById('persona-topup-footer');
+    if (info) {
+        info.style.display = needFooter ? 'block' : 'none';
+        const infoText = info.querySelector('.persona-buy-info-text');
+        if (infoText) {
+            infoText.textContent = (state.hasPersona && state.personaCredits === 0)
+                ? 'Ваша Персона уже создана, поэтому эти тарифы дешевле'
+                : '1 кредит = 1 фото. Образы станут доступны после оплаты тарифа';
+        }
+    }
+    // Показываем нужный футер
+    if (!state.hasPersona) {
+        if (createFooter) createFooter.style.display = 'flex';
+        if (topupFooter) topupFooter.style.display = 'none';
+    } else if (state.personaCredits === 0) {
+        if (createFooter) createFooter.style.display = 'none';
+        if (topupFooter) topupFooter.style.display = 'flex';
+    } else {
+        if (createFooter) createFooter.style.display = 'none';
+        if (topupFooter) topupFooter.style.display = 'none';
+    }
 
     // Показать баланс-бейдж если есть персона
     updatePersonaBalanceDisplay();
 
-    // Грид padding: с футером — 120px, без — 32px
-    grid.style.paddingBottom = state.hasPersona ? '32px' : '120px';
+    // Грид padding: с футером тарифов — 120px, с кнопкой генерации — 80px, без — 32px
+    if (needFooter) {
+        grid.style.paddingBottom = '120px';
+    } else if (state.hasPersona && state.personaCredits > 0) {
+        grid.style.paddingBottom = '80px';
+    } else {
+        grid.style.paddingBottom = '32px';
+    }
 
-    // Сбросить выбор тарифа при загрузке
+    // Сбросить выбор тарифов при загрузке
     state.selectedTariff = null;
+    state.selectedTopupTariff = null;
     if (!state.selectedPersonaStyles) state.selectedPersonaStyles = [];
     updateTariffSelection();
+    updateTopupTariffSelection();
 
     try {
         // Всегда грузим ВСЕ стили, фильтруем на клиенте
@@ -724,27 +775,28 @@ function renderPersonaStyles() {
     if (!state.selectedPersonaStyles) state.selectedPersonaStyles = [];
 
     const hasPersona = !!state.hasPersona;
-    const canSelect = state.personaCredits > 0;
+    // Чекбоксы показываем если есть персона И изначально были кредиты
+    // (personaCredits может быть 0 после выбора всех стилей — это ок)
+    const canSelect = (state.personaCreditsOriginal || state.personaCredits) > 0;
+    const showCheckboxes = hasPersona && canSelect;
 
     styles.forEach((style, index) => {
         const card = document.createElement('div');
         card.className = 'persona-style-card';
-        if (!hasPersona) card.classList.add('showcase');
+        if (!showCheckboxes) card.classList.add('showcase');
         card.dataset.styleId = style.id;
         card.style.animationDelay = `${index * 0.05}s`;
 
-        const isSelected = hasPersona && state.selectedPersonaStyles.some(s => s.id === style.id);
+        const isSelected = showCheckboxes && state.selectedPersonaStyles.some(s => s.id === style.id);
         if (isSelected) card.classList.add('selected');
 
         const imgStyle = style.image_url
             ? `background-image: url('${style.image_url}')`
             : `background: linear-gradient(135deg, hsl(${(index * 47 + 200) % 360}, 50%, 30%), hsl(${((index * 47 + 200) % 360 + 50) % 360}, 60%, 20%))`;
 
-        // Чекбокс показываем только если есть персона
-        // Дизейблим если баланс = 0 и стиль не выбран (выбранные можно убирать)
-        const isDisabled = hasPersona && !isSelected && !canSelect;
-        const checkboxHtml = hasPersona
-            ? `<div class="persona-style-card-checkbox ${isSelected ? 'checked' : ''} ${isDisabled ? 'disabled' : ''}" onclick="event.stopPropagation(); togglePersonaStyle(${style.id})">${isSelected ? '✓' : ''}</div>`
+        // Чекбокс: только если есть персона И кредиты > 0
+        const checkboxHtml = showCheckboxes
+            ? `<div class="persona-style-card-checkbox ${isSelected ? 'checked' : ''}" onclick="event.stopPropagation(); togglePersonaStyle(${style.id})">${isSelected ? '✓' : ''}</div>`
             : '';
 
         card.innerHTML = `
@@ -784,6 +836,7 @@ function togglePersonaStyle(styleId) {
         }
     }
     updatePersonaBalanceDisplay();
+    updateGenerateButton();
     renderPersonaStyles();
 }
 
@@ -795,18 +848,18 @@ function openPersonaStyleLightbox(style) {
     document.getElementById('persona-style-lightbox-desc').textContent = style.description || '';
 
     const btn = document.getElementById('persona-style-lightbox-btn');
-    if (state.hasPersona) {
-        // С персоной — можно выбирать/убирать
+    const hasCreditsForSelection = (state.personaCreditsOriginal || state.personaCredits) > 0;
+    if (state.hasPersona && hasCreditsForSelection) {
+        // С персоной и кредитами — можно выбирать/убирать
         const isSelected = (state.selectedPersonaStyles || []).some(s => s.id === style.id);
-        btn.textContent = isSelected ? 'Убрать' : 'Выбрать';
+        // Если уже выбран — можно убрать; если нет — только если остались кредиты
+        const canAdd = state.personaCredits > 0;
+        btn.textContent = isSelected ? 'Убрать' : (canAdd ? 'Выбрать' : 'Нет кредитов');
         btn.className = 'persona-style-lightbox-btn' + (isSelected ? ' deselect' : '');
-        // Дизейблим «Выбрать» если нет кредитов и стиль ещё не выбран
-        if (!isSelected && state.personaCredits <= 0) {
-            btn.classList.add('disabled');
-        }
+        btn.disabled = !isSelected && !canAdd;
         btn.style.display = 'block';
     } else {
-        // Без персоны — только просмотр, кнопку скрываем
+        // Без персоны или 0 кредитов изначально — только просмотр
         btn.style.display = 'none';
     }
 
@@ -926,20 +979,124 @@ async function buyPersona() {
     }
 }
 
-// Старая функция selectPersonaStyle — теперь не используется, sendData вызывается отдельно
-function selectPersonaStyle() {
-    const style = state.selectedPersonaStyle;
-    if (!style) return;
+// === Докуп кредитов персоны ===
+
+function selectTopupTariff(credits) {
+    if (state.selectedTopupTariff === credits) {
+        state.selectedTopupTariff = null;
+    } else {
+        state.selectedTopupTariff = credits;
+    }
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    updateTopupTariffSelection();
+}
+
+function updateTopupTariffSelection() {
+    const btns = document.querySelectorAll('#persona-topup-footer .persona-buy-btn');
+    btns.forEach(b => {
+        const c = parseInt(b.dataset.credits);
+        b.classList.toggle('selected', c === state.selectedTopupTariff);
+    });
+    const payBtn = document.getElementById('persona-topup-pay-btn');
+    if (payBtn) {
+        payBtn.style.display = state.selectedTopupTariff ? 'block' : 'none';
+    }
+}
+
+async function buyTopup() {
+    const credits = state.selectedTopupTariff;
+    if (!credits) return;
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+
+    const payBtn = document.getElementById('persona-topup-pay-btn');
+    payBtn.disabled = true;
+    payBtn.textContent = 'Создаём платёж...';
+
+    try {
+        const resp = await fetch('/app/api/persona/topup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, credits }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(data.error || 'Payment failed');
+        }
+
+        if (data.payment_url && tg) {
+            tg.openLink(data.payment_url);
+        } else if (data.payment_url) {
+            window.open(data.payment_url, '_blank');
+        }
+    } catch (e) {
+        console.error('Buy topup error:', e);
+        alert('Ошибка создания платежа: ' + e.message);
+    } finally {
+        payBtn.disabled = false;
+        payBtn.textContent = 'Оплатить';
+    }
+}
+
+// === Генерация батча персона-стилей ===
+
+function updateGenerateButton() {
+    const footer = document.getElementById('persona-generate-footer');
+    const btnText = document.getElementById('persona-generate-btn-text');
+    if (!footer) return;
+
+    const selected = state.selectedPersonaStyles || [];
+    if (state.hasPersona && state.personaCredits >= 0 && selected.length > 0) {
+        footer.style.display = 'flex';
+        btnText.textContent = `Сгенерировать (${selected.length})`;
+    } else {
+        footer.style.display = 'none';
+    }
+}
+
+async function generatePersonaBatch() {
+    const selected = state.selectedPersonaStyles || [];
+    if (!selected.length) return;
 
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
-    if (tg) {
-        tg.sendData(JSON.stringify({
-            action: 'persona_style_selected',
-            style_id: style.id,
-            style_slug: style.slug,
-            style_title: style.title,
-        }));
-        tg.close();
+    const btn = document.getElementById('persona-generate-btn');
+    btn.disabled = true;
+    const btnText = document.getElementById('persona-generate-btn-text');
+    btnText.textContent = 'Отправляю...';
+
+    // Собираем данные для бота
+    const styles = selected.map(s => ({
+        id: s.id,
+        slug: s.slug,
+        title: s.title,
+    }));
+
+    try {
+        const resp = await fetch('/app/api/persona/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, styles }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(data.error || 'Failed');
+        }
+
+        // Открываем deeplink в бот — бот подхватит pending batch
+        if (data.bot_link && tg) {
+            tg.openTelegramLink(data.bot_link);
+            tg.close();
+        } else if (data.bot_link) {
+            window.open(data.bot_link, '_blank');
+        }
+    } catch (e) {
+        console.error('Generate batch error:', e);
+        alert('Ошибка: ' + e.message);
+        btn.disabled = false;
+        btnText.textContent = `Сгенерировать (${selected.length})`;
     }
 }
