@@ -172,11 +172,12 @@ def _post_prompt(
     if input_image_bytes:
         files = {"prompt[input_image]": ("input.png", input_image_bytes, "image/png")}
 
-    # Используем более длинный таймаут для POST - генерация может занимать время
-    # requests.post timeout - это общий таймаут на соединение + чтение ответа
-    r = requests.post(url, headers=_headers(api_key), data=data, files=files, timeout=(10.0, timeout_s))
-    if r.status_code >= 400:
-        # Частый кейс: 422 с валидацией параметров (например, для Flux нельзя negative_prompt и cfg_scale < 5)
+    # Retry для 429/500/504 по рекомендациям Astria
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.post(url, headers=_headers(api_key), data=data, files=files, timeout=(10.0, timeout_s))
+        last_r = r
         if r.status_code == 422:
             details: dict[str, Any] | None = None
             try:
@@ -187,24 +188,59 @@ def _post_prompt(
                 except Exception:
                     details = None
             raise AstriaValidationError(f"Astria HTTP 422: {r.text}", details=details if isinstance(details, dict) else None)
-        raise AstriaError(f"Astria HTTP {r.status_code}: {r.text}")
-    try:
-        return r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ") from e
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(15, min(120, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria POST HTTP %s, retry через %s сек (попытка %s/%s)", r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code}: {r.text}")
+        try:
+            return r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ") from e
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _get_prompt(*, api_key: str, tune_id: str, prompt_id: str, timeout_s: float) -> dict[str, Any]:
     url = f"https://api.astria.ai/tunes/{tune_id}/prompts/{prompt_id}"
-    # Используем более длинный таймаут для GET - polling может быть медленным
-    # requests.get timeout - это общий таймаут на соединение + чтение ответа
-    r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code}: {r.text}")
-    try:
-        return r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ") from e
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(10, min(60, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria GET prompt %s HTTP %s, retry через %s сек (попытка %s/%s)", prompt_id, r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code}: {r.text}")
+        try:
+            return r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ") from e
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 async def run_prompt_and_wait(
@@ -228,7 +264,7 @@ async def run_prompt_and_wait(
     seed: int | None = None,
     aspect_ratio: str | None = None,
     max_seconds: int = 300,
-    poll_seconds: float = 2.0,
+    poll_seconds: float = 4.0,
 ) -> AstriaPromptResult:
     # Увеличиваем таймаут для POST запроса - генерация может занимать время
     timeout_s = _timeout_s(90.0)  # Увеличено до 90 секунд для медленных запросов
