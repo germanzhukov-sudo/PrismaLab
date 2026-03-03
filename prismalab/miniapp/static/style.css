@@ -719,6 +719,11 @@ body {
     animation: title-shine 3s ease-in-out infinite;
 }
 
+span.main-title-premium {
+    display: inline;
+    font-weight: 700;
+}
+
 @keyframes title-shine {
     0%, 100% { filter: brightness(1); }
     50% { filter: brightness(1.15); }
