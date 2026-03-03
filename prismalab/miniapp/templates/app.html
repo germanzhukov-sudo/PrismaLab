@@ -23,20 +23,21 @@
         <!-- Screen: Main Menu -->
         <div id="screen-main" class="screen">
             <div class="screen-content main-screen-content">
-                <h1 class="screen-title main-title-premium">PrismaLab</h1>
-                <p class="main-welcome-text">Добро пожаловать в студию PrismaLab. В каждом фотосете мы даём сразу несколько фотографий, чтобы вы могли выбрать лучшее</p>
+                <div class="main-header">
+                    <h1 class="screen-title main-title-premium">PrismaLab</h1>
+                    <button class="main-profile-btn" onclick="goToProfile()">👤</button>
+                </div>
+                <p class="main-welcome-text">Добро пожаловать в студию PrismaLab</p>
                 <div class="main-cards">
                     <button class="main-card" onclick="goToPacks()">
                         <div class="main-card-icon">📸</div>
                         <div class="main-card-title">Готовые фотосеты</div>
+                        <div class="main-card-desc">Каждый фотосет включает серию фотографий в выбранной тематике. Один выбор – сразу много готовых кадров</div>
                     </button>
                     <button class="main-card" onclick="goToPersonaStyles()">
                         <div class="main-card-icon">🎭</div>
-                        <div class="main-card-title">Стили Персоны</div>
-                    </button>
-                    <button class="main-card main-card-profile" onclick="goToProfile()">
-                        <div class="main-card-icon">👤</div>
-                        <div class="main-card-title">Профиль</div>
+                        <div class="main-card-title">Отдельные образы</div>
+                        <div class="main-card-desc">В этом разделе 1 кредит = 1 фото. Выбираете стиль – получаете один готовый кадр</div>
                     </button>
                 </div>
             </div>

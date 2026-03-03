@@ -677,6 +677,40 @@ body {
     gap: 24px;
 }
 
+.main-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 100%;
+}
+
+.main-profile-btn {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--bg-glass);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-glass);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+
+.main-profile-btn:active {
+    transform: translateY(-50%) scale(0.9);
+    border-color: var(--accent-purple);
+    box-shadow: var(--shadow-glow);
+}
+
 .main-title-premium {
     background: var(--accent-gradient);
     -webkit-background-clip: text;
