@@ -1155,8 +1155,8 @@ class PrismaLabStore:
         return int(row["cnt"]) if row else 0
 
     def get_funnel_data(self, date_from: str | None = None, date_to: str | None = None) -> dict:
-        """Данные воронок: Персона, Экспресс, Фотосеты."""
-        result = {"persona": [], "fast": [], "packs": []}
+        """Данные воронок: Персона, Экспресс, Фотосеты, Mini App."""
+        result = {"persona": [], "fast": [], "packs": [], "miniapp": []}
         if not self._use_pg:
             return result
         d_from = (str(date_from) + " 00:00:00+03") if date_from else None
@@ -1200,6 +1200,19 @@ class PrismaLabStore:
                 for label, evt, filt in pack_steps:
                     cnt = self._funnel_count(cur, evt, d_from, d_to, filt)
                     result["packs"].append({"label": label, "count": cnt})
+
+                # Воронка Mini App
+                miniapp_steps = [
+                    ("Открыл аппку", "miniapp_open", None),
+                    ("Перешёл в Персону", "nav_persona", {"source": "miniapp"}),
+                    ("Просмотрел образ", "persona_style_view", {"source": "miniapp"}),
+                    ("Выбрал образ", "persona_style_select", {"source": "miniapp"}),
+                    ("Выбрал тариф", "persona_buy_init", {"source": "miniapp"}),
+                    ("Нажал Оплатить", "persona_buy_confirm", {"source": "miniapp"}),
+                ]
+                for label, evt, filt in miniapp_steps:
+                    cnt = self._funnel_count(cur, evt, d_from, d_to, filt)
+                    result["miniapp"].append({"label": label, "count": cnt})
         return result
 
     def get_popularity_data(self, date_from: str | None = None, date_to: str | None = None) -> dict:

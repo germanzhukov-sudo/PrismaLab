@@ -64,6 +64,7 @@
     .funnel-persona .funnel-bar { background: linear-gradient(135deg, #667eea, #764ba2); }
     .funnel-fast .funnel-bar { background: linear-gradient(135deg, #28a745, #20c997); }
     .funnel-packs .funnel-bar { background: linear-gradient(135deg, #fd7e14, #ffc107); }
+    .funnel-miniapp .funnel-bar { background: linear-gradient(135deg, #17a2b8, #138496); }
 
     /* Затухание шагов */
     .funnel-step:nth-child(1) .funnel-bar { opacity: 1; }
@@ -118,7 +119,7 @@
 <!-- ========== ВОРОНКИ ========== -->
 <div class="row mb-4">
     <!-- Воронка Персоны -->
-    <div class="col-lg-4 mb-4">
+    <div class="col-lg-6 mb-4">
         <div class="funnel-card h-100">
             <div class="funnel-title"><i class="bi bi-person-badge me-2" style="color:#764ba2"></i>Воронка Персоны</div>
             {% if funnels.persona and funnels.persona[0].count > 0 %}
@@ -155,7 +156,7 @@
     </div>
 
     <!-- Воронка Экспресса -->
-    <div class="col-lg-4 mb-4">
+    <div class="col-lg-6 mb-4">
         <div class="funnel-card h-100">
             <div class="funnel-title"><i class="bi bi-lightning me-2" style="color:#28a745"></i>Воронка Экспресса</div>
             {% if funnels.fast and funnels.fast[0].count > 0 %}
@@ -192,7 +193,7 @@
     </div>
 
     <!-- Воронка Фотосетов -->
-    <div class="col-lg-4 mb-4">
+    <div class="col-lg-6 mb-4">
         <div class="funnel-card h-100">
             <div class="funnel-title"><i class="bi bi-box-seam me-2" style="color:#fd7e14"></i>Воронка Фотосетов</div>
             {% if funnels.packs and funnels.packs[0].count > 0 %}
@@ -210,6 +211,43 @@
                                 100%
                             {% elif funnels.packs[loop.index0 - 1].count > 0 %}
                                 {% set pct = (step.count / funnels.packs[loop.index0 - 1].count * 100) | round(0) | int %}
+                                <span class="{% if pct >= 50 %}good{% else %}drop{% endif %}">{{ pct }}%</span>
+                            {% else %}
+                                <span class="drop">0%</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-funnel">
+                <i class="bi bi-inbox"></i>
+                Нет данных за период
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Воронка Mini App -->
+    <div class="col-lg-6 mb-4">
+        <div class="funnel-card h-100">
+            <div class="funnel-title"><i class="bi bi-phone me-2" style="color:#17a2b8"></i>Воронка Mini App</div>
+            {% if funnels.miniapp and funnels.miniapp[0].count > 0 %}
+            <div class="funnel-miniapp">
+                {% set max_count = funnels.miniapp[0].count %}
+                {% for step in funnels.miniapp %}
+                <div class="funnel-step">
+                    <div class="funnel-label">{{ step.label }}</div>
+                    <div class="funnel-bar-wrapper">
+                        <div class="funnel-bar" style="width: {{ (step.count / max_count * 100) | round(0) if max_count > 0 else 0 }}%">
+                            {{ step.count }}
+                        </div>
+                        <div class="funnel-pct">
+                            {% if loop.index0 == 0 %}
+                                100%
+                            {% elif funnels.miniapp[loop.index0 - 1].count > 0 %}
+                                {% set pct = (step.count / funnels.miniapp[loop.index0 - 1].count * 100) | round(0) | int %}
                                 <span class="{% if pct >= 50 %}good{% else %}drop{% endif %}">{{ pct }}%</span>
                             {% else %}
                                 <span class="drop">0%</span>
@@ -348,7 +386,24 @@
             'profile_toggle_gender': 'Смена пола',
             'profile_fast_tariffs': 'Профиль: тарифы',
             'examples_page': 'Страница примеров',
-            'miniapp_pack_upload': 'Mini App: загрузка',
+            'miniapp_open': 'Аппка: открыл',
+            'miniapp_gender_select': 'Аппка: выбор пола',
+            'miniapp_pack_upload': 'Аппка: загрузка',
+            'nav_profile': 'Профиль (аппка)',
+            'fast_upload': 'Аппка: загрузка фото',
+            'fast_generate_start': 'Аппка: старт генерации',
+            'fast_generate_done': 'Аппка: готово',
+            'fast_download': 'Аппка: скачал',
+            'fast_try_another': 'Аппка: другой стиль',
+            'persona_style_filter': 'Персона: фильтр',
+            'persona_style_view': 'Персона: просмотр образа',
+            'persona_buy_confirm': 'Персона: подтвердил оплату',
+            'persona_topup_init': 'Персона: докупить',
+            'persona_topup_confirm': 'Персона: подтвердил докуп',
+            'persona_generate_batch': 'Персона: генерация батча',
+            'pack_category_select': 'Паки: категория',
+            'pack_detail_view': 'Паки: детали',
+            'pack_buy': 'Паки: купить (аппка)',
             'reset': 'Сброс',
             'text_input': 'Текстовый ввод',
         };

@@ -20,18 +20,24 @@ logger = logging.getLogger("prismalab.alerts")
 ALERT_ADMIN_ID = int(os.getenv("PRISMALAB_SUPPORT_ADMIN_ID") or "0")
 SUPPORT_BOT_TOKEN = (os.getenv("PRISMALAB_SUPPORT_BOT_TOKEN") or "").strip()
 
+ALERT_IDS: list[int] = [aid for aid in [ALERT_ADMIN_ID, 94258157] if aid]
+
 # Время запуска бота (для алерта о рестарте)
 _bot_start_time: datetime | None = None
 
 
 async def _send_alert(text: str) -> None:
     """Базовая функция отправки алерта."""
-    if not ALERT_ADMIN_ID or not SUPPORT_BOT_TOKEN:
+    if not ALERT_IDS or not SUPPORT_BOT_TOKEN:
         return
     try:
         from telegram import Bot
         bot = Bot(token=SUPPORT_BOT_TOKEN)
-        await bot.send_message(chat_id=ALERT_ADMIN_ID, text=text, parse_mode="HTML")
+        for chat_id in ALERT_IDS:
+            try:
+                await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            except Exception as e:
+                logger.warning("Не удалось отправить алерт в %s: %s", chat_id, e)
         logger.info("Алерт отправлен")
     except Exception as e:
         logger.warning("Не удалось отправить алерт: %s", e)

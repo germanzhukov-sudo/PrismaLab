@@ -90,6 +90,9 @@ _user_locks: dict[int, asyncio.Lock] = {}
 _lock_dict_mutex = threading.Lock()
 # Активные pack-polling run_id: блокируем fallback, пока жив основной polling.
 _pack_polling_active: set[str] = set()
+# run_id, которые сейчас обрабатывает основной flow (включая обучение tune).
+# Recovery проверяет этот set и не вмешивается.
+_pack_processing_active: set[str] = set()
 
 
 def _get_user_lock(user_id: int) -> asyncio.Lock:
@@ -763,21 +766,7 @@ def _fast_gender_keyboard() -> InlineKeyboardMarkup:
 
 # --- Персона ---
 
-PERSONA_INTRO_MESSAGE = """<b>Вот где начинается магия</b> ✨
-
-Вы загружаете <b>10 качественных фото</b> – и мы обучаем <b>персональную модель</b> под вашу внешность: черты лица, мимика, нюансы
-
-После обучения вы просто выбираете стиль и получаете кадры уровня <b>«это я, только в кино»</b>: узнаваемо, стабильно, красиво.
-
-<b>Самые частые отзывы:</b>
-
-— «Это я — только смелее и увереннее»
-— «Фото из жизни, где всё сложилось»
-— «Самая крутая версия меня»
-
-<b>Тарифы:</b>
-• <b>Персона + 20 кредитов – 599 ₽</b>
-• <b>Персона + 40 кредитов – 999 ₽</b>"""
+PERSONA_INTRO_MESSAGE = "Откройте приложение <b>Персона</b> 👇"
 
 
 def _persona_intro_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
@@ -856,7 +845,7 @@ def _persona_app_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура: кнопка Персона (Mini App) + Главное меню."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1154,7 +1143,7 @@ def _fast_tariff_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
+        *([[InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_fast_back")],
     ])
 
@@ -1163,7 +1152,7 @@ def _fast_tariff_persona_only_keyboard() -> InlineKeyboardMarkup:
     """Только кнопка Персона (первое сообщение при 0 кредитах)."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1315,7 +1304,7 @@ def _fast_style_choice_keyboard(
         back_data = "pl_fast_show_ready" if back_to_ready else "pl_fast_back"
     if include_tariffs:
         rows.append([
-            *([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))] if MINIAPP_URL else []),
+            *([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))] if MINIAPP_URL else []),
             InlineKeyboardButton("Назад", callback_data=back_data),
         ])
     else:
@@ -1445,7 +1434,7 @@ def _profile_keyboard(profile: Any) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Изменить пол", callback_data="pl_profile_toggle_gender")],
     ]
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_profile_fast_tariffs")])
     return InlineKeyboardMarkup(rows)
 
@@ -1456,7 +1445,7 @@ def _fast_tariff_keyboard_from_profile() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
+        *([[InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_profile")],
     ])
 
@@ -1627,14 +1616,14 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 [InlineKeyboardButton("✨ 30 кредитов – 629 руб", callback_data="pl_persona_topup_buy:30")],
             ]
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         else:
             text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(remaining)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         await context.bot.send_message(
@@ -1678,7 +1667,7 @@ async def newpersona_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.user_data[USERDATA_SUBJECT_GENDER] = known_gender
             await update.message.reply_text(
                 PERSONA_INTRO_MESSAGE,
-                reply_markup=_persona_intro_keyboard(),
+                reply_markup=_persona_app_keyboard(),
                 parse_mode="HTML",
             )
         return
@@ -1876,7 +1865,7 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
             return
         await query.edit_message_text(
-            f"Выберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}",
+            f"Выберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}",
             reply_markup=_persona_app_keyboard(),
             parse_mode="HTML",
         )
@@ -1915,7 +1904,7 @@ async def handle_start_persona_callback(update: Update, context: ContextTypes.DE
     context.user_data[USERDATA_SUBJECT_GENDER] = known_gender
     await query.edit_message_text(
         PERSONA_INTRO_MESSAGE,
-        reply_markup=_persona_intro_keyboard(),
+        reply_markup=_persona_app_keyboard(),
         parse_mode="HTML",
     )
 
@@ -2020,7 +2009,7 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
         profile = store.get_user(user_id)
         empty_rows: list[list[InlineKeyboardButton]] = []
         if MINIAPP_URL:
-            empty_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            empty_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
         empty_rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
         empty_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         empty_kb = InlineKeyboardMarkup(empty_rows)
@@ -2314,7 +2303,7 @@ async def handle_persona_create_callback(update: Update, context: ContextTypes.D
         context.user_data[USERDATA_MODE] = "persona"
         await query.edit_message_text(
             PERSONA_INTRO_MESSAGE,
-            reply_markup=_persona_intro_keyboard(),
+            reply_markup=_persona_app_keyboard(),
             parse_mode="HTML",
         )
     else:
@@ -2341,7 +2330,7 @@ async def handle_persona_gender_callback(update: Update, context: ContextTypes.D
     context.user_data[USERDATA_MODE] = "persona"
     await query.edit_message_text(
         PERSONA_INTRO_MESSAGE,
-        reply_markup=_persona_intro_keyboard(),
+        reply_markup=_persona_app_keyboard(),
         parse_mode="HTML",
     )
 
@@ -2674,6 +2663,9 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
         if run_id in _pack_polling_active:
             logger.info("pack recovery: polling уже выполняется run_id=%s", run_id)
             continue
+        if run_id in _pack_processing_active:
+            logger.info("pack recovery: основной flow ещё работает run_id=%s", run_id)
+            continue
         try:
             pending_obj = await asyncio.to_thread(
                 _get_tune,
@@ -2714,6 +2706,8 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                 tune_ids=[int(tune_id)],
                 prompts_callback=callback_url or None,
             )
+            # Сразу чистим pending чтобы при крэше recovery не создал промпты повторно
+            store.clear_pending_pack_run(user_id)
             from html import escape
             status_msg = await context.bot.send_message(
                 chat_id=chat_id,
@@ -2731,11 +2725,10 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                     expected_images=expected,
                     known_prompt_ids=known_prompt_ids,
                     max_seconds=wait_timeout,
-                    poll_seconds=6.0,
+                    poll_seconds=8.0,
                 )
             finally:
                 _pack_polling_active.discard(run_id)
-            store.clear_pending_pack_run(user_id)
             if not urls:
                 await _safe_edit_status(
                     context.bot, chat_id, status_msg.message_id,
@@ -2744,6 +2737,9 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                 continue
             if run_id in pack_delivered_set:
                 logger.info("pack recovery: уже доставлено через callback run_id=%s", run_id)
+                continue
+            if run_id in pack_in_progress_set:
+                logger.info("pack recovery: доставка уже идёт (основной flow?) run_id=%s", run_id)
                 continue
             total = len(urls)
             sent_count = 0
@@ -2874,7 +2870,7 @@ async def _pack_fallback_polling(
                 expected_images=expected,
                 known_prompt_ids=known_prompt_ids,
                 max_seconds=fallback_wait_timeout,
-                poll_seconds=6.0,
+                poll_seconds=8.0,
             )
         finally:
             _pack_polling_active.discard(run_id)
@@ -3034,6 +3030,7 @@ async def _run_persona_pack_generation(
         else:
             active_tune_id: int | None = None
             keep_pending_pack_run = False
+            _pack_processing_active.add(run_id)
             if class_name in {"man", "woman"}:
                 store.set_pending_pack_run(
                     user_id=user_id,
@@ -3056,6 +3053,7 @@ async def _run_persona_pack_generation(
                     if reason == "need_upload" or active_tune_id is None:
                         if reason == "pending":
                             keep_pending_pack_run = True
+                            _pack_processing_active.discard(run_id)
                             await _safe_edit_status(
                                 context.bot,
                                 chat_id,
@@ -3064,6 +3062,7 @@ async def _run_persona_pack_generation(
                                 reply_markup=_persona_training_keyboard(),
                             )
                             return
+                        _pack_processing_active.discard(run_id)
                         await _fallback_to_pack_photo_upload(
                             context=context,
                             chat_id=chat_id,
@@ -3075,6 +3074,7 @@ async def _run_persona_pack_generation(
                 else:
                     lora_tune_id_raw = profile.astria_lora_tune_id
                     if not lora_tune_id_raw:
+                        _pack_processing_active.discard(run_id)
                         await _safe_edit_status(
                             context.bot, chat_id, status_msg.message_id,
                             text="❌ У вас еще нет обученной Персоны. Сначала обучите Персону (10 фото).",
@@ -3083,6 +3083,7 @@ async def _run_persona_pack_generation(
                     try:
                         active_tune_id = int(str(lora_tune_id_raw))
                     except ValueError:
+                        _pack_processing_active.discard(run_id)
                         await _safe_edit_status(
                             context.bot, chat_id, status_msg.message_id,
                             text="❌ Не удалось определить ID вашей Персоны. Напишите в поддержку.",
@@ -3097,6 +3098,12 @@ async def _run_persona_pack_generation(
                     )
                 except Exception as e:
                     logger.warning("Не удалось получить существующие prompts для tune %s: %s", active_tune_id, e)
+                # Защита от дубля: recovery мог уже создать промпты
+                if run_id in _pack_polling_active or run_id in pack_delivered_set:
+                    logger.info("pack: конфликт перед созданием промптов run_id=%s (polling=%s delivered=%s), пропускаем",
+                                run_id, run_id in _pack_polling_active, run_id in pack_delivered_set)
+                    _pack_processing_active.discard(run_id)
+                    return
                 callback_url = build_pack_callback_url(user_id, chat_id, pack_id, run_id)
                 tune = await astria_create_tune_from_pack(
                     api_key=settings.astria_api_key,
@@ -3160,6 +3167,16 @@ async def _run_persona_pack_generation(
             )
             logger.info("pack: fallback polling запланирован через %s мин (резерв)", fallback_delay_min)
 
+        # Защита от дублирования: recovery мог уже начать polling
+        if run_id in _pack_polling_active:
+            _pack_processing_active.discard(run_id)
+            logger.info("pack: polling уже запущен (recovery?) для run_id=%s, пропускаем", run_id)
+            return
+        if run_id in pack_delivered_set:
+            _pack_processing_active.discard(run_id)
+            logger.info("pack: уже доставлено для run_id=%s, пропускаем", run_id)
+            return
+
         wait_timeout = _pack_wait_timeout_seconds(expected)
         logger.info(
             "pack: начинаю polling tune_id=%s run_id=%s expected=%s timeout=%ss",
@@ -3173,10 +3190,11 @@ async def _run_persona_pack_generation(
                 expected_images=expected,
                 known_prompt_ids=known_prompt_ids,
                 max_seconds=wait_timeout,
-                poll_seconds=6.0,
+                poll_seconds=8.0,
             )
         finally:
             _pack_polling_active.discard(run_id)
+            _pack_processing_active.discard(run_id)
         if not urls:
             await _safe_edit_status(
                 context.bot, chat_id, status_msg.message_id,
@@ -3186,6 +3204,9 @@ async def _run_persona_pack_generation(
 
         if run_id in pack_delivered_set:
             logger.info("pack: уже доставлено через callback run_id=%s, пропускаем отправку", run_id)
+            return
+        if run_id in pack_in_progress_set:
+            logger.info("pack: доставка уже идёт (recovery?) run_id=%s, пропускаем", run_id)
             return
 
         logger.info("pack: доставлено через polling run_id=%s urls=%s", run_id, len(urls) if urls else 0)
@@ -3474,7 +3495,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     profile = store.get_user(user_id)
     logger.info("persona_pack_buy: profile loaded lora_tune_id=%s", getattr(profile, "astria_lora_tune_id", None))
     if not (profile.astria_lora_tune_id or profile.astria_lora_pack_tune_id) and not _dev_pack_train_from_images():
-        await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_intro_keyboard())
+        await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_app_keyboard())
         return
 
     settings = load_settings()
@@ -3652,7 +3673,7 @@ async def handle_persona_pack_retry_callback(update: Update, context: ContextTyp
     chat_id = query.message.chat_id if query.message else 0
     profile = store.get_user(user_id)
     if not (profile.astria_lora_tune_id or profile.astria_lora_pack_tune_id):
-        await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_intro_keyboard(user_id))
+        await query.edit_message_text("Сначала обучите Персону (10 фото).", reply_markup=_persona_app_keyboard())
         return
 
     await query.edit_message_text(
@@ -3772,7 +3793,7 @@ async def handle_persona_back_callback(update: Update, context: ContextTypes.DEF
     context.user_data.pop(USERDATA_PERSONA_CREDITS, None)
     await query.edit_message_text(
         PERSONA_INTRO_MESSAGE,
-        reply_markup=_persona_intro_keyboard(),
+        reply_markup=_persona_app_keyboard(),
         parse_mode="HTML",
     )
 
@@ -3925,10 +3946,10 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
 
         context.application.create_task(runner())
     else:
-        text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+        text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4052,10 +4073,10 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
 
         context.application.create_task(runner())
     else:
-        text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+        text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4158,7 +4179,7 @@ async def handle_persona_recreate_confirm_callback(update: Update, context: Cont
     context.user_data[USERDATA_MODE] = "persona"
     await query.edit_message_text(
         PERSONA_INTRO_MESSAGE,
-        reply_markup=_persona_intro_keyboard(),
+        reply_markup=_persona_app_keyboard(),
         parse_mode="HTML",
     )
 
@@ -4403,6 +4424,19 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
         store.log_event(user_id, "persona_check_status")
     except Exception:
         pass
+
+    async def _safe_answer(text: str = "", show_alert: bool = False):
+        try:
+            await query.answer(text, show_alert=show_alert)
+        except Exception:
+            pass
+
+    async def _safe_edit(text: str, reply_markup=None):
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            pass
+
     profile = store.get_user(user_id)
     pending_tune_id = getattr(profile, "astria_lora_tune_id_pending", None)
 
@@ -4427,46 +4461,39 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
                     chat_id=query.message.chat_id if query.message else user_id,
                     user_id=user_id,
                 ):
-                    await query.answer("Персональная модель готова. Запускаю фотосет.", show_alert=False)
+                    await _safe_answer("Персональная модель готова. Запускаю фотосет.")
                     return
                 credits = profile.persona_credits_remaining
-                text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите стиль в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
-                await query.answer("Готово! 🎉", show_alert=False)
-                await query.edit_message_text(
-                    text,
-                    reply_markup=_persona_app_keyboard(),
-                    parse_mode="HTML",
-                )
+                text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите образ в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
+                await _safe_answer("Готово! 🎉")
+                await _safe_edit(text, reply_markup=_persona_app_keyboard())
                 return
             if status in {"failed", "error", "cancelled"}:
                 store.clear_astria_lora_tune_pending(user_id)
                 context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "error"
-                await query.answer("При обучении возникла ошибка.", show_alert=True)
-                await query.edit_message_text(
-                    "При обучении возникла ошибка. Загрузите 10 фото заново или напишите в поддержку.",
-                    parse_mode="HTML",
-                )
+                await _safe_answer("При обучении возникла ошибка.", show_alert=True)
+                await _safe_edit("При обучении возникла ошибка. Загрузите 10 фото заново или напишите в поддержку.")
                 return
         except Exception as e:
             logger.warning("Ошибка проверки pending tune %s: %s", pending_tune_id, e)
 
     if context.user_data.get(USERDATA_PERSONA_PACK_IN_PROGRESS) or getattr(profile, "astria_lora_pack_tune_id_pending", None):
-        await query.answer(PHOTOSET_PROGRESS_ALERT, show_alert=True)
+        await _safe_answer(PHOTOSET_PROGRESS_ALERT, show_alert=True)
         return
 
     status = context.user_data.get(USERDATA_PERSONA_TRAINING_STATUS) or "training"
     if status == "training":
-        await query.answer(
+        await _safe_answer(
             "Модель ещё обучается ⏳ Обычно это занимает около 10 минут. Напишу, когда будет готово.",
             show_alert=True,
         )
     elif status == "error":
-        await query.answer(
+        await _safe_answer(
             "При обучении возникла ошибка. Напиши нам в поддержку — разберёмся.",
             show_alert=True,
         )
     else:
-        await query.answer("Модель готова! Скоро появится возможность генерировать.", show_alert=True)
+        await _safe_answer("Модель готова! Скоро появится возможность генерировать.", show_alert=True)
 
 
 async def handle_persona_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4490,7 +4517,7 @@ async def handle_persona_page_callback(update: Update, context: ContextTypes.DEF
     profile = store.get_user(user_id)
     credits = profile.persona_credits_remaining
     gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-    text = f"Выберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}"
+    text = f"Выберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(credits)}"
     await query.edit_message_text(
         text,
         reply_markup=_persona_app_keyboard(),
@@ -4924,10 +4951,10 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             new_total = profile.persona_credits_remaining + credits
             store.set_persona_credits(user_id, new_total)
             gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
-            text = f"<b>Оплата получена</b> ✅\n\nВыберите стиль в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
+            text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             await msg.reply_text(
                 text,
@@ -5526,7 +5553,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
                 [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
-                [InlineKeyboardButton("Назад", callback_data="pl_start_persona")],
+                [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         else:
             text = (
@@ -5534,7 +5561,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
+                [InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
                 [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -5756,7 +5783,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
                 [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
-                [InlineKeyboardButton("Назад", callback_data="pl_start_persona")],
+                [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         else:
             text = (
@@ -5764,7 +5791,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
+                [InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
                 [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -6086,7 +6113,7 @@ async def _start_astria_lora(
                 return
             profile = store.get_user(user_id)
             credits = profile.persona_credits_remaining
-            text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите стиль в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
+            text = f"Готово! 🎉 Персональная модель обучена\n\nВыберите образ в приложении <b>Персона</b> – у вас {credits} {_fast_credits_word(credits)}"
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -6378,7 +6405,7 @@ async def _run_style_job(
                 seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
                 aspect_ratio="3:4",
                 max_seconds=settings.astria_max_seconds,
-                poll_seconds=4.0,
+                poll_seconds=6.0,
             )
             if not is_persona_style:
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")

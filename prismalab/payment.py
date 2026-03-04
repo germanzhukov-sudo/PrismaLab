@@ -292,7 +292,7 @@ def _yookassa_success_content(
         new_total = profile.persona_credits_remaining
         text = (
             f"<b>Оплата получена</b> ✅\n\n"
-            f"Выберите стиль в приложении <b>Персона</b> 👇\n\n"
+            f"Выберите образ в приложении <b>Персона</b> 👇\n\n"
             f"{_format_balance_persona(new_total)}"
         )
         kb_rows = []
@@ -765,6 +765,13 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
                     if run_id_s in _pack_in_progress:
                         logger.info("Astria pack callback: run_id=%s уже в процессе доставки (polling), пропускаем", run_id_s)
                         return web.Response(status=200, text="OK")
+                    try:
+                        from prismalab.bot import _pack_polling_active
+                        if run_id_s in _pack_polling_active:
+                            logger.info("Astria pack callback: run_id=%s polling активен, пропускаем callback", run_id_s)
+                            return web.Response(status=200, text="OK")
+                    except ImportError:
+                        pass
                     _pack_in_progress.add(run_id_s)
                     body = await request.read()
                     prompts = json.loads(body.decode("utf-8")) if body else []
@@ -1307,6 +1314,28 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
             app.router.add_post("/app/api/persona/buy", _miniapp_api_persona_buy)
             app.router.add_post("/app/api/persona/topup", _miniapp_api_persona_topup)
             app.router.add_post("/app/api/persona/generate", _miniapp_api_persona_generate)
+
+            async def _miniapp_api_track(request: web.Request) -> web.Response:
+                try:
+                    body = await request.json()
+                except Exception:
+                    return web.json_response({"error": "Invalid JSON"}, status=400)
+                init_data = body.get("init_data", "")
+                from prismalab.miniapp.auth import validate_init_data
+                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
+                if not user:
+                    return web.json_response({"error": "Invalid init data"}, status=401)
+                event = body.get("event", "")
+                if event not in miniapp_routes.ALLOWED_TRACK_EVENTS:
+                    return web.json_response({"error": "Unknown event"}, status=400)
+                event_data = body.get("data") or {}
+                if not isinstance(event_data, dict):
+                    event_data = {}
+                event_data["source"] = "miniapp"
+                store.log_event(user["user_id"], event, event_data)
+                return web.json_response({"ok": True})
+
+            app.router.add_post("/app/api/track", _miniapp_api_track)
             app.router.add_static("/app/static", miniapp_static_path)
             logger.info("Mini App доступен на порту %s (path: /app/)", port)
         except ImportError as e:

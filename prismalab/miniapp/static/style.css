@@ -794,6 +794,7 @@ span.main-title-premium {
 }
 
 .main-card {
+    position: relative;
     background: var(--bg-glass);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -832,6 +833,41 @@ span.main-title-premium {
 .main-card-desc {
     font-size: 13px;
     color: var(--text-secondary);
+}
+
+.main-card-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.65);
+    background: rgba(139, 92, 246, 0.12);
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    padding: 2px 8px;
+    border-radius: 12px;
+    line-height: 1.4;
+}
+
+.badge-prism {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    position: relative;
+    animation: prism-rotate 3s ease-in-out infinite;
+}
+
+.badge-prism::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 35%, #f43f5e 70%, #8b5cf6 100%);
+    background-size: 200% 200%;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    animation: prism-gradient 2.5s ease-in-out infinite;
 }
 
 /* ===== Pack Categories ===== */
@@ -1379,7 +1415,9 @@ span.main-title-premium {
     gap: 10px;
     padding: 12px 16px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(to top, var(--bg-primary) 80%, transparent);
+    background: linear-gradient(to top, var(--bg-primary) 90%, transparent);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
 }
 
 .persona-buy-footer-buttons {
@@ -1395,9 +1433,9 @@ span.main-title-premium {
     align-items: center;
     gap: 2px;
     padding: 10px 12px;
-    border: 1px solid rgba(139, 92, 246, 0.3);
+    border: 1px solid rgba(139, 92, 246, 0.4);
     border-radius: var(--radius-sm);
-    background: rgba(139, 92, 246, 0.08);
+    background: rgba(139, 92, 246, 0.15);
     color: var(--text-primary);
     cursor: pointer;
     transition: var(--transition);
@@ -1488,7 +1526,9 @@ span.main-title-premium {
     display: flex;
     padding: 12px 16px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(to top, var(--bg-primary) 80%, transparent);
+    background: linear-gradient(to top, var(--bg-primary) 90%, transparent);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
 }
 
 .persona-generate-btn {

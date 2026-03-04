@@ -264,7 +264,7 @@ async def run_prompt_and_wait(
     seed: int | None = None,
     aspect_ratio: str | None = None,
     max_seconds: int = 300,
-    poll_seconds: float = 4.0,
+    poll_seconds: float = 6.0,
 ) -> AstriaPromptResult:
     # Увеличиваем таймаут для POST запроса - генерация может занимать время
     timeout_s = _timeout_s(90.0)  # Увеличено до 90 секунд для медленных запросов
@@ -478,24 +478,63 @@ def _create_faceid_tune(
     headers = {
         "Authorization": f"Bearer {api_key}",
     }
-    
-    r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
-    if r.status_code >= 400:
-        error_text = r.text[:500] if r.text else "Нет текста ошибки"
-        raise AstriaError(f"Astria HTTP {r.status_code} при создании tune: {error_text}")
-    return r.json()
+
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(15, min(120, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria POST create_faceid HTTP %s, retry через %s сек (попытка %s/%s)", r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            error_text = r.text[:500] if r.text else "Нет текста ошибки"
+            raise AstriaError(f"Astria HTTP {r.status_code} при создании tune: {error_text}")
+        return r.json()
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _get_tune(*, api_key: str, tune_id: str, timeout_s: float) -> dict[str, Any]:
     url = f"https://api.astria.ai/tunes/{tune_id}"
-    # Используем более длинный таймаут для GET
-    r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code} при получении tune: {r.text}")
-    try:
-        return r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ при получении tune") from e
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(10, min(60, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria GET tune %s HTTP %s, retry через %s сек (попытка %s/%s)", tune_id, r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code} при получении tune: {r.text}")
+        try:
+            return r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ при получении tune") from e
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 async def create_faceid_tune_and_wait(
@@ -657,15 +696,35 @@ def _create_lora_tune(
     # Логируем, что именно отправляем (без файлов)
     data_for_log = {k: v for k, v in data.items()}
     logger.info(f"[LoRA] Отправляю запрос на создание LoRA: base_tune_id={base_tune_id}, model_type={data.get('tune[model_type]')}, data keys={list(data_for_log.keys())}, token в data: {'tune[token]' in data_for_log}")
-    
-    if files:
-        r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
-    else:
-        r = requests.post(url, headers=headers, data=data, timeout=timeout_s)
-    if r.status_code >= 400:
-        error_text = r.text[:500] if r.text else "Нет текста ошибки"
-        raise AstriaError(f"Astria HTTP {r.status_code} при создании LoRA tune: {error_text}")
-    return r.json()
+
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        if files:
+            r = requests.post(url, headers=headers, files=files, data=data, timeout=timeout_s)
+        else:
+            r = requests.post(url, headers=headers, data=data, timeout=timeout_s)
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(15, min(120, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria POST create_lora HTTP %s, retry через %s сек (попытка %s/%s)", r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            error_text = r.text[:500] if r.text else "Нет текста ошибки"
+            raise AstriaError(f"Astria HTTP {r.status_code} при создании LoRA tune: {error_text}")
+        return r.json()
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 async def create_lora_tune_and_wait(
@@ -790,32 +849,72 @@ def _get_gallery_packs(*, api_key: str, public: bool = True, listed: bool = True
         params["public"] = "true"
     if listed:
         params["listed"] = "true"
-    r = requests.get(url, headers=_headers(api_key), params=params, timeout=(10.0, timeout_s))
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code} при получении packs: {r.text}")
-    try:
-        data = r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ при получении packs") from e
-    if not isinstance(data, list):
-        raise AstriaError(f"Неожиданный ответ packs: {data}")
-    return [x for x in data if isinstance(x, dict)]
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.get(url, headers=_headers(api_key), params=params, timeout=(10.0, timeout_s))
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(10, min(60, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria GET gallery_packs HTTP %s, retry через %s сек (попытка %s/%s)", r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code} при получении packs: {r.text}")
+        try:
+            data = r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ при получении packs") from e
+        if not isinstance(data, list):
+            raise AstriaError(f"Неожиданный ответ packs: {data}")
+        return [x for x in data if isinstance(x, dict)]
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _get_pack(*, api_key: str, pack_id: int, timeout_s: float) -> dict[str, Any]:
     if not api_key:
         raise AstriaError("PRISMALAB_ASTRIA_API_KEY не задан")
     url = f"https://api.astria.ai/p/{int(pack_id)}"
-    r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code} при получении pack {pack_id}: {r.text}")
-    try:
-        data = r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ при получении pack") from e
-    if not isinstance(data, dict):
-        raise AstriaError(f"Неожиданный ответ pack: {data}")
-    return data
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(10, min(60, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria GET pack %s HTTP %s, retry через %s сек (попытка %s/%s)", pack_id, r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code} при получении pack {pack_id}: {r.text}")
+        try:
+            data = r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ при получении pack") from e
+        if not isinstance(data, dict):
+            raise AstriaError(f"Неожиданный ответ pack: {data}")
+        return data
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _create_tune_from_pack(
@@ -841,73 +940,113 @@ def _create_tune_from_pack(
     url = f"https://api.astria.ai/p/{int(pack_id)}/tunes"
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    if tune_ids:
-        payload: dict[str, Any] = {"tune": {"tune_ids": [int(x) for x in tune_ids]}}
-        if title:
-            payload["tune"]["title"] = str(title)
-        if name:
-            payload["tune"]["name"] = str(name)
-        if callback:
-            payload["tune"]["callback"] = callback
-        if prompts_callback:
-            payload["tune"]["prompts_callback"] = prompts_callback
-        if prompt_callback:
-            payload["tune"].setdefault("prompt_attributes", {})["callback"] = prompt_callback
-        if characteristics:
-            payload["tune"]["characteristics"] = characteristics
-        r = requests.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload, timeout=(10.0, timeout_s))
-    else:
-        data: dict[str, str] = {}
-        if title:
-            data["tune[title]"] = str(title)
-        if name:
-            data["tune[name]"] = str(name)
-        if callback:
-            data["tune[callback]"] = callback
-        if prompts_callback:
-            data["tune[prompts_callback]"] = prompts_callback
-        if prompt_callback:
-            data["tune[prompt_attributes][callback]"] = prompt_callback
-        if characteristics:
-            for k, v in characteristics.items():
-                data[f"tune[characteristics][{k}]"] = str(v)
-        if image_urls:
-            for i, image_url in enumerate(image_urls):
-                data[f"tune[image_urls][{i}]"] = str(image_url)
-        files: list[tuple[str, tuple[str, bytes, str]]] = []
-        if image_bytes_list:
-            for i, image_bytes in enumerate(image_bytes_list):
-                files.append(("tune[images][]", (f"image_{i}.jpg", image_bytes, "image/jpeg")))
-        r = requests.post(url, headers=headers, data=data, files=files if files else None, timeout=(10.0, timeout_s))
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        if tune_ids:
+            payload: dict[str, Any] = {"tune": {"tune_ids": [int(x) for x in tune_ids]}}
+            if title:
+                payload["tune"]["title"] = str(title)
+            if name:
+                payload["tune"]["name"] = str(name)
+            if callback:
+                payload["tune"]["callback"] = callback
+            if prompts_callback:
+                payload["tune"]["prompts_callback"] = prompts_callback
+            if prompt_callback:
+                payload["tune"].setdefault("prompt_attributes", {})["callback"] = prompt_callback
+            if characteristics:
+                payload["tune"]["characteristics"] = characteristics
+            r = requests.post(url, headers={**headers, "Content-Type": "application/json"}, json=payload, timeout=(10.0, timeout_s))
+        else:
+            data: dict[str, str] = {}
+            if title:
+                data["tune[title]"] = str(title)
+            if name:
+                data["tune[name]"] = str(name)
+            if callback:
+                data["tune[callback]"] = callback
+            if prompts_callback:
+                data["tune[prompts_callback]"] = prompts_callback
+            if prompt_callback:
+                data["tune[prompt_attributes][callback]"] = prompt_callback
+            if characteristics:
+                for k, v in characteristics.items():
+                    data[f"tune[characteristics][{k}]"] = str(v)
+            if image_urls:
+                for i, image_url in enumerate(image_urls):
+                    data[f"tune[image_urls][{i}]"] = str(image_url)
+            files: list[tuple[str, tuple[str, bytes, str]]] = []
+            if image_bytes_list:
+                for i, image_bytes in enumerate(image_bytes_list):
+                    files.append(("tune[images][]", (f"image_{i}.jpg", image_bytes, "image/jpeg")))
+            r = requests.post(url, headers=headers, data=data, files=files if files else None, timeout=(10.0, timeout_s))
 
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code} при создании tune из pack: {r.text}")
-    try:
-        data = r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ при создании tune из pack") from e
-    if not isinstance(data, dict):
-        raise AstriaError(f"Неожиданный ответ при создании tune из pack: {data}")
-    return data
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(15, min(120, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria POST create_tune_from_pack HTTP %s, retry через %s сек (попытка %s/%s)", r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code} при создании tune из pack: {r.text}")
+        try:
+            result = r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ при создании tune из pack") from e
+        if not isinstance(result, dict):
+            raise AstriaError(f"Неожиданный ответ при создании tune из pack: {result}")
+        return result
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _get_tune_prompts(*, api_key: str, tune_id: str, timeout_s: float) -> list[dict[str, Any]]:
     if not api_key:
         raise AstriaError("PRISMALAB_ASTRIA_API_KEY не задан")
     url = f"https://api.astria.ai/tunes/{tune_id}/prompts"
-    try:
-        r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
-    except requests.RequestException as e:
-        raise AstriaError(f"Ошибка сети при получении prompts tune {tune_id}: {type(e).__name__}") from e
-    if r.status_code >= 400:
-        raise AstriaError(f"Astria HTTP {r.status_code} при получении prompts: {r.text}")
-    try:
-        data = r.json()
-    except Exception as e:
-        raise AstriaError("Astria вернул не-JSON ответ при получении prompts") from e
-    if not isinstance(data, list):
-        raise AstriaError(f"Неожиданный ответ prompts: {data}")
-    return [x for x in data if isinstance(x, dict)]
+    max_retries = 3
+    last_r = None
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, headers=_headers(api_key), timeout=(10.0, timeout_s))
+        except requests.RequestException as e:
+            raise AstriaError(f"Ошибка сети при получении prompts tune {tune_id}: {type(e).__name__}") from e
+        last_r = r
+        if r.status_code in (429, 500, 504) and attempt < max_retries - 1:
+            wait = 30
+            if r.status_code == 429:
+                try:
+                    wait = int(r.headers.get("Retry-After", 30))
+                except (ValueError, TypeError):
+                    pass
+                wait = max(10, min(60, wait))
+            elif r.status_code == 504:
+                wait = 60
+            elif r.status_code == 500:
+                wait = 30 * (2**attempt)
+            logger.info("Astria GET tune_prompts %s HTTP %s, retry через %s сек (попытка %s/%s)", tune_id, r.status_code, wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            raise AstriaError(f"Astria HTTP {r.status_code} при получении prompts: {r.text}")
+        try:
+            data = r.json()
+        except Exception as e:
+            raise AstriaError("Astria вернул не-JSON ответ при получении prompts") from e
+        if not isinstance(data, list):
+            raise AstriaError(f"Неожиданный ответ prompts: {data}")
+        return [x for x in data if isinstance(x, dict)]
+    raise AstriaError(f"Astria HTTP {last_r.status_code}: {last_r.text}" if last_r else "Unknown error")
 
 
 def _collect_prompt_images(prompts: list[dict[str, Any]]) -> list[str]:
@@ -1064,6 +1203,9 @@ async def wait_pack_images(
     # Это защищает от вечного ожидания при "подвисших" prompt-статусах на стороне Astria.
     partial_idle_timeout = max(300.0, min(1200.0, float(target) * 20.0))
 
+    all_done_since: float | None = None  # когда впервые все промпты стали "done"
+    ALL_DONE_GRACE_SECONDS = 90.0  # ждём ещё столько после all_done если urls < target
+
     while True:
         try:
             prompts = await asyncio.to_thread(
@@ -1147,11 +1289,40 @@ async def wait_pack_images(
                 all_done = False
                 break
         if all_done and last_urls:
-            logger.info(
-                "pack wait_pack_images: all_done tune_id=%s urls=%s (источник: polling)",
-                tune_id, len(last_urls),
-            )
+            # Если картинок значительно меньше ожидаемого — ждём grace period,
+            # CDN может ещё не отдать картинки для промптов с trained_at без images.
+            if len(last_urls) < target:
+                if all_done_since is None:
+                    all_done_since = time.monotonic()
+                    n_with_images = sum(1 for p in relevant_prompts if _extract_image_urls(p))
+                    n_failed = sum(
+                        1 for p in relevant_prompts
+                        if str(p.get("status") or "").lower() in {"failed", "error", "cancelled", "canceled"}
+                    )
+                    logger.warning(
+                        "pack wait_pack_images: all_done but urls=%s < expected=%s tune_id=%s "
+                        "(prompts_with_images=%s failed=%s total_prompts=%s). "
+                        "Grace period %ss started.",
+                        len(last_urls), target, tune_id,
+                        n_with_images, n_failed, len(relevant_prompts),
+                        ALL_DONE_GRACE_SECONDS,
+                    )
+                grace_elapsed = time.monotonic() - all_done_since
+                if grace_elapsed < ALL_DONE_GRACE_SECONDS and time.monotonic() <= deadline:
+                    await asyncio.sleep(poll_seconds)
+                    continue
+                logger.info(
+                    "pack wait_pack_images: grace period ended, returning urls=%s/%s tune_id=%s",
+                    len(last_urls), target, tune_id,
+                )
+            else:
+                logger.info(
+                    "pack wait_pack_images: all_done tune_id=%s urls=%s (источник: polling)",
+                    tune_id, len(last_urls),
+                )
             return last_urls
+        else:
+            all_done_since = None  # сброс если промпты ещё не все done
         if all_done and saw_new_prompts and not last_urls:
             raise AstriaError(f"Пак завершился без изображений для tune {tune_id}")
         if last_urls and (time.monotonic() - last_progress_at) >= partial_idle_timeout:

@@ -2,6 +2,25 @@
  * PrismaLab Mini App — Frontend Logic
  */
 
+// === Helpers ===
+function pluralCredits(n) {
+    const abs = Math.abs(n) % 100;
+    const last = abs % 10;
+    if (abs >= 11 && abs <= 19) return 'кредитов';
+    if (last === 1) return 'кредит';
+    if (last >= 2 && last <= 4) return 'кредита';
+    return 'кредитов';
+}
+
+// === Analytics ===
+function trackEvent(event, data) {
+    fetch('/app/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ init_data: state.initData, event, data: data || {} }),
+    }).catch(() => {});
+}
+
 // === State ===
 const state = {
     initData: '',
@@ -57,6 +76,10 @@ async function authenticate() {
             state.personaCredits = data.persona_credits || 0;
             state.personaCreditsOriginal = state.personaCredits;
             updateCreditsDisplay();
+            const mainCreditsEl = document.getElementById('main-persona-credits');
+            if (mainCreditsEl) mainCreditsEl.textContent = state.personaCredits;
+            const mainCreditsWord = document.getElementById('main-persona-credits-word');
+            if (mainCreditsWord) mainCreditsWord.textContent = pluralCredits(state.personaCredits);
 
             // Проверяем возврат из ЮKassa после оплаты пака
             const params = new URLSearchParams(window.location.search);
@@ -64,6 +87,8 @@ async function authenticate() {
                 showScreen('pack-paid');
                 return;
             }
+
+            trackEvent('miniapp_open');
 
             // Пол не известен — спрашиваем и сохраняем в профиль
             if (!data.gender) {
@@ -158,6 +183,7 @@ function goBack(screen) {
 
 async function selectGender(gender) {
     state.gender = gender;
+    trackEvent('miniapp_gender_select', { gender });
 
     if (tg?.HapticFeedback) {
         tg.HapticFeedback.impactOccurred('medium');
@@ -231,6 +257,7 @@ async function loadStyles(gender) {
 function selectStyle(style) {
     state.selectedStyle = style;
     state.selectedFile = null;
+    trackEvent('fast_style_select', { style_id: style.id });
 
     document.getElementById('selected-style-name').textContent = `${style.emoji} ${style.label}`;
 
@@ -282,6 +309,7 @@ function handleFile(file) {
     }
 
     state.selectedFile = file;
+    trackEvent('fast_upload');
 
     // Show preview
     const reader = new FileReader();
@@ -310,6 +338,7 @@ function resetUpload() {
 
 async function startGeneration() {
     if (!state.selectedFile || !state.selectedStyle) return;
+    trackEvent('fast_generate_start', { style_id: state.selectedStyle.id });
 
     if (tg?.HapticFeedback) {
         tg.HapticFeedback.impactOccurred('heavy');
@@ -405,6 +434,7 @@ async function pollStatus() {
 
         if (data.status === 'done') {
             stopProgressAnimation();
+            trackEvent('fast_generate_done', { style_id: state.selectedStyle?.id });
 
             // Update credits
             if (state.credits.free_used === false) {
@@ -444,6 +474,7 @@ async function pollStatus() {
 function downloadResult() {
     const img = document.getElementById('result-image');
     if (!img.src) return;
+    trackEvent('fast_download', { style_id: state.selectedStyle?.id });
 
     const link = document.createElement('a');
     link.href = img.src;
@@ -456,6 +487,7 @@ function downloadResult() {
 }
 
 function tryAnotherStyle() {
+    trackEvent('fast_try_another');
     state.selectedFile = null;
     state.selectedStyle = null;
     state.taskId = null;
@@ -486,6 +518,7 @@ function buyCredits() {
 
 async function goToPacks() {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    trackEvent('nav_packs');
     state.packCategory = state.packCategory || 'female';
     showScreen('packs');
     await loadPacks();
@@ -493,6 +526,7 @@ async function goToPacks() {
 
 function goToProfile() {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    trackEvent('nav_profile');
     renderProfile();
     showScreen('profile');
 }
@@ -507,6 +541,7 @@ function renderProfile() {
 
 function selectPackCategory(category) {
     state.packCategory = category;
+    trackEvent('pack_category_select', { category });
     document.querySelectorAll('.category-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.category === category);
     });
@@ -585,6 +620,7 @@ function renderPacksByCategory() {
 
 async function openPackDetail(packId) {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    trackEvent('pack_detail_view', { pack_id: packId });
 
     showScreen('pack-detail');
 
@@ -624,6 +660,7 @@ async function openPackDetail(packId) {
 
 async function buyPack() {
     if (!state.selectedPack) return;
+    trackEvent('pack_buy', { pack_id: state.selectedPack.id });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
     const btn = document.getElementById('pack-buy-btn');
@@ -679,6 +716,7 @@ function closeMiniApp() {
 
 async function goToPersonaStyles() {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    trackEvent('nav_persona');
     showScreen('persona-styles');
     await loadPersonaStyles();
 }
@@ -832,6 +870,7 @@ function togglePersonaStyle(styleId) {
         if (style) {
             state.selectedPersonaStyles.push(style);
             state.personaCredits--;
+            trackEvent('persona_style_select', { style_id: styleId });
             if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
         }
     }
@@ -841,6 +880,7 @@ function togglePersonaStyle(styleId) {
 }
 
 function openPersonaStyleLightbox(style) {
+    trackEvent('persona_style_view', { style_id: style.id, title: style.title });
     state._lightboxStyle = style;
     const lb = document.getElementById('persona-style-lightbox');
     document.getElementById('persona-style-lightbox-img').src = style.image_url || '';
@@ -893,6 +933,7 @@ function applyPersonaStyleFilter() {
 
 function filterPersonaStyles(gender) {
     state.personaStyleGenderFilter = gender;
+    trackEvent('persona_style_filter', { gender });
     document.querySelectorAll('#persona-styles-filters .category-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.gender === gender);
     });
@@ -922,10 +963,10 @@ function updatePersonaBalanceDisplay() {
 
 function selectPersonaTariff(credits) {
     if (state.selectedTariff === credits) {
-        // Повторный тап — снять выбор
         state.selectedTariff = null;
     } else {
         state.selectedTariff = credits;
+        trackEvent('persona_buy_init', { credits });
     }
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     updateTariffSelection();
@@ -946,6 +987,7 @@ function updateTariffSelection() {
 async function buyPersona() {
     const credits = state.selectedTariff;
     if (!credits) return;
+    trackEvent('persona_buy_confirm', { credits });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
     const payBtn = document.getElementById('persona-buy-pay-btn');
@@ -986,6 +1028,7 @@ function selectTopupTariff(credits) {
         state.selectedTopupTariff = null;
     } else {
         state.selectedTopupTariff = credits;
+        trackEvent('persona_topup_init', { credits });
     }
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     updateTopupTariffSelection();
@@ -1006,6 +1049,7 @@ function updateTopupTariffSelection() {
 async function buyTopup() {
     const credits = state.selectedTopupTariff;
     if (!credits) return;
+    trackEvent('persona_topup_confirm', { credits });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
     const payBtn = document.getElementById('persona-topup-pay-btn');
@@ -1058,6 +1102,7 @@ function updateGenerateButton() {
 async function generatePersonaBatch() {
     const selected = state.selectedPersonaStyles || [];
     if (!selected.length) return;
+    trackEvent('persona_generate_batch', { styles_count: selected.length });
 
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 

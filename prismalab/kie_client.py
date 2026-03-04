@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+logger = logging.getLogger("prismalab")
 
 
 class KieError(RuntimeError):
@@ -186,28 +189,37 @@ def _create_task(
     
     if callback_url:
         data["callBackUrl"] = callback_url
-    
-    r = requests.post(
-        url,
-        headers=_headers(api_key),
-        json=data,
-        timeout=(10.0, timeout_s),
-    )
-    
-    if r.status_code >= 400:
-        error_text = r.text[:500] if r.text else "Нет текста ошибки"
-        raise KieError(f"KIE HTTP {r.status_code} при создании задачи: {error_text}")
-    
-    try:
-        result = r.json()
-    except Exception as e:
-        raise KieError(f"Не удалось распарсить ответ KIE: {e}") from e
-    
-    if result.get("code") != 200:
-        msg = result.get("msg", "Неизвестная ошибка")
-        raise KieError(f"KIE вернул ошибку: {msg}")
-    
-    return result.get("data", {})
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        r = requests.post(
+            url,
+            headers=_headers(api_key),
+            json=data,
+            timeout=(10.0, timeout_s),
+        )
+        last_r = r
+        if r.status_code == 429 and attempt < max_retries - 1:
+            wait = 15
+            try:
+                wait = int(r.headers.get("Retry-After", 15))
+            except (ValueError, TypeError):
+                pass
+            wait = max(10, min(60, wait))
+            logger.info("KIE createTask HTTP 429, retry через %s сек (попытка %s/%s)", wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            error_text = r.text[:500] if r.text else "Нет текста ошибки"
+            raise KieError(f"KIE HTTP {r.status_code} при создании задачи: {error_text}")
+        try:
+            result = r.json()
+        except Exception as e:
+            raise KieError(f"Не удалось распарсить ответ KIE: {e}") from e
+        if result.get("code") != 200:
+            msg = result.get("msg", "Неизвестная ошибка")
+            raise KieError(f"KIE вернул ошибку: {msg}")
+        return result.get("data", {})
 
 
 def _get_task_detail(
@@ -231,30 +243,36 @@ def _get_task_detail(
         raise KieError("KIE_API_KEY не задан")
     
     url = "https://api.kie.ai/api/v1/jobs/recordInfo"
-    
     params = {"taskId": task_id}
-    
-    r = requests.get(
-        url,
-        headers=_headers(api_key),
-        params=params,
-        timeout=(10.0, timeout_s),
-    )
-    
-    if r.status_code >= 400:
-        error_text = r.text[:500] if r.text else "Нет текста ошибки"
-        raise KieError(f"KIE HTTP {r.status_code} при получении задачи: {error_text}")
-    
-    try:
-        result = r.json()
-    except Exception as e:
-        raise KieError(f"Не удалось распарсить ответ KIE: {e}") from e
-    
-    if result.get("code") != 200:
-        msg = result.get("msg", "Неизвестная ошибка")
-        raise KieError(f"KIE вернул ошибку: {msg}")
-    
-    return result.get("data", {})
+    max_retries = 3
+    for attempt in range(max_retries):
+        r = requests.get(
+            url,
+            headers=_headers(api_key),
+            params=params,
+            timeout=(10.0, timeout_s),
+        )
+        if r.status_code == 429 and attempt < max_retries - 1:
+            wait = 15
+            try:
+                wait = int(r.headers.get("Retry-After", 15))
+            except (ValueError, TypeError):
+                pass
+            wait = max(10, min(60, wait))
+            logger.info("KIE recordInfo HTTP 429, retry через %s сек (попытка %s/%s)", wait, attempt + 1, max_retries)
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            error_text = r.text[:500] if r.text else "Нет текста ошибки"
+            raise KieError(f"KIE HTTP {r.status_code} при получении задачи: {error_text}")
+        try:
+            result = r.json()
+        except Exception as e:
+            raise KieError(f"Не удалось распарсить ответ KIE: {e}") from e
+        if result.get("code") != 200:
+            msg = result.get("msg", "Неизвестная ошибка")
+            raise KieError(f"KIE вернул ошибку: {msg}")
+        return result.get("data", {})
 
 
 def _extract_image_urls(data: dict[str, Any]) -> list[str]:

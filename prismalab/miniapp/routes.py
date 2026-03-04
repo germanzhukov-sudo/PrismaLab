@@ -1043,6 +1043,66 @@ async def api_persona_style_detail(request: Request):
     })
 
 
+# ========== Аналитика ==========
+
+ALLOWED_TRACK_EVENTS = {
+    # Общие
+    "miniapp_open",
+    "miniapp_gender_select",
+    # Навигация
+    "nav_persona",
+    "nav_fast",
+    "nav_packs",
+    "nav_profile",
+    # Fast photo
+    "fast_style_select",
+    "fast_upload",
+    "fast_generate_start",
+    "fast_generate_done",
+    "fast_download",
+    "fast_try_another",
+    # Persona
+    "persona_style_filter",
+    "persona_style_view",
+    "persona_style_select",
+    "persona_buy_init",
+    "persona_buy_confirm",
+    "persona_topup_init",
+    "persona_topup_confirm",
+    "persona_generate_batch",
+    # Packs
+    "pack_category_select",
+    "pack_detail_view",
+    "pack_buy",
+}
+
+
+async def api_track(request: Request):
+    """Логирование аналитических событий из Mini App."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Invalid init data"}, status_code=401)
+
+    event = body.get("event", "")
+    if event not in ALLOWED_TRACK_EVENTS:
+        return JSONResponse({"error": "Unknown event"}, status_code=400)
+
+    event_data = body.get("data") or {}
+    if not isinstance(event_data, dict):
+        event_data = {}
+    event_data["source"] = "miniapp"
+
+    store = get_store()
+    store.log_event(user["user_id"], event, event_data)
+    return JSONResponse({"ok": True})
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -1058,6 +1118,7 @@ routes = [
     Route("/app/api/packs/{pack_id:int}/buy", api_pack_buy, methods=["POST"]),
     Route("/app/api/persona-styles", api_persona_styles, methods=["GET"]),
     Route("/app/api/persona-styles/{style_id:int}", api_persona_style_detail, methods=["GET"]),
+    Route("/app/api/track", api_track, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 
