@@ -312,9 +312,16 @@ def _find_pack_offer(pack_id: int) -> dict[str, Any] | None:
             return offer
     return None
 
-store = PrismaLabStore()
-# Инициализируем таблицы для аналитики (payments, user_events) при старте
-store.init_admin_tables()
+store: PrismaLabStore | None = None
+
+
+def _get_store() -> PrismaLabStore:
+    """Lazy init store — не создаёт подключение при импорте модуля."""
+    global store
+    if store is None:
+        store = PrismaLabStore()
+        store.init_admin_tables()
+    return store
 
 
 async def _delete_profile_job_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7157,6 +7164,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def main() -> None:
+    _get_store()  # Инициализируем store при запуске бота, не при импорте
     settings = load_settings()
     _guard_dev_only_flags()
     if not settings.bot_token:
