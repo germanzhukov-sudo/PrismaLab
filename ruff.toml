@@ -1,0 +1,35 @@
+line-length = 140
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names)
+    "I",    # isort (import ordering)
+    "UP",   # pyupgrade (modernize syntax)
+    "B",    # flake8-bugbear (common bugs)
+    "SIM",  # flake8-simplify (simplifiable code)
+    "N",    # pep8-naming
+    "S",    # flake8-bandit (security)
+    "RET",  # flake8-return (return statements)
+    "C4",   # flake8-comprehensions
+]
+ignore = [
+    "E501",   # line too long (пока не трогаем)
+    "S101",   # assert usage
+    "B008",   # function call in default argument
+    "N802",   # function name lowercase (telegram handlers)
+    "N803",   # argument name lowercase
+    "N806",   # variable lowercase
+    "S104",   # binding to all interfaces
+    "S603",   # subprocess call
+    "S607",   # partial executable path
+]
+
+[lint.per-file-ignores]
+"prismalab/persona_prompts.py" = ["E501"]
+"prismalab/styles.py" = ["E501"]
+
+[lint.isort]
+known-first-party = ["prismalab"]

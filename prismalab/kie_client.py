@@ -63,22 +63,22 @@ def _create_task(
     """
     if not api_key:
         raise KieError("KIE_API_KEY не задан")
-    
+
     url = "https://api.kie.ai/api/v1/jobs/createTask"
-    
+
     input_data: dict[str, Any] = {}
-    
+
     # Промпт добавляем только если он не пустой (для upscale моделей промпт не нужен)
     # Проверяем и на None, и на пустую строку
     if prompt and prompt.strip():
         input_data["prompt"] = prompt
-    
+
     # Aspect ratio и output_format добавляем только если они нужны
     if aspect_ratio:
         input_data["aspect_ratio"] = aspect_ratio
     if output_format:
         input_data["output_format"] = output_format
-    
+
     # Разные модели используют разные параметры качества
     if "seedream" in model.lower():
         # Seedream использует quality вместо resolution
@@ -143,7 +143,7 @@ def _create_task(
         # ВАЖНО: для Topaz upscale_factor ОБЯЗАТЕЛЕН
         # Сначала очищаем input_data от всех параметров, которые не нужны для upscale
         input_data = {}  # Начинаем с чистого словаря для upscale
-        
+
         if "topaz" in model.lower():
             # Topaz требует image_url и upscale_factor (оба обязательны)
             if not image_input or not image_input[0]:
@@ -175,18 +175,18 @@ def _create_task(
             input_data["resolution"] = resolution
         if image_input:
             input_data["image_input"] = image_input
-    
+
     # Negative prompt (если поддерживается)
     if negative_prompt:
         # Проверяем, поддерживает ли модель negative_prompt
         # Seedream может не поддерживать, но попробуем
         input_data["negative_prompt"] = negative_prompt
-    
+
     data: dict[str, Any] = {
         "model": model,
         "input": input_data,
     }
-    
+
     if callback_url:
         data["callBackUrl"] = callback_url
 
@@ -241,7 +241,7 @@ def _get_task_detail(
     """
     if not api_key:
         raise KieError("KIE_API_KEY не задан")
-    
+
     url = "https://api.kie.ai/api/v1/jobs/recordInfo"
     params = {"taskId": task_id}
     max_retries = 3
@@ -286,7 +286,7 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
         Список URLs изображений
     """
     urls: list[str] = []
-    
+
     # KIE API использует resultJson - это JSON строка с resultUrls
     result_json_str = data.get("resultJson") or ""
     if result_json_str:
@@ -302,7 +302,7 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
             import logging
             logger = logging.getLogger("prismalab")
             logger.warning(f"Не удалось распарсить resultJson: {e}, строка: {result_json_str[:100]}")
-    
+
     # Fallback: пробуем другие возможные пути
     if not urls:
         result_urls = data.get("resultUrls") or data.get("result_urls") or data.get("resultUrl")
@@ -311,7 +311,7 @@ def _extract_image_urls(data: dict[str, Any]) -> list[str]:
                 urls.extend(str(url) for url in result_urls if url)
             elif isinstance(result_urls, str):
                 urls.append(result_urls)
-    
+
     return urls
 
 
@@ -349,7 +349,7 @@ async def run_task_and_wait(
     """
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     # Создаём задачу
     timeout_s = 60.0
     created = await asyncio.to_thread(
@@ -367,29 +367,29 @@ async def run_task_and_wait(
         callback_url=None,
         timeout_s=timeout_s,
     )
-    
+
     task_id = str(created.get("taskId") or "")
     if not task_id:
         raise KieError(f"Неожиданный ответ KIE (нет taskId): {created}")
-    
+
     logger.info(f"KIE task {task_id} создан, начинаю опрос статуса (таймаут: {max_seconds}с)")
-    
+
     deadline = time.monotonic() + int(max_seconds)
     last_data = created
     poll_count = 0
-    
+
     while True:
         elapsed = time.monotonic() - (deadline - int(max_seconds))
         if time.monotonic() > deadline:
             state = last_data.get("state") or "unknown"
             logger.error(f"KIE task {task_id} - таймаут после {max_seconds}с, последний статус: {state}")
             raise KieError("Таймаут ожидания результата KIE")
-        
+
         poll_count += 1
         if poll_count % 5 == 0:  # Логируем каждые 5 попыток
             state = last_data.get("state") or "unknown"
             logger.info(f"KIE task {task_id} - опрос #{poll_count}, прошло {elapsed:.0f}с, статус: {state}")
-        
+
         # Получаем статус задачи
         polling_timeout = 30.0
         try:
@@ -412,12 +412,12 @@ async def run_task_and_wait(
                 )
             except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e2:
                 raise KieError(f"KIE API не отвечает (таймаут при polling): {e2}") from e2
-        
+
         # Проверяем статус (KIE использует state: waiting, queuing, generating, success, fail)
         state = last_data.get("state") or ""
         fail_msg = last_data.get("failMsg") or ""
         fail_code = last_data.get("failCode") or ""
-        
+
         if state == "success":
             # Успех - извлекаем URLs
             urls = _extract_image_urls(last_data)
@@ -429,12 +429,12 @@ async def run_task_and_wait(
                 # Продолжаем ждать, возможно данные ещё не готовы
                 await asyncio.sleep(poll_seconds)
                 continue
-        
+
         if state == "fail":
             error_text = fail_msg or fail_code or str(last_data)
             logger.error(f"KIE task {task_id} - задача завершилась с ошибкой (code={fail_code}): {error_text}")
             raise KieError(f"KIE задача завершилась с ошибкой: {error_text}")
-        
+
         # Статус 0 или другой - продолжаем ждать
         await asyncio.sleep(poll_seconds)
 
@@ -462,48 +462,48 @@ def upload_file_base64(
     """
     if not api_key:
         raise KieError("KIE_API_KEY не задан")
-    
+
     import base64
-    
+
     # Конвертируем в base64
     base64_data = base64.b64encode(image_bytes).decode("utf-8")
     # Добавляем data URL prefix
     data_url = f"data:image/jpeg;base64,{base64_data}"
-    
+
     url = "https://kieai.redpandaai.co/api/file-base64-upload"
-    
+
     payload: dict[str, Any] = {
         "base64Data": data_url,
         "uploadPath": upload_path,
     }
     if file_name:
         payload["fileName"] = file_name
-    
+
     r = requests.post(
         url,
         headers=_headers(api_key),
         json=payload,
         timeout=(10.0, timeout_s),
     )
-    
+
     if r.status_code >= 400:
         error_text = r.text[:500] if r.text else "Нет текста ошибки"
         raise KieError(f"KIE HTTP {r.status_code} при загрузке файла: {error_text}")
-    
+
     try:
         result = r.json()
     except Exception as e:
         raise KieError(f"Не удалось распарсить ответ KIE: {e}") from e
-    
+
     if result.get("code") != 200:
         msg = result.get("msg", "Неизвестная ошибка")
         raise KieError(f"KIE вернул ошибку при загрузке: {msg}")
-    
+
     data = result.get("data", {})
     file_url = data.get("fileUrl") or data.get("downloadUrl")
     if not file_url:
         raise KieError(f"KIE не вернул URL файла: {result}")
-    
+
     return str(file_url)
 
 
@@ -521,9 +521,9 @@ def download_image_bytes(url: str, timeout_s: float = 30.0) -> bytes:
     r = requests.get(url, timeout=(10.0, timeout_s))
     if r.status_code >= 400:
         raise KieError(f"Не удалось скачать изображение (HTTP {r.status_code})")
-    
+
     ct = (r.headers.get("Content-Type") or "").lower()
     if not ct.startswith("image/"):
         raise KieError(f"KIE вернул не изображение (Content-Type: {ct})")
-    
+
     return r.content

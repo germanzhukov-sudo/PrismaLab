@@ -13,7 +13,7 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -230,11 +230,17 @@ async def api_generate(request: Request):
 async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes: bytes, use_free: bool, profile):
     """Фоновая генерация через KIE."""
     import secrets
+
     from PIL import Image, ImageOps
+
+    from prismalab.kie_client import (
+        download_image_bytes as kie_download_image_bytes,
+    )
+    from prismalab.kie_client import (
+        run_task_and_wait as kie_run_task_and_wait,
+    )
     from prismalab.kie_client import (
         upload_file_base64 as kie_upload_file_base64,
-        run_task_and_wait as kie_run_task_and_wait,
-        download_image_bytes as kie_download_image_bytes,
     )
     from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
     from prismalab.settings import load_settings
@@ -366,22 +372,14 @@ async def api_status(request: Request):
 
 # Паки, которые всегда в списке (даже если нет в env). Child и animals — не трогать порядок.
 DEFAULT_PACKS: list[dict] = [
-    {"id": 248, "title": "Собачий арт", "price_rub": 499, "expected_images": 16, "class_name": "dog", "category": "animals"},
-    {"id": 682, "title": "Котомагия", "price_rub": 799, "expected_images": 43, "class_name": "cat", "category": "animals"},
-    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499, "expected_images": 19, "class_name": "boy", "category": "child"},
-    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799, "expected_images": 40, "class_name": "girl", "category": "child"},
-    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799, "expected_images": 44, "class_name": "girl", "category": "child"},
-    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499, "expected_images": 80, "class_name": "girl", "category": "child"},
+    {"id": 4345, "title": "8 марта", "price_rub": 319, "expected_images": 20, "class_name": "woman", "category": "female"},
+    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 319, "expected_images": 16, "class_name": "woman", "category": "female"},
 ]
 
 # Маппинг pack_id → category (если не задан в env)
 PACK_ID_CATEGORIES: dict[int, str] = {
-    248: "animals",
-    682: "animals",
-    593: "child",
-    859: "child",
-    2152: "child",
-    2501: "child",
+    4345: "female",
+    4344: "female",
 }
 
 
@@ -960,7 +958,7 @@ async def api_pack_buy(request: Request):
     user_id = user["user_id"]
     price_rub = offer["price_rub"]
 
-    from prismalab.payment import create_payment, apply_test_amount
+    from prismalab.payment import apply_test_amount, create_payment
 
     amount = apply_test_amount(float(price_rub))
     return_url = MINIAPP_URL.rstrip("/") + f"?pack_paid={pack_id}" if MINIAPP_URL else ""

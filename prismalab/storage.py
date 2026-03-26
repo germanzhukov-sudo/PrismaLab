@@ -728,6 +728,17 @@ class PrismaLabStore:
             (int(user_id), gender),
         )
 
+    def clear_subject_gender(self, user_id: int) -> None:
+        """Снять пол у пользователя (subject_gender = NULL)."""
+        self._run(
+            f"""
+            UPDATE {self._users_table}
+            SET subject_gender = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+            """,
+            (int(user_id),),
+        )
+
     def clear_user_data(self, *, user_id: int) -> None:
         self._run(
             f"""
@@ -1111,7 +1122,7 @@ class PrismaLabStore:
         import json
         with self._connect() as conn:
             if self._use_pg:
-                from psycopg2.extras import RealDictCursor, Json
+                from psycopg2.extras import Json, RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
                         f"""

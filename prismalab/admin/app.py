@@ -321,8 +321,9 @@ def _do_csv_export(export_type: str, date_from: str, date_to: str) -> str:
     """Синхронная функция экспорта CSV."""
     import csv
     import io
-    import os
     import logging
+    import os
+
     import psycopg2
     from psycopg2.extras import RealDictCursor
     logger = logging.getLogger("prismalab.admin")
@@ -463,6 +464,8 @@ async def settings_post(request: Request):
 
 
 _DEFAULT_PACK_OFFERS: list[dict] = [
+    {"id": 4345, "title": "8 марта", "price_rub": 599, "expected_images": 20, "class_name": "woman"},
+    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 599, "expected_images": 16, "class_name": "woman"},
     {"id": 248, "title": "Собачий арт", "price_rub": 499, "expected_images": 16, "class_name": "dog"},
     {"id": 682, "title": "Котомагия", "price_rub": 799, "expected_images": 43, "class_name": "cat"},
     {"id": 593, "title": "Детский хэллоуин", "price_rub": 499, "expected_images": 19, "class_name": "boy"},
@@ -830,7 +833,8 @@ async def persona_style_save(request: Request):
     is_active = form.get("is_active") == "1"
 
     # Auto-generate slug from title
-    import re, time as _time
+    import re
+    import time as _time
     _translit = {"а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"}
     slug = "".join(_translit.get(c, c) for c in title.lower())
     slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_") or f"style_{int(_time.time())}"

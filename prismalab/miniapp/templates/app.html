@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PrismaLab Studio</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/static/style.css?v=19">
+    <link rel="stylesheet" href="/app/static/style.css?v=22">
 </head>
 <body>
     <div id="app">
@@ -27,18 +27,22 @@
                     <h1 class="screen-title main-title-premium">PrismaLab</h1>
                     <button class="main-profile-btn" onclick="goToProfile()">👤</button>
                 </div>
-                <p class="main-welcome-text">Добро пожаловать в <span class="main-title-premium">Персону</span>. Ваша новая версия себя начинается здесь</p>
+                <p class="main-welcome-text">Ваша новая версия себя начинается здесь</p>
                 <div class="main-cards">
                     <button class="main-card" onclick="goToPacks()">
                         <div class="main-card-icon">📸</div>
-                        <div class="main-card-title">Готовые фотосеты</div>
-                        <div class="main-card-desc">Каждый фотосет включает серию фотографий в выбранной тематике. Один выбор – сразу много готовых кадров</div>
+                        <div class="main-card-title"><span class="main-title-premium">Персона:</span> фотосеты</div>
+                        <div class="main-card-desc">Серия из 20 – 40 фото в одном стиле</div>
+                        <div class="main-card-cta">Выбрать фотосет</div>
                     </button>
+                    <div class="main-cards-divider">или</div>
                     <button class="main-card" onclick="goToPersonaStyles()">
                         <div class="main-card-badge"><span class="badge-prism"></span> <span id="main-persona-credits">0</span> <span id="main-persona-credits-word">кредитов</span></div>
+                        <div class="main-card-discount-badge" id="main-card-discount-badge" style="display: none;">для вас –40%</div>
                         <div class="main-card-icon">🎭</div>
-                        <div class="main-card-title">Отдельные образы</div>
-                        <div class="main-card-desc">В этом разделе 1 кредит = 1 фото. Выбираете стиль – получаете один готовый кадр</div>
+                        <div class="main-card-title"><span class="main-title-blue">Персона:</span> отдельные образы</div>
+                        <div class="main-card-desc">1 кредит = 1 фото. Выбираете образ – получаете один готовый кадр</div>
+                        <div class="main-card-cta blue">Собрать набор образов</div>
                     </button>
                 </div>
             </div>
@@ -295,12 +299,16 @@
     <!-- Фиксированный футер с тарифами создания (без персоны) -->
     <div class="persona-buy-footer" id="persona-buy-footer" style="display: none;">
         <div class="persona-buy-footer-buttons">
+            <button class="persona-buy-btn" data-credits="5" onclick="selectPersonaTariff(5)">
+                <span class="persona-buy-btn-price"><span class="persona-buy-btn-old-price">499 ₽</span> 299 ₽</span>
+                <span class="persona-buy-btn-credits">5 кредитов</span>
+            </button>
             <button class="persona-buy-btn" data-credits="20" onclick="selectPersonaTariff(20)">
-                <span class="persona-buy-btn-price">599 ₽</span>
+                <span class="persona-buy-btn-price"><span class="persona-buy-btn-old-price">999 ₽</span> 599 ₽</span>
                 <span class="persona-buy-btn-credits">20 кредитов</span>
             </button>
             <button class="persona-buy-btn" data-credits="40" onclick="selectPersonaTariff(40)">
-                <span class="persona-buy-btn-price">999 ₽</span>
+                <span class="persona-buy-btn-price"><span class="persona-buy-btn-old-price">1669 ₽</span> 999 ₽</span>
                 <span class="persona-buy-btn-credits">40 кредитов</span>
             </button>
         </div>
@@ -339,6 +347,6 @@
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Закрыть">×</button>
     </div>
 
-    <script src="/app/static/app.js?v=17"></script>
+    <script src="/app/static/app.js?v=18"></script>
 </body>
 </html>

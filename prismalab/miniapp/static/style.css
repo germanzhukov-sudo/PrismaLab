@@ -14,6 +14,8 @@
     --accent-purple: #8b5cf6;
     --accent-pink: #d946ef;
     --accent-rose: #f43f5e;
+    --accent-blue: #38bdf8;
+    --accent-cyan: #22d3ee;
     --success: #22c55e;
     --danger: #ef4444;
     --radius-sm: 12px;
@@ -835,6 +837,70 @@ span.main-title-premium {
     color: var(--text-secondary);
 }
 
+/* CTA-кнопка на главных плашках */
+.main-card-cta {
+    margin-top: 8px;
+    padding: 10px 24px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+}
+
+.main-card-cta::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.25), rgba(217, 70, 239, 0.15), transparent);
+    animation: tariff-shimmer 3s ease-in-out infinite;
+}
+
+/* Голубая вариация для второй карточки (отдельные образы) */
+.main-card-cta.blue {
+    border-color: rgba(56, 189, 248, 0.4);
+    background: rgba(56, 189, 248, 0.12);
+}
+
+.main-card-cta.blue::before {
+    background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.25), rgba(34, 211, 238, 0.15), transparent);
+}
+
+.main-title-blue {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: inline;
+    font-weight: 700;
+}
+
+/* Разделитель «или» между плашками */
+.main-cards-divider {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.main-cards-divider::before,
+.main-cards-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-glass), transparent);
+}
+
 .main-card-badge {
     position: absolute;
     top: 8px;
@@ -850,6 +916,20 @@ span.main-title-premium {
     padding: 2px 8px;
     border-radius: 12px;
     line-height: 1.4;
+}
+
+.main-card-discount-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink));
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
 }
 
 .badge-prism {
@@ -1486,6 +1566,15 @@ span.main-title-premium {
 .persona-buy-btn-price {
     font-size: 15px;
     font-weight: 700;
+}
+
+.persona-buy-btn-old-price {
+    text-decoration: line-through;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    opacity: 0.6;
+    margin-right: 2px;
 }
 
 /* Кнопка «Оплатить» */

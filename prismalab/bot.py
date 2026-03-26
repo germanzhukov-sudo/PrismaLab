@@ -10,22 +10,32 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import json
 import io
+import json
 import logging
-from datetime import timedelta
-from pathlib import Path
 import os
 import secrets
 import sys
 import threading
 import time
 import uuid
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import requests
 from PIL import Image, ImageOps
-from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LabeledPrice, Update, WebAppInfo
+from telegram import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    LabeledPrice,
+    Update,
+    WebAppInfo,
+)
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from telegram.ext import (
@@ -38,44 +48,67 @@ from telegram.ext import (
     filters,
 )
 
+from prismalab.alerts import alert_daily_report, alert_generation_error, alert_pack_error, alert_payment_error, alert_slow_generation
 from prismalab.astria_client import (
     AstriaError,
+)
+from prismalab.astria_client import (
     create_tune_from_pack as astria_create_tune_from_pack,
+)
+from prismalab.astria_client import (
     download_first_image_bytes as astria_download_first_image_bytes,
+)
+from prismalab.astria_client import (
     get_pack as astria_get_pack,
+)
+from prismalab.astria_client import (
     get_tune_prompt_ids as astria_get_tune_prompt_ids,
+)
+from prismalab.astria_client import (
     run_prompt_and_wait as astria_run_prompt_and_wait,
+)
+from prismalab.astria_client import (
     wait_pack_images as astria_wait_pack_images,
 )
 from prismalab.kie_client import (
     KieError,
+)
+from prismalab.kie_client import (
     download_image_bytes as kie_download_image_bytes,
+)
+from prismalab.kie_client import (
     run_task_and_wait as kie_run_task_and_wait,
+)
+from prismalab.kie_client import (
     upload_file_base64 as kie_upload_file_base64,
 )
-from prismalab.settings import load_settings  # сначала загружаем .env
 from prismalab.payment import (
     INVOICE_AMOUNT_KOPECKS,
     INVOICE_PAYLOAD_PREFIX,
     PRICES_PERSONA_TOPUP,
     TELEGRAM_PROVIDER_TOKEN,
+    _amount_rub,
+    apply_test_amount,
+    build_pack_callback_url,
     create_payment,
+    get_payment_status,
     is_telegram_payments_configured,
     is_yookassa_configured,
-    use_yookassa,
-    use_telegram_payments,
     poll_payment_status,
-    get_payment_status,
-    apply_test_amount,
-    _amount_rub,
-    build_pack_callback_url,
+    use_telegram_payments,
+    use_yookassa,
+)
+from prismalab.payment import (
     _pack_delivered as pack_delivered_set,
+)
+from prismalab.payment import (
     _pack_in_progress as pack_in_progress_set,
 )
 from prismalab.persona_prompts import PERSONA_STYLE_PROMPTS
-from prismalab.styles import STYLES, get_style
+from prismalab.settings import load_settings  # сначала загружаем .env
 from prismalab.storage import PrismaLabStore
-from prismalab.alerts import alert_generation_error, alert_slow_generation, alert_daily_report, alert_payment_error, alert_pack_error
+from prismalab.styles import STYLES, get_style
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -225,12 +258,8 @@ def _guard_dev_only_flags() -> None:
 
 # Паки, которые всегда в списке (Mini App + бот)
 _DEFAULT_PACK_OFFERS: list[dict[str, Any]] = [
-    {"id": 248, "title": "Собачий арт", "price_rub": 499.0, "expected_images": 16, "class_name": "dog"},
-    {"id": 682, "title": "Котомагия", "price_rub": 799.0, "expected_images": 43, "class_name": "cat"},
-    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499.0, "expected_images": 19, "class_name": "boy"},
-    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799.0, "expected_images": 40, "class_name": "girl"},
-    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799.0, "expected_images": 44, "class_name": "girl"},
-    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499.0, "expected_images": 80, "class_name": "girl"},
+    {"id": 4345, "title": "8 марта", "price_rub": 319.0, "expected_images": 20, "class_name": "woman"},
+    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 319.0, "expected_images": 16, "class_name": "woman"},
 ]
 
 
@@ -506,18 +535,18 @@ async def _safe_get_file_bytes(
     ПРОСТАЯ версия без лишних обёрток.
     """
     logger.info(f"[СКАЧИВАНИЕ] Начинаю скачивание файла {file_id[:15]}...")
-    
+
     for attempt in range(max_retries):
         try:
             logger.info(f"[СКАЧИВАНИЕ] Попытка {attempt + 1}/{max_retries}: вызываю get_file...")
             tg_file = await bot.get_file(file_id, read_timeout=timeout, write_timeout=timeout, connect_timeout=timeout)
-            
+
             logger.info(f"[СКАЧИВАНИЕ] get_file OK, вызываю download_as_bytearray...")
             image_bytes = bytes(await tg_file.download_as_bytearray(read_timeout=timeout, write_timeout=timeout, connect_timeout=timeout))
-            
+
             logger.info(f"[СКАЧИВАНИЕ] ✅ Файл скачан! Размер: {len(image_bytes)} байт")
             return image_bytes
-            
+
         except (TimedOut, asyncio.TimeoutError) as e:
             error_type = "TimedOut" if isinstance(e, TimedOut) else "asyncio.TimeoutError"
             logger.warning(f"[СКАЧИВАНИЕ] ❌ {error_type} на попытке {attempt + 1}/{max_retries}")
@@ -565,7 +594,7 @@ async def _safe_send_document(
     Если отправка документа не удалась, пробует отправить как фото.
     """
     document.seek(0)
-    
+
     for attempt in range(max_retries):
         try:
             await bot.send_document(
@@ -768,10 +797,19 @@ def _fast_gender_keyboard() -> InlineKeyboardMarkup:
 
 PERSONA_INTRO_MESSAGE = "Откройте приложение <b>Персона</b> 👇"
 
+PERSONA_RECREATE_TARIFF_MESSAGE = """<b>Выберите тариф для новой Персоны</b>
+
+Вы загрузите <b>10 фото</b>, мы обучим новую модель и начислим кредиты.
+
+• Персона + 5 кредитов – 299 ₽
+• Персона + 20 кредитов – 599 ₽
+• Персона + 40 кредитов – 999 ₽"""
+
 
 def _persona_intro_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура вводного экрана Персоны: тарифы и Назад."""
     rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("✨ 299 руб – 5 фото", callback_data="pl_persona_buy:5")],
         [InlineKeyboardButton("✨ 599 руб – 20 фото", callback_data="pl_persona_buy:20")],
         [InlineKeyboardButton("✨ 999 руб – 40 фото", callback_data="pl_persona_buy:40")],
     ]
@@ -815,6 +853,7 @@ def _persona_gender_keyboard() -> InlineKeyboardMarkup:
 def _persona_tariff_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура тарифов Персоны (создание): 599/20, 999/40, Назад."""
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✨ 299 руб – 5 фото", callback_data="pl_persona_buy:5")],
         [InlineKeyboardButton("✨ 599 руб – 20 фото", callback_data="pl_persona_buy:20")],
         [InlineKeyboardButton("✨ 999 руб – 40 фото", callback_data="pl_persona_buy:40")],
         [InlineKeyboardButton("Назад", callback_data="pl_persona_back")],
@@ -845,7 +884,7 @@ def _persona_app_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура: кнопка Персона (Mini App) + Главное меню."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -896,7 +935,7 @@ def _persona_topup_keyboard() -> InlineKeyboardMarkup:
 def _persona_topup_pay_keyboard(credits: int) -> InlineKeyboardMarkup:
     """Кнопка «Оплатить» для докупки кредитов."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Оплатить", callback_data=f"pl_persona_topup_confirm:{credits}", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("Оплатить", callback_data=f"pl_persona_topup_confirm:{credits}")],
         [InlineKeyboardButton("Назад", callback_data="pl_persona_show_credits_out")],
     ])
 
@@ -904,7 +943,7 @@ def _persona_topup_pay_keyboard(credits: int) -> InlineKeyboardMarkup:
 def _persona_pay_confirm_keyboard(credits: int) -> InlineKeyboardMarkup:
     """Кнопка «Оплатить» перед переходом на платёжку."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Оплатить", callback_data=f"pl_persona_confirm_pay:{credits}", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("Оплатить", callback_data=f"pl_persona_confirm_pay:{credits}")],
         [InlineKeyboardButton("Назад", callback_data="pl_persona_back")],
     ])
 
@@ -991,7 +1030,7 @@ def _photoset_done_message(*, include_gift: bool) -> str:
 def _photoset_done_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
@@ -1143,7 +1182,7 @@ def _fast_tariff_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        *([[InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
+        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_fast_back")],
     ])
 
@@ -1152,7 +1191,7 @@ def _fast_tariff_persona_only_keyboard() -> InlineKeyboardMarkup:
     """Только кнопка Персона (первое сообщение при 0 кредитах)."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1304,7 +1343,7 @@ def _fast_style_choice_keyboard(
         back_data = "pl_fast_show_ready" if back_to_ready else "pl_fast_back"
     if include_tariffs:
         rows.append([
-            *([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))] if MINIAPP_URL else []),
+            *([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})] if MINIAPP_URL else []),
             InlineKeyboardButton("Назад", callback_data=back_data),
         ])
     else:
@@ -1403,7 +1442,7 @@ def _start_keyboard(profile: Any | None = None) -> InlineKeyboardMarkup:
     """Клавиатура экрана /start: Персона (Mini App), Быстрое фото, Тарифы, Примеры, FAQ."""
     rows: list[list[InlineKeyboardButton]] = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.extend([
         [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
         [InlineKeyboardButton("Тарифы и форматы съёмки", callback_data="pl_start_tariffs")],
@@ -1434,7 +1473,7 @@ def _profile_keyboard(profile: Any) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Изменить пол", callback_data="pl_profile_toggle_gender")],
     ]
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_profile_fast_tariffs")])
     return InlineKeyboardMarkup(rows)
 
@@ -1445,7 +1484,7 @@ def _fast_tariff_keyboard_from_profile() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⚡️ 5 за 199 руб", callback_data="pl_fast_buy:5")],
         [InlineKeyboardButton("⚡️ 10 за 299 руб", callback_data="pl_fast_buy:10")],
         [InlineKeyboardButton("⚡️ 30 за 699 руб", callback_data="pl_fast_buy:30")],
-        *([[InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))]] if MINIAPP_URL else []),
+        *([[InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})]] if MINIAPP_URL else []),
         [InlineKeyboardButton("Назад", callback_data="pl_profile")],
     ])
 
@@ -1483,7 +1522,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Dev-режим: только разрешённые юзеры
     if ALLOWED_USERS and user_id not in ALLOWED_USERS:
         return
-    _clear_persona_flow_state(context)
     profile = store.get_user(user_id)
     # Логируем событие старта для аналитики
     try:
@@ -1494,6 +1532,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Deep link: /start persona_batch — запуск батч-генерации из Mini App
     args = context.args
     if args and args[0] == "persona_batch":
+        _clear_persona_flow_state(context)
         pending_json = store.get_pending_persona_batch(user_id)
         if pending_json:
             store.clear_pending_persona_batch(user_id)
@@ -1510,6 +1549,42 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    # Если оплатил персону но модель не обучена — вернуть в флоу загрузки фото
+    # НЕ сбрасываем стейт, чтобы не потерять уже загруженные фото
+    if not getattr(profile, "astria_lora_tune_id", None):
+        has_credits = (getattr(profile, "persona_credits_remaining", 0) or 0) > 0
+        has_pending = store.get_pending_pack_upload(user_id) is not None
+        pending_training = getattr(profile, "astria_lora_tune_id_pending", None)
+        if has_credits or has_pending:
+            if pending_training:
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+                await update.message.reply_text(
+                    PERSONA_TRAINING_MESSAGE,
+                    reply_markup=_persona_training_keyboard(),
+                    parse_mode="HTML",
+                )
+            elif context.user_data.get(USERDATA_PERSONA_WAITING_UPLOAD):
+                # Уже в процессе загрузки фото — напомнить, не сбрасывая
+                photos_count = len(list(context.user_data.get(USERDATA_PERSONA_PHOTOS, [])))
+                pack_photos_count = len(list(context.user_data.get(USERDATA_PERSONA_PACK_PHOTOS, [])))
+                count = photos_count or pack_photos_count
+                if count > 0:
+                    await update.message.reply_text(
+                        f"Загружено {count}/10 фото. Продолжайте отправлять!",
+                        reply_markup=_persona_upload_keyboard(),
+                    )
+                else:
+                    await update.message.reply_text(PERSONA_UPLOAD_WAIT_MESSAGE, parse_mode="HTML")
+            else:
+                context.user_data[USERDATA_MODE] = "persona"
+                await update.message.reply_text(
+                    PERSONA_RULES_MESSAGE,
+                    reply_markup=_persona_rules_keyboard(),
+                    parse_mode="HTML",
+                )
+            return
+
+    _clear_persona_flow_state(context)
     await update.message.reply_text(
         _start_message_text(profile),
         reply_markup=_start_keyboard(profile),
@@ -1616,14 +1691,14 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 [InlineKeyboardButton("✨ 30 кредитов – 629 руб", callback_data="pl_persona_topup_buy:30")],
             ]
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         else:
             text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(remaining)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             kb = InlineKeyboardMarkup(kb_rows)
         await context.bot.send_message(
@@ -2009,7 +2084,7 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
         profile = store.get_user(user_id)
         empty_rows: list[list[InlineKeyboardButton]] = []
         if MINIAPP_URL:
-            empty_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            empty_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
         empty_rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
         empty_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         empty_kb = InlineKeyboardMarkup(empty_rows)
@@ -2081,6 +2156,7 @@ TARIFFS_MESSAGE = """<b>Тарифы PrismaLab</b>
 
 Создание Персоны (включает кредиты):
 
+• Персона + 5 кредитов – 299 ₽
 • Персона + 20 кредитов – 599 ₽
 • Персона + 40 кредитов – 999 ₽
 
@@ -2124,7 +2200,7 @@ async def handle_start_tariffs_callback(update: Update, context: ContextTypes.DE
     profile = store.get_user(user_id)
     rows = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
     rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
     kb = InlineKeyboardMarkup(rows)
@@ -2158,7 +2234,7 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
     )
     rows = []
     if MINIAPP_URL:
-        rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+        rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
     rows.append([InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
@@ -3699,7 +3775,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
         return
     await query.answer()
     _, count_str = query.data.split(":", 1)
-    credits = int(count_str) if count_str in ("20", "40") else 20
+    credits = int(count_str) if count_str in ("5", "20", "40") else 20
     context.user_data[USERDATA_PERSONA_CREDITS] = credits
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
@@ -3949,7 +4025,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
         text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4076,7 +4152,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
         text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
         kb_rows = []
         if MINIAPP_URL:
-            kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+            kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
         kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         await query.edit_message_text(
             text,
@@ -4178,8 +4254,8 @@ async def handle_persona_recreate_confirm_callback(update: Update, context: Cont
     context.user_data[USERDATA_SUBJECT_GENDER] = known_gender
     context.user_data[USERDATA_MODE] = "persona"
     await query.edit_message_text(
-        PERSONA_INTRO_MESSAGE,
-        reply_markup=_persona_app_keyboard(),
+        PERSONA_RECREATE_TARIFF_MESSAGE,
+        reply_markup=_persona_intro_keyboard(),
         parse_mode="HTML",
     )
 
@@ -4191,7 +4267,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
         return
     await query.answer()
     _, count_str = query.data.split(":", 1)
-    credits = int(count_str) if count_str in ("20", "40") else 20
+    credits = int(count_str) if count_str in ("5", "20", "40") else 20
     context.user_data[USERDATA_PERSONA_CREDITS] = credits
     user_id = int(query.from_user.id) if query.from_user else 0
     chat_id = query.message.chat_id if query.message else 0
@@ -4954,7 +5030,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             text = f"<b>Оплата получена</b> ✅\n\nВыберите образ в приложении <b>Персона</b> 👇\n\n{_format_balance_persona(new_total)}"
             kb_rows = []
             if MINIAPP_URL:
-                kb_rows.append([InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))])
+                kb_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
             kb_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
             await msg.reply_text(
                 text,
@@ -5561,7 +5637,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
+                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})],
                 [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -5791,7 +5867,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "Или перейдите в раздел <b>Экспресс-фото</b>"
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✨ Персона", web_app=WebAppInfo(url=MINIAPP_URL))],
+                [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})],
                 [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
@@ -5967,12 +6043,12 @@ async def handle_personal_toggle_callback(update: Update, context: ContextTypes.
 async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     query = update.callback_query
     if not query:
         logger.warning("handle_reset_callback вызван без query")
         return
-    
+
     try:
         await query.answer()
         user_id = update.effective_user.id
@@ -5991,14 +6067,14 @@ async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop(USERDATA_PROMPT_STRENGTH, None)
         context.user_data.pop(USERDATA_SUBJECT_GENDER, None)
         context.user_data.pop(USERDATA_USE_PERSONAL, None)
-        
+
         # Очищаем данные из базы (storage) - полная очистка
         try:
             store.clear_user_data(user_id=user_id)
             logger.info(f"Данные из storage очищены для user {user_id}")
         except Exception as e:
             logger.error(f"Ошибка при очистке storage для user {user_id}: {e}", exc_info=True)
-        
+
         # Сброс фото обычно означает “работаем по новым фото”, а не по старой персональной модели
         context.user_data[USERDATA_USE_PERSONAL] = False
         await query.edit_message_text("✅ Все фото и данные сброшены. Отправь новое фото.")
@@ -6047,10 +6123,10 @@ async def _start_astria_lora(
                 text=f"Нужно 10 фото. Сейчас {len(file_ids)}/10. Отправь ещё {10 - len(file_ids)} фото."
             )
             return
-        
+
         # Для persona-flow всегда обучаем как "person" (лучшее качество для стилей).
         name = "person"
-        
+
         # Скачиваем все 10 фото (с обработкой таймаутов)
         image_bytes_list = []
         if not from_persona:
@@ -6067,13 +6143,13 @@ async def _start_astria_lora(
                 logger.error(f"Ошибка при скачивании фото {idx}/10: {e}")
                 await context.bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
                 raise
-        
+
         if not from_persona:
             await context.bot.send_message(chat_id=chat_id, text="Создаю LoRA tune…\n\nЭто может занять 10–60 минут (иногда до 2 часов при загрузке). Я напишу, когда будет готово.")
-        
+
         logger.info(f"[LoRA] Начинаю создание LoRA tune через Astria API...")
         from prismalab.astria_client import create_lora_tune_and_wait
-        
+
         def _on_lora_created(tid: str) -> None:
             store.set_astria_lora_tune_pending(user_id=user_id, tune_id=tid)
             store.set_persona_lora_class_name(user_id=user_id, class_name=name)
@@ -6090,17 +6166,17 @@ async def _start_astria_lora(
             max_seconds=7200,  # До 2 часов на training (увеличено с 1 часа)
             poll_seconds=15.0,
         )
-        
+
         # Проверяем, что модель действительно создана как LoRA
         model_type = result.raw.get("model_type") or "unknown"
         if model_type.lower() != "lora":
             logger.error(f"⚠️ ВНИМАНИЕ: Astria создал tune {result.tune_id} как '{model_type}', а не как 'lora'!")
             await context.bot.send_message(chat_id=chat_id, text=USER_FRIENDLY_ERROR)
             return
-        
+
         store.set_astria_lora_tune(user_id=user_id, tune_id=result.tune_id, class_name=name)
         context.user_data.pop(USERDATA_ASTRIA_LORA_FILE_IDS, None)
-        
+
         if from_persona:
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
             gen_lock.release()
@@ -6216,899 +6292,239 @@ async def _run_style_job(
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
             return
 
-        primary_ref = refs[-1] if refs else None
-        profile_for_keyboard = store.get_user(user_id)
-        has_personal_model = bool(profile_for_keyboard and profile_for_keyboard.personal_model_version and profile_for_keyboard.personal_trigger_word)
-        personal_enabled = bool(has_personal_model and use_personal_requested)
-
         # Только Astria (Replicate удалён)
-        if True:
-            if not settings.astria_api_key:
-                err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else USER_FRIENDLY_ERROR
-                extra = {}
-                if is_persona_style and context:
-                    extra["reply_markup"] = _persona_app_keyboard()
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-                return
-            # Проверяем, есть ли у пользователя FaceID или LoRA tune
-            user_profile = store.get_user(user_id)
-            astria_tune_id = user_profile.astria_tune_id if user_profile else None
-            astria_lora_tune_id = user_profile.astria_lora_tune_id if user_profile else None
-            
-            # Определяем, какой tune использовать (приоритет LoRA, если есть)
-            use_lora = astria_lora_tune_id is not None
-            active_tune_id = astria_lora_tune_id if use_lora else astria_tune_id
-            logger.info(f"[ASTRIA Generate] astria_lora_tune_id={astria_lora_tune_id}, astria_tune_id={astria_tune_id}, use_lora={use_lora}, active_tune_id={active_tune_id}")
-            logger.info(f"[ASTRIA Generate] base_model будет Flux1.dev (1504944) для LoRA" if use_lora else f"[ASTRIA Generate] base_model будет Realistic Vision (690204) для FaceID")
-            
-            if not active_tune_id:
-                err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else (
-                    "❌ Для генерации нужно сначала создать FaceID или LoRA tune.\n\n"
-                    "• 📸 FaceID (1 фото) - быстро, для одной сцены\n"
-                    "• 🎯 LoRA (10 фото) - качественно, для множества сцен"
-                )
-                extra = {}
-                if is_persona_style and context:
-                    extra["reply_markup"] = _persona_app_keyboard()
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-                return
-            # Определяем тип генерации: FaceID или LoRA
-            subj = _instantid_subject(subject_gender)
-            
-            if use_lora:
-                # LoRA генерация: используем <lora:{tune_id}:strength> в промпте
-                # Inference на базовой модели Flux1.dev (1504944)
-                lora_weight = 1.1  # Вес LoRA для сходства (1.0–1.2)
-                
-                # Промпт для Astria LoRA (lora_prompt_override — для Персоны)
-                # Токен должен совпадать с name при обучении: person (бот) или woman/man (пак)
-                stored_class = getattr(user_profile, "persona_lora_class_name", None) if user_profile else None
-                lora_class = stored_class or "person"
-                ohwx_token = f"ohwx {lora_class}"
-                if lora_prompt_override:
-                    english_prompt = lora_prompt_override
-                else:
-                    english_prompt = """IDENTICAL FACE AND FEATURES from reference photo, same skin tone, ultra high detail face. A professional waist-up portrait of airline pilot in cockpit, wearing crisp uniform with epaulettes and tie. Soft diffused light from cockpit windows creates even illumination on his face. He sits in captain's seat with hands on controls or arms relaxed, looking at camera with confident composed expression. Instrument panels and aviation equipment softly blurred in background. Natural skin texture, sharp eyes, commercial aviation professional photography style"""
-                text = (
-                    f"<lora:{active_tune_id}:{lora_weight}> "
-                    f"{ohwx_token}, {english_prompt}"
-                ).strip()
-                neg = "blurry, low quality, deformed face, bad anatomy, cartoon, cgi, plastic skin, overly smooth skin"
-                
-                # Для LoRA используем базовую модель Flux1.dev (1504944) - та же, на которой создавалась LoRA
-                base_model_tune_id = "1504944"  # Flux1.dev из галереи
-                logger.info(f"[ASTRIA LoRA] Использую базовую модель Flux1.dev (1504944) для inference с LoRA tune_id={active_tune_id}")
-            else:
-                # FaceID генерация: используем <faceid:{tune_id}:strength> в промпте
-                # Inference на базовой модели Realistic Vision V5.1 (690204)
-                # Единый промпт для тестирования (про сад)
-                faceid_weight = 1.0  # Preset "MAX FACE": дефолт 1.0 для упора в лицо
-                
-                # Промпт на английском, FaceID тег в начале (как в галерее Astria)
-                # Промпт про смеющуюся девушку для Astria FaceID с акцентом на реалистичность
-                english_prompt = (
-                    "ultra realistic photograph, not illustration, not painting, not digital art, real photo, "
-                    "same reference female character, candid laugh, head turned left, eyes squinting, looking away from camera, "
-                    "tropical greenery background, golden hour, realistic photo, 35mm, shallow depth of field, "
-                    "identity preserved, natural expression change, no face morphing, no distortion, correct anatomy, "
-                    "no extra fingers, no text, natural skin pores, authentic photography, documentary style, candid photo, "
-                    "professional photography, photorealistic, high detail, no CGI, no 3D render, no digital painting, no illustration style"
-                )
-                
-                text = (
-                    f"<faceid:{active_tune_id}:{faceid_weight}> "
-                    f"{english_prompt}"
-                ).strip()
-                
-                # Негативный промпт по рекомендациям Astria
-                neg = (
-                    "blurry, low quality, deformed face, bad anatomy, cartoon, cgi, plastic skin, overly smooth skin"
-                )
-                
-                # Для FaceID используем базовую модель Realistic Vision V5.1 (690204)
-                base_model_tune_id = settings.astria_tune_id  # 690204 - Realistic Vision V5.1 из галереи
-
-            # Логируем промпт для отладки
-            tune_type = "LoRA" if use_lora else "FaceID"
-            logger.info(f"Astria {tune_type} промпт для стиля {style.id} (полный, длина {len(text)}): {text}")
-            if use_lora:
-                logger.info(f"Astria промпт - количество тегов LoRA: {text.count('<lora:')}")
-            else:
-                logger.info(f"Astria промпт - количество тегов FaceID: {text.count('<faceid:')}")
-            
-            title = style_title_override or style.title
-            if not is_persona_style:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_message_id,
-                    text="Создаю фотографию, обычно это занимает около 10 секунд.",
-                )
-            # text-to-image: input_image_bytes=None, denoising_strength не нужен
-            # Добавляем параметры для улучшения качества сцен
-            # НЕ используем style="Photographic" - он может конфликтовать со стилями пользователя
-            # Для винтажных стилей используем color_grading и film_grain
-            import secrets
-            random_seed = secrets.randbelow(2**32)  # 0 to 2^32-1 для разнообразия
-            
-            # Для винтажных стилей используем цветокоррекцию, для остальных - нет
-            use_color_grading = None
-            use_film_grain = False
-            if style_id in {"vintage_film", "noir", "nyc_70s"}:
-                use_color_grading = "Film Portra"
-                use_film_grain = True
-            
-            # Параметры для генерации
-            if use_lora:
-                # Для LoRA (Flux): по документации Flux не поддерживает negative_prompt и weighted prompts
-                # Параметры настроены для максимальной реалистичности (меньше "рисованности")
-                use_cfg_scale = 3.0  # Ещё уменьшено для более естественного результата
-                use_steps = 40  # Увеличено для более детального и реалистичного результата
-                
-                # Для LoRA: только super_resolution, face_correct/face_swap/inpaint_faces выключены
-                use_face_correct = False
-                use_face_swap = False
-                use_inpaint_faces = False
-                use_seed = random_seed  # Поддерживается для Flux1.dev
-                logger.info(f"[ASTRIA] LoRA на Flux1.dev: face_correct=false, face_swap=false, inpaint_faces=false, hires_fix=true, seed={use_seed}")
-                super_resolution = True  # Для лучшего качества
-                # Для Flux negative_prompt не поддерживается
-                neg = None  # Flux не поддерживает negative_prompt
-            else:
-                # Preset "MAX FACE" для FaceID (упор на качество лица)
-                # Обязательные: cfg_scale=3, face_correct=true, face_swap=true
-                # Улучшают лицо: super_resolution=true
-                # inpaint_faces НЕ поддерживается для FaceID (только для LoRA)
-                use_seed = random_seed  # Для FaceID seed поддерживается
-                if use_test_prompt:
-                    # Preset "MAX FACE" для тестового промпта
-                    use_cfg_scale = 3.0
-                    use_steps = 40  # 35-45 для реализма лица
-                else:
-                    # Preset "MAX FACE" для FaceID: cfg_scale=3 (обязательно)
-                    use_cfg_scale = 3.0
-                    # Steps 35-45 для реализма лица (по рекомендациям)
-                    use_steps = min(settings.astria_steps, 45) if settings.astria_steps else 40
-                    if use_steps < 35:
-                        use_steps = 35  # Минимум 35 для качества лица
-                
-                # Preset "MAX FACE": обязательные параметры
-                use_face_correct = True  # Обязательно для FaceID
-                use_face_swap = True  # Обязательно для FaceID
-                # super_resolution=true почти всегда улучшает лицо
-                super_resolution = True
-                # inpaint_faces НЕ поддерживается для FaceID (Astria возвращает 422)
-                # Для full-body/long-shot можно использовать только LoRA с inpaint_faces
-                use_inpaint_faces = None
-                logger.info(f"[ASTRIA] FaceID MAX FACE: cfg_scale={use_cfg_scale}, steps={use_steps}, inpaint_faces={use_inpaint_faces} (None - не поддерживается)")
-            # КРИТИЧНО: По документации Astria:
-            # - FaceID inference на базовой модели Realistic Vision V5.1 (690204)
-            # - LoRA inference на базовой модели Flux1.dev (1504944) - та же, на которой создавалась LoRA
-            # Tune ID (FaceID/LoRA) используется только в промпте как <faceid:...> или <lora:...>
-            logger.info(f"[ASTRIA] Отправка запроса: use_lora={use_lora}, inpaint_faces={use_inpaint_faces}, tune_type={tune_type}")
-            astria_res = await astria_run_prompt_and_wait(
-                api_key=settings.astria_api_key,
-                tune_id=base_model_tune_id,  # Базовая модель из галереи, НЕ FaceID/LoRA tune!
-                text=text,
-                negative_prompt=neg,  # None для LoRA (Flux не поддерживает)
-                input_image_bytes=None,  # text-to-image, не img2img
-                cfg_scale=use_cfg_scale,
-                steps=use_steps,
-                denoising_strength=None,  # не используется для text-to-image
-                super_resolution=super_resolution,
-                hires_fix=True if use_lora else None,  # LoRA: пробуем True; FaceID: не поддерживается
-                face_correct=use_face_correct if use_lora else use_face_correct,
-                face_swap=use_face_swap if use_lora else use_face_swap,
-                inpaint_faces=use_inpaint_faces,  # True для LoRA, None для FaceID (не поддерживается)
-                style=None,  # не используем встроенный style
-                color_grading=use_color_grading,
-                film_grain=use_film_grain,
-                seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
-                aspect_ratio="3:4",
-                max_seconds=settings.astria_max_seconds,
-                poll_seconds=6.0,
-            )
-            if not is_persona_style:
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
-            out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
-            out_bytes = _postprocess_output(style_id, out_bytes)
-
-            bio = io.BytesIO(out_bytes)
-            bio.name = f"{settings.app_name}_{style.id}.png"
-            if not is_persona_style:
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
-            tune_type_label = "LoRA" if use_lora else "FaceID"
-            
-            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
-            await _safe_send_document(
-                bot=bot,
-                chat_id=chat_id,
-                document=bio,
-                caption=persona_caption,
-            )
-            # Логируем успешную генерацию для аналитики
-            try:
-                store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria"})
-            except Exception:
-                pass
-
+        if not settings.astria_api_key:
+            err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else USER_FRIENDLY_ERROR
+            extra = {}
             if is_persona_style and context:
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
-                except Exception:
-                    pass
-                credits = store.decrement_persona_credits(user_id)
-                if not skip_post_message:
-                    if credits <= 0:
-                        profile = store.get_user(user_id)
-                        text, reply_markup = _persona_credits_out_content(profile)
-                    else:
-                        text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(credits)}"
-                        reply_markup = _persona_app_keyboard()
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=text,
-                        reply_markup=reply_markup,
-                        parse_mode="HTML",
-                    )
-            else:
-                profile = store.get_user(user_id)
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_message_id,
-                    text="Готово. Хочешь другой стиль?",
-                    reply_markup=_start_keyboard(profile),
-                )
+                extra["reply_markup"] = _persona_app_keyboard()
+            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
             return
+        # Проверяем, есть ли у пользователя FaceID или LoRA tune
+        user_profile = store.get_user(user_id)
+        astria_tune_id = user_profile.astria_tune_id if user_profile else None
+        astria_lora_tune_id = user_profile.astria_lora_tune_id if user_profile else None
 
-        # НОВЫЙ ПАЙПЛАЙН: “сцена → face swap → upscale”
-        # Идея: сцену рисуем “как кино”, а лицо возвращаем face-swap'ом, чтобы не получался “другой человек”.
-        if provider == "replicate" and scene_swap:
+        # Определяем, какой tune использовать (приоритет LoRA, если есть)
+        use_lora = astria_lora_tune_id is not None
+        active_tune_id = astria_lora_tune_id if use_lora else astria_tune_id
+        logger.info(f"[ASTRIA Generate] astria_lora_tune_id={astria_lora_tune_id}, astria_tune_id={astria_tune_id}, use_lora={use_lora}, active_tune_id={active_tune_id}")
+        logger.info(f"[ASTRIA Generate] base_model будет Flux1.dev (1504944) для LoRA" if use_lora else f"[ASTRIA Generate] base_model будет Realistic Vision (690204) для FaceID")
+
+        if not active_tune_id:
+            err_msg = PERSONA_ERROR_MESSAGE if is_persona_style else (
+                "❌ Для генерации нужно сначала создать FaceID или LoRA tune.\n\n"
+                "• 📸 FaceID (1 фото) - быстро, для одной сцены\n"
+                "• 🎯 LoRA (10 фото) - качественно, для множества сцен"
+            )
+            extra = {}
+            if is_persona_style and context:
+                extra["reply_markup"] = _persona_app_keyboard()
+            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
+            return
+        if use_lora:
+            # LoRA генерация: используем <lora:{tune_id}:strength> в промпте
+            # Inference на базовой модели Flux1.dev (1504944)
+            lora_weight = 1.1  # Вес LoRA для сходства (1.0–1.2)
+
+            # Промпт для Astria LoRA (lora_prompt_override — для Персоны)
+            # Токен должен совпадать с name при обучении: person (бот) или woman/man (пак)
+            stored_class = getattr(user_profile, "persona_lora_class_name", None) if user_profile else None
+            lora_class = stored_class or "person"
+            ohwx_token = f"ohwx {lora_class}"
+            if lora_prompt_override:
+                english_prompt = lora_prompt_override
+            else:
+                english_prompt = """IDENTICAL FACE AND FEATURES from reference photo, same skin tone, ultra high detail face. A professional waist-up portrait of airline pilot in cockpit, wearing crisp uniform with epaulettes and tie. Soft diffused light from cockpit windows creates even illumination on his face. He sits in captain's seat with hands on controls or arms relaxed, looking at camera with confident composed expression. Instrument panels and aviation equipment softly blurred in background. Natural skin texture, sharp eyes, commercial aviation professional photography style"""
+            text = (
+                f"<lora:{active_tune_id}:{lora_weight}> "
+                f"{ohwx_token}, {english_prompt}"
+            ).strip()
+            neg = "blurry, low quality, deformed face, bad anatomy, cartoon, cgi, plastic skin, overly smooth skin"
+
+            # Для LoRA используем базовую модель Flux1.dev (1504944) - та же, на которой создавалась LoRA
+            base_model_tune_id = "1504944"  # Flux1.dev из галереи
+            logger.info(f"[ASTRIA LoRA] Использую базовую модель Flux1.dev (1504944) для inference с LoRA tune_id={active_tune_id}")
+        else:
+            # FaceID генерация: используем <faceid:{tune_id}:strength> в промпте
+            # Inference на базовой модели Realistic Vision V5.1 (690204)
+            # Единый промпт для тестирования (про сад)
+            faceid_weight = 1.0  # Preset "MAX FACE": дефолт 1.0 для упора в лицо
+
+            # Промпт на английском, FaceID тег в начале (как в галерее Astria)
+            # Промпт про смеющуюся девушку для Astria FaceID с акцентом на реалистичность
+            english_prompt = (
+                "ultra realistic photograph, not illustration, not painting, not digital art, real photo, "
+                "same reference female character, candid laugh, head turned left, eyes squinting, looking away from camera, "
+                "tropical greenery background, golden hour, realistic photo, 35mm, shallow depth of field, "
+                "identity preserved, natural expression change, no face morphing, no distortion, correct anatomy, "
+                "no extra fingers, no text, natural skin pores, authentic photography, documentary style, candid photo, "
+                "professional photography, photorealistic, high detail, no CGI, no 3D render, no digital painting, no illustration style"
+            )
+
+            text = (
+                f"<faceid:{active_tune_id}:{faceid_weight}> "
+                f"{english_prompt}"
+            ).strip()
+
+            # Негативный промпт по рекомендациям Astria
+            neg = (
+                "blurry, low quality, deformed face, bad anatomy, cartoon, cgi, plastic skin, overly smooth skin"
+            )
+
+            # Для FaceID используем базовую модель Realistic Vision V5.1 (690204)
+            base_model_tune_id = settings.astria_tune_id  # 690204 - Realistic Vision V5.1 из галереи
+
+        # Логируем промпт для отладки
+        tune_type = "LoRA" if use_lora else "FaceID"
+        logger.info(f"Astria {tune_type} промпт для стиля {style.id} (полный, длина {len(text)}): {text}")
+        if use_lora:
+            logger.info(f"Astria промпт - количество тегов LoRA: {text.count('<lora:')}")
+        else:
+            logger.info(f"Astria промпт - количество тегов FaceID: {text.count('<faceid:')}")
+
+        if not is_persona_style:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
-                text=f"Генерирую сцену (реализм) для «{style.title}»…",
+                text="Создаю фотографию, обычно это занимает около 10 секунд.",
             )
+        # text-to-image: input_image_bytes=None, denoising_strength не нужен
+        # Добавляем параметры для улучшения качества сцен
+        # НЕ используем style="Photographic" - он может конфликтовать со стилями пользователя
+        # Для винтажных стилей используем color_grading и film_grain
+        import secrets
+        random_seed = secrets.randbelow(2**32)  # 0 to 2^32-1 для разнообразия
 
-            subj = _instantid_subject(subject_gender)
-            scene_prompt = f"{subj}, {style.prompt}".replace("portrait", "").replace("  ", " ").strip(" ,")
-            if style_id == "noir":
-                scene_prompt = f"{scene_prompt}, black and white, monochrome, grayscale, no color"
+        # Для винтажных стилей используем цветокоррекцию, для остальных - нет
+        use_color_grading = None
+        use_film_grain = False
+        if style_id in {"vintage_film", "noir", "nyc_70s"}:
+            use_color_grading = "Film Portra"
+            use_film_grain = True
 
-            # База для позы/кадра: используем входное фото, но с высокой силой перерисовки, чтобы фон реально поменялся.
-            base_bytes = _prepare_image_for_photomaker(primary_ref)
-            img = Image.open(io.BytesIO(base_bytes))
-            out_w, out_h = img.size
-            data_uri = build_data_uri(base_bytes, filename="input.png")
+        # Параметры для генерации
+        if use_lora:
+            # Для LoRA (Flux): по документации Flux не поддерживает negative_prompt и weighted prompts
+            # Параметры настроены для максимальной реалистичности (меньше "рисованности")
+            use_cfg_scale = 3.0  # Ещё уменьшено для более естественного результата
+            use_steps = 40  # Увеличено для более детального и реалистичного результата
 
-            ps_scene = max(0.75, min(0.95, float(prompt_strength)))
-
-            flux_input: dict[str, Any] = {}
-            flux_input["image"] = data_uri
-            # Для теста добавляем больше деталей сцены, для обычных стилей - стандартные детали
+            # Для LoRA: только super_resolution, face_correct/face_swap/inpaint_faces выключены
+            use_face_correct = False
+            use_face_swap = False
+            use_inpaint_faces = False
+            use_seed = random_seed  # Поддерживается для Flux1.dev
+            logger.info(f"[ASTRIA] LoRA на Flux1.dev: face_correct=false, face_swap=false, inpaint_faces=false, hires_fix=true, seed={use_seed}")
+            super_resolution = True  # Для лучшего качества
+            # Для Flux negative_prompt не поддерживается
+            neg = None  # Flux не поддерживает negative_prompt
+        else:
+            # Preset "MAX FACE" для FaceID (упор на качество лица)
+            # Обязательные: cfg_scale=3, face_correct=true, face_swap=true
+            # Улучшают лицо: super_resolution=true
+            # inpaint_faces НЕ поддерживается для FaceID (только для LoRA)
+            use_seed = random_seed  # Для FaceID seed поддерживается
             if use_test_prompt:
-                flux_input["prompt"] = f"{scene_prompt}, professional photography, high quality, detailed scene, sharp focus, cinematic lighting, photorealistic, natural lighting, atmospheric depth, rich details"
+                # Preset "MAX FACE" для тестового промпта
+                use_cfg_scale = 3.0
+                use_steps = 40  # 35-45 для реализма лица
             else:
-                flux_input["prompt"] = f"{scene_prompt}, photorealistic, cinematic lighting, high detail"
-            flux_input["prompt_strength"] = ps_scene
-            flux_input.setdefault("num_inference_steps", settings.flux_num_inference_steps)
-            flux_input.setdefault("guidance", settings.flux_guidance)
-            flux_input.setdefault("num_outputs", 1)
-            flux_input.setdefault("output_format", "png")
-            flux_input.setdefault("aspect_ratio", _guess_aspect_ratio(out_w, out_h))
+                # Preset "MAX FACE" для FaceID: cfg_scale=3 (обязательно)
+                use_cfg_scale = 3.0
+                # Steps 35-45 для реализма лица (по рекомендациям)
+                use_steps = min(settings.astria_steps, 45) if settings.astria_steps else 40
+                if use_steps < 35:
+                    use_steps = 35  # Минимум 35 для качества лица
 
-            # 1) Пытаемся Flux (обычно сцены выглядят лучше), но он может быть отключён на Replicate.
-            # Для теста сразу используем SDXL, так как Flux часто отключён
-            use_sdxl_directly = use_test_prompt  # Для теста сразу SDXL
-            scene_res = None
-            
-            if not use_sdxl_directly:
-                try:
-                    scene_res = await run_prediction_and_wait(
-                        api_token=settings.replicate_api_token,
-                        model_version=settings.replicate_flux_model_version,
-                        model_input=flux_input,
-                        max_seconds=settings.replicate_max_seconds,
-                        poll_seconds=2.0,
-                    )
-                except ReplicateError as e:
-                    s = str(e).lower()
-                    error_msg = str(e)
-                    # Проверяем разные варианты ошибки "version disabled"
-                    if ("version disabled" in s or 
-                        '"title":"version disabled"' in s or
-                        "disabled" in s or
-                        "недоступен" in s.lower() or
-                        "отключён" in s.lower()):
-                        logger.warning(f"Flux отключён, переключаюсь на SDXL: {error_msg}")
-                        use_sdxl_directly = True
-                    else:
-                        raise
-            
-            # Если Flux не сработал или для теста - используем SDXL
-            if use_sdxl_directly or scene_res is None:
-                if not use_sdxl_directly:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_message_id,
-                        text="Flux на Replicate сейчас отключён. Пробую запасной генератор сцены (SDXL)…",
-                    )
-                prepared_bytes, sw, sh = _prepare_image_for_sdxl(primary_ref)
-                sdxl_uri = build_data_uri(prepared_bytes, filename="input.png")
-                sdxl_input = dict(settings.replicate_base_input)
-                sdxl_input[settings.replicate_image_key] = sdxl_uri
-                # Для теста добавляем больше деталей сцены, для обычных стилей - стандартные детали
-                if use_test_prompt:
-                    sdxl_input[settings.replicate_prompt_key] = f"{scene_prompt}, professional photography, high quality, detailed scene, sharp focus, cinematic lighting, photorealistic, natural lighting, atmospheric depth, rich details"
-                else:
-                    sdxl_input[settings.replicate_prompt_key] = f"{scene_prompt}, photorealistic, cinematic lighting, high detail"
-                neg = (style.negative_prompt or "").strip()
-                extra_neg = "lowres, blurry, jpeg artifacts, text, watermark, logo, bad anatomy, deformed"
-                combined_neg = f"{neg}, {extra_neg}" if neg else extra_neg
-                sdxl_input[settings.replicate_negative_prompt_key] = combined_neg
-                sdxl_input.setdefault("width", sw)
-                sdxl_input.setdefault("height", sh)
-                sdxl_input.setdefault("num_outputs", 1)
-                sdxl_input.setdefault("guidance_scale", 7.5)
-                sdxl_input.setdefault("num_inference_steps", 50)
-                sdxl_input.setdefault("apply_watermark", False)
-                sdxl_input["prompt_strength"] = ps_scene
-                scene_res = await run_prediction_and_wait(
-                    api_token=settings.replicate_api_token,
-                    model_version=settings.replicate_sdxl_model_version,
-                    model_input=sdxl_input,
-                    max_seconds=settings.replicate_max_seconds,
-                    poll_seconds=2.0,
-                )
-            if scene_res.status != "succeeded":
-                msg = f"Не получилось сгенерировать сцену (status={scene_res.status})."
-                if scene_res.error:
-                    msg += f"\nОшибка: {scene_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            scene_url = _first_output_url(scene_res.output)
-            if not scene_url:
-                scene_bytes = await download_output_image_bytes(scene_res.output)
-                scene_url = build_data_uri(scene_bytes, filename="scene.png")
-
-            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Фиксирую лицо (face swap)…")
-            source_uri = build_data_uri(base_bytes, filename="source.png")
-            swap_res = await run_prediction_and_wait(
-                api_token=settings.replicate_api_token,
-                model_version=settings.faceswap_model_version,
-                model_input={
-                    "input_image": scene_url,
-                    "source_image": source_uri,
-                    "inputface_index": 0,
-                    "sourceface_index": 0,
-                },
-                max_seconds=settings.replicate_max_seconds,
-                poll_seconds=2.0,
-            )
-            if swap_res.status != "succeeded":
-                msg = f"Не получилось зафиксировать лицо (status={swap_res.status})."
-                if swap_res.error:
-                    msg += f"\nОшибка: {swap_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            swap_url = _first_output_url(swap_res.output)
-            if not swap_url:
-                swap_bytes = await download_output_image_bytes(swap_res.output)
-                swap_url = build_data_uri(swap_bytes, filename="swap.png")
-
-            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Улучшаю качество (upscale)…")
-            up_res = await run_prediction_and_wait(
-                api_token=settings.replicate_api_token,
-                model_version=settings.upscale_model_version,
-                model_input={
-                    "image": swap_url,
-                    "scale": float(settings.upscale_scale),
-                    "face_enhance": bool(settings.upscale_face_enhance),
-                },
-                max_seconds=settings.replicate_max_seconds,
-                poll_seconds=2.0,
-            )
-            if up_res.status != "succeeded":
-                msg = f"Не получилось улучшить качество (status={up_res.status})."
-                if up_res.error:
-                    msg += f"\nОшибка: {up_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
+            # Preset "MAX FACE": обязательные параметры
+            use_face_correct = True  # Обязательно для FaceID
+            use_face_swap = True  # Обязательно для FaceID
+            # super_resolution=true почти всегда улучшает лицо
+            super_resolution = True
+            # inpaint_faces НЕ поддерживается для FaceID (Astria возвращает 422)
+            # Для full-body/long-shot можно использовать только LoRA с inpaint_faces
+            use_inpaint_faces = None
+            logger.info(f"[ASTRIA] FaceID MAX FACE: cfg_scale={use_cfg_scale}, steps={use_steps}, inpaint_faces={use_inpaint_faces} (None - не поддерживается)")
+        # КРИТИЧНО: По документации Astria:
+        # - FaceID inference на базовой модели Realistic Vision V5.1 (690204)
+        # - LoRA inference на базовой модели Flux1.dev (1504944) - та же, на которой создавалась LoRA
+        # Tune ID (FaceID/LoRA) используется только в промпте как <faceid:...> или <lora:...>
+        logger.info(f"[ASTRIA] Отправка запроса: use_lora={use_lora}, inpaint_faces={use_inpaint_faces}, tune_type={tune_type}")
+        astria_res = await astria_run_prompt_and_wait(
+            api_key=settings.astria_api_key,
+            tune_id=base_model_tune_id,  # Базовая модель из галереи, НЕ FaceID/LoRA tune!
+            text=text,
+            negative_prompt=neg,  # None для LoRA (Flux не поддерживает)
+            input_image_bytes=None,  # text-to-image, не img2img
+            cfg_scale=use_cfg_scale,
+            steps=use_steps,
+            denoising_strength=None,  # не используется для text-to-image
+            super_resolution=super_resolution,
+            hires_fix=True if use_lora else None,  # LoRA: пробуем True; FaceID: не поддерживается
+            face_correct=use_face_correct if use_lora else use_face_correct,
+            face_swap=use_face_swap if use_lora else use_face_swap,
+            inpaint_faces=use_inpaint_faces,  # True для LoRA, None для FaceID (не поддерживается)
+            style=None,  # не используем встроенный style
+            color_grading=use_color_grading,
+            film_grain=use_film_grain,
+            seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
+            aspect_ratio="3:4",
+            max_seconds=settings.astria_max_seconds,
+            poll_seconds=6.0,
+        )
+        if not is_persona_style:
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
-            out_bytes = await download_output_image_bytes(up_res.output)
-            out_bytes = _postprocess_output(style_id, out_bytes)
-            bio = io.BytesIO(out_bytes)
-            bio.name = f"{settings.app_name}_{style.id}.png"
-            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
-            await _safe_send_document(
-                bot=bot,
-                chat_id=chat_id,
-                document=bio,
-                caption=f"Готово (сцена + лицо): «{style.title}»",
-            )
-            profile = store.get_user(user_id)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Готово. Хочешь другой стиль на это же фото?",
-                reply_markup=_start_keyboard(profile),
-            )
-            return
-
-        # Если у пользователя есть персональная модель (после режима "10 фото") — используем её (если включено).
-        # Можно отключить, выставив PRISMALAB_DISABLE_PERSONAL=true.
-        # ДЛЯ ТЕСТА: принудительно отключаем персональную модель, используем InstantID
-        profile = store.get_user(user_id)
-        disable_personal = (os.getenv("PRISMALAB_DISABLE_PERSONAL") or "").strip().lower() in {"1", "true", "yes", "y"}
-        use_personal = (
-            (not disable_personal)
-            and (not use_test_prompt)  # ДЛЯ ТЕСТА: отключаем персональную модель
-            and use_personal_requested
-            and bool(profile.personal_model_version)
-            and bool(profile.personal_trigger_word)
-        )
-        # ДЛЯ ТЕСТА: принудительно используем InstantID с правильной версией модели
-        if use_test_prompt:
-            engine = "instantid"
-            model_version_to_use = settings.replicate_instantid_model_version  # Используем именно InstantID версию
-            logger.info(f"ТЕСТ: принудительно используем engine=instantid, model_version={model_version_to_use}")
-        else:
-            model_version_to_use = settings.replicate_model_version
-            engine = getattr(settings, "engine", "instantid")
-            if use_personal:
-                engine = "personal"
-                model_version_to_use = str(profile.personal_model_version)
-            logger.info(f"Обычный режим: engine={engine}, model_version={model_version_to_use}, use_personal={use_personal}")
-
-        gender_prefix = _subject_prompt_prefix(subject_gender)
-        gender_neg = _subject_negative_lock(subject_gender)
-        if engine == "personal":
-            # Персональная модель после LoRA training (текст-в-изображение)
-            trigger = str(profile.personal_trigger_word)
-            prompt = f"{gender_prefix}, {trigger}, {style.prompt}, high quality"
-            if style_id == "noir":
-                prompt = f"{prompt}, black and white, monochrome, grayscale, no color"
-
-            # аспект берём из первого рефа (если есть)
-            base_bytes = _prepare_image_for_photomaker(primary_ref)
-            img = Image.open(io.BytesIO(base_bytes))
-            out_w, out_h = img.size
-
-            model_input = dict(settings.replicate_base_input)
-            model_input["prompt"] = prompt
-            model_input.setdefault("num_outputs", 1)
-            model_input.setdefault("output_format", "png")
-            model_input.setdefault("aspect_ratio", _guess_aspect_ratio(out_w, out_h))
-            # типичные параметры для flux dev LoRA моделей
-            model_input.setdefault("num_inference_steps", 28)
-            model_input.setdefault("guidance_scale", 7.5)
-            model_input.setdefault("lora_scale", 1.0)
-
-        elif engine == "sdxl":
-            prepared_bytes, out_w, out_h = _prepare_image_for_sdxl(primary_ref)
-            data_uri = build_data_uri(prepared_bytes, filename="input.png")
-            model_input = dict(settings.replicate_base_input)
-            model_input[settings.replicate_image_key] = data_uri
-            model_input[settings.replicate_prompt_key] = f"{gender_prefix}, {style.prompt}, high quality"
-            neg = style.negative_prompt.strip()
-            extra_neg = "lowres, blurry, jpeg artifacts, text, watermark, logo, bad anatomy, deformed"
-            combined_neg = f"{neg}, {extra_neg}" if neg else extra_neg
-            if gender_neg:
-                combined_neg = f"{combined_neg}, {gender_neg}"
-            model_input[settings.replicate_negative_prompt_key] = combined_neg
-
-            # Дефолты SDXL (не перетираем, если заданы через PRISMALAB_REPLICATE_BASE_INPUT_JSON)
-            model_input.setdefault("width", out_w)
-            model_input.setdefault("height", out_h)
-            model_input.setdefault("num_outputs", 1)
-            model_input.setdefault("guidance_scale", 7.5)
-            model_input.setdefault("num_inference_steps", 50)
-            model_input.setdefault("apply_watermark", False)
-
-            # Важно для img2img: удерживает сходство с исходным фото.
-            model_input["prompt_strength"] = float(prompt_strength)
-        elif engine == "flux":
-            # Flux dev: img2img, без negative_prompt
-            base_bytes = _prepare_image_for_photomaker(primary_ref)
-            img = Image.open(io.BytesIO(base_bytes))
-            out_w, out_h = img.size
-            data_uri = build_data_uri(base_bytes, filename="input.png")
-
-            model_input = dict(settings.replicate_base_input)
-            model_input["image"] = data_uri
-            # Для Flux лучше короткие “человеческие” промпты
-            model_input["prompt"] = f"{gender_prefix}, {style.prompt}"
-            model_input["prompt_strength"] = float(prompt_strength)
-            model_input.setdefault("num_inference_steps", settings.flux_num_inference_steps)
-            model_input.setdefault("guidance", settings.flux_guidance)
-            model_input.setdefault("num_outputs", 1)
-            model_input.setdefault("output_format", "png")
-            model_input.setdefault("aspect_ratio", _guess_aspect_ratio(out_w, out_h))
-        elif engine == "flux_ultra":
-            # Flux 1.1 Pro Ultra: другие поля (image_prompt вместо image)
-            base_bytes = _prepare_image_for_photomaker(primary_ref)
-            img = Image.open(io.BytesIO(base_bytes))
-            out_w, out_h = img.size
-            image_prompt = build_data_uri(base_bytes, filename="input.png")
-
-            prompt = f"{gender_prefix}, {style.prompt}"
-            if style_id == "noir":
-                prompt = f"{prompt}, black and white, monochrome, grayscale, no color"
-
-            # Маппим наш prompt_strength (0..1) в image_prompt_strength (0..1):
-            # меньше prompt_strength => больше “похожести” => сильнее влияние reference фото
-            image_prompt_strength = max(0.1, min(1.0, 1.0 - float(prompt_strength)))
-
-            model_input = dict(settings.replicate_base_input)
-            model_input["prompt"] = prompt
-            model_input["image_prompt"] = image_prompt
-            model_input["image_prompt_strength"] = image_prompt_strength
-            model_input["raw"] = bool(settings.flux_ultra_raw)
-            model_input["safety_tolerance"] = int(settings.flux_ultra_safety_tolerance)
-            model_input["output_format"] = "png"
-            model_input["aspect_ratio"] = _guess_aspect_ratio(out_w, out_h)
-        elif engine == "flux_ultra_swap":
-            # Pipeline: Flux Ultra -> FaceSwap -> Upscale
-            base_bytes = _prepare_image_for_photomaker(primary_ref)
-            img = Image.open(io.BytesIO(base_bytes))
-            out_w, out_h = img.size
-            image_prompt = build_data_uri(base_bytes, filename="input.png")
-
-            prompt = f"{gender_prefix}, {style.prompt}"
-            if style_id == "noir":
-                prompt = f"{prompt}, black and white, monochrome, grayscale, no color"
-
-            image_prompt_strength = max(0.1, min(1.0, 1.0 - float(prompt_strength)))
-
-            # 1) Generate scene via Flux Ultra
-            flux_input = dict(settings.replicate_base_input)
-            flux_input["prompt"] = prompt
-            flux_input["image_prompt"] = image_prompt
-            flux_input["image_prompt_strength"] = image_prompt_strength
-            flux_input["raw"] = bool(settings.flux_ultra_raw)
-            flux_input["safety_tolerance"] = int(settings.flux_ultra_safety_tolerance)
-            flux_input["output_format"] = "png"
-            flux_input["aspect_ratio"] = _guess_aspect_ratio(out_w, out_h)
-
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text=f"Генерирую сцену (FLUX Ultra) для «{style.title}»…",
-            )
-            flux_res = await run_prediction_and_wait(
-                api_token=settings.replicate_api_token,
-                model_version=settings.replicate_model_version,  # flux-ultra version
-                model_input=flux_input,
-                max_seconds=settings.replicate_max_seconds,
-                poll_seconds=2.0,
-            )
-            if flux_res.status != "succeeded":
-                msg = f"Не получилось сгенерировать сцену (status={flux_res.status})."
-                if flux_res.error:
-                    msg += f"\nОшибка: {flux_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            flux_out_url = flux_res.output
-            if not isinstance(flux_out_url, str) or not flux_out_url:
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="FLUX Ultra вернул неожиданный output.")
-                return
-
-            # 2) Face swap
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Фиксирую лицо (face swap)…",
-            )
-            source_uri = build_data_uri(base_bytes, filename="source.png")
-            swap_res = await run_prediction_and_wait(
-                api_token=settings.replicate_api_token,
-                model_version=settings.faceswap_model_version,
-                model_input={
-                    "input_image": flux_out_url,
-                    "source_image": source_uri,
-                    "inputface_index": 0,
-                    "sourceface_index": 0,
-                },
-                max_seconds=settings.replicate_max_seconds,
-                poll_seconds=2.0,
-            )
-            if swap_res.status != "succeeded":
-                msg = f"Не получилось зафиксировать лицо (status={swap_res.status})."
-                if swap_res.error:
-                    msg += f"\nОшибка: {swap_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            swap_out_url = swap_res.output
-            if not isinstance(swap_out_url, str) or not swap_out_url:
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Face swap вернул неожиданный output.")
-                return
-
-            # 3) Upscale
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Улучшаю качество (upscale)…",
-            )
-            up_res = await run_prediction_and_wait(
-                api_token=settings.replicate_api_token,
-                model_version=settings.upscale_model_version,
-                model_input={
-                    "image": swap_out_url,
-                    "scale": float(settings.upscale_scale),
-                    "face_enhance": bool(settings.upscale_face_enhance),
-                },
-                max_seconds=settings.replicate_max_seconds,
-                poll_seconds=2.0,
-            )
-            if up_res.status != "succeeded":
-                msg = f"Не получилось улучшить качество (status={up_res.status})."
-                if up_res.error:
-                    msg += f"\nОшибка: {up_res.error}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            # переопределяем result/output на финал пайплайна
-            result_output_for_send = up_res.output
-            if not isinstance(result_output_for_send, str) or not result_output_for_send:
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Upscale вернул неожиданный output.")
-                return
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Скачиваю результат…",
-            )
-            out_bytes = await download_output_image_bytes(result_output_for_send)
-            out_bytes = _postprocess_output(style_id, out_bytes)
-            bio = io.BytesIO(out_bytes)
-            bio.name = f"{settings.app_name}_{style.id}.png"
-
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Отправляю в Telegram…",
-            )
-            await _safe_send_document(
-                bot=bot,
-                chat_id=chat_id,
-                document=bio,
-                caption=f"Готово (face swap + upscale): «{style.title}»",
-            )
-            profile = store.get_user(user_id)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text="Готово. Хочешь другой вариант? (будет другая сцена, но лицо сохраню)",
-                reply_markup=_start_keyboard(profile),
-            )
-            return
-        elif engine == "instantid":
-            # InstantID: identity-preserving
-            subj = _instantid_subject(subject_gender)
-            # style.prompt у нас часто содержит слово “portrait”, которое иногда ухудшает сцену.
-            style_prompt = (style.prompt or "").replace("portrait", "").replace("  ", " ").strip(" ,")
-            prompt = f"{subj}, {style_prompt}, photorealistic, detailed, high quality"
-            if style_id == "noir":
-                prompt = f"{prompt}, black and white, monochrome, grayscale, no color"
-
-            # Маппим “похожесть/стиль” (prompt_strength) в силу identity: чем меньше prompt_strength, тем сильнее identity.
-            identity_boost = max(0.0, min(1.0, 1.0 - float(prompt_strength)))
-            # Держим скейлы в разумных пределах, чтобы стиль не “умирал”.
-            ip_scale = max(0.35, min(0.8, float(settings.instantid_ip_adapter_scale) + identity_boost * 0.3))
-            cn_scale = max(0.45, min(0.9, float(settings.instantid_controlnet_conditioning_scale) + identity_boost * 0.3))
-
-            # Авто-повтор: если “лицо не найдено”, пробуем ещё раз с небольшим приближением.
-            face_zooms = [1.0, 1.35, 1.6]
-            last_face_err: str | None = None
-            for idx, z in enumerate(face_zooms):
-                base_bytes, out_w, out_h = _prepare_image_for_instantid_zoom(primary_ref, zoom=z)
-                data_uri = build_data_uri(base_bytes, filename="input.png")
-                model_input = dict(settings.replicate_base_input)
-                # InstantID требует input_image, а не image
-                model_input["input_image"] = data_uri
-                # Также пробуем image на случай, если модель использует его
-                if "image" not in model_input:
-                    model_input["image"] = data_uri
-                model_input["prompt"] = prompt
-                style_neg = (style.negative_prompt or "").strip()
-                base_neg = (
-                    "blurry, lowres, jpeg artifacts, low quality, out of focus, text, watermark, logo, "
-                    "distorted features, asymmetric face, duplicate faces, multiple people, ugly, disfigured, "
-                    "bad anatomy, deformed face"
-                )
-                model_input["negative_prompt"] = f"{style_neg}, {base_neg}" if style_neg else base_neg
-                model_input["ip_adapter_scale"] = ip_scale
-                model_input["controlnet_conditioning_scale"] = cn_scale
-                # guidance/steps теперь по дефолтам ниже/выше соответственно (см. settings.py), но env может переопределить
-                model_input["guidance_scale"] = settings.instantid_guidance_scale
-                model_input["num_inference_steps"] = settings.instantid_num_inference_steps
-                model_input["width"] = out_w
-                model_input["height"] = out_h
-
-                if idx == 0:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_message_id,
-                        text=f"Генерирую в стиле «{style.title}». Обычно это занимает до пары минут…",
-                    )
-                else:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_message_id,
-                        text="Плохо вижу лицо — пробую автоматически приблизить…",
-                    )
-
-                res = await run_prediction_and_wait(
-                    api_token=settings.replicate_api_token,
-                    model_version=model_version_to_use,
-                    model_input=model_input,
-                    max_seconds=settings.replicate_max_seconds,
-                    poll_seconds=2.0,
-                )
-
-                if res.status == "succeeded":
-                    # Для paid-продукта качество критично: сразу улучшаем резкость/детали апскейлом.
-                    out_for_send = res.output
-                    out_url = _first_output_url(out_for_send)
-                    if out_url:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=status_message_id,
-                            text="Улучшаю качество (upscale)…",
-                        )
-                        up_res = await run_prediction_and_wait(
-                            api_token=settings.replicate_api_token,
-                            model_version=settings.upscale_model_version,
-                            model_input={
-                                "image": out_url,
-                                "scale": float(settings.upscale_scale),
-                                "face_enhance": bool(settings.upscale_face_enhance),
-                            },
-                            max_seconds=settings.replicate_max_seconds,
-                            poll_seconds=2.0,
-                        )
-                        if up_res.status == "succeeded":
-                            out_for_send = up_res.output
-
-                    await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
-                    out_bytes = await download_output_image_bytes(out_for_send)
-                    out_bytes = _postprocess_output(style_id, out_bytes)
-                    bio = io.BytesIO(out_bytes)
-                    bio.name = f"{settings.app_name}_{style.id}.png"
-                    await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
-                    await _safe_send_document(
-                        bot=bot,
-                        chat_id=chat_id,
-                        document=bio,
-                        caption=f"Готово (без сжатия): «{style.title}»",
-                    )
-                    profile = store.get_user(user_id)
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_message_id,
-                        text="Готово. Хочешь другой стиль на это же фото?",
-                        reply_markup=_start_keyboard(profile),
-                    )
-                    return
-
-                err_text = str(res.error or "").strip()
-                if "face detector could not find a face" in err_text.lower():
-                    last_face_err = err_text
-                    continue
-                if "nsfw content detected" in err_text.lower():
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_message_id,
-                        text=(
-                            "Фильтр безопасности Replicate решил, что запрос слишком 18+.\n\n"
-                            "Что делать:\n"
-                            "- попробуй стиль «Ресторан (safe)»\n"
-                            "- убери слова типа mini/off-shoulder/lingerie и акцент на теле\n"
-                            "- оставь “classy, fully clothed, non-sexual”\n"
-                        ),
-                    )
-                    return
-
-                msg = f"Не получилось обработать изображение (status={res.status})."
-                if err_text:
-                    msg += f"\nОшибка: {err_text}"
-                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=msg)
-                return
-
-            # Всё ещё не нашли лицо
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message_id,
-                text=(
-                    "Я всё ещё не смог найти лицо на фото.\n\n"
-                    "Попробуй другое селфи: лицо крупнее и по центру, без сильной тени."
-                    + (f"\n\n(Тех. причина: {last_face_err})" if last_face_err else "")
-                ),
-            )
-            return
-        else:
-            # PhotoMaker: identity-preserving для людей
-            data_uris = [build_data_uri(_prepare_image_for_photomaker(b), filename="input.png") for b in refs]
-            model_input = dict(settings.replicate_base_input)
-            model_input["input_image"] = data_uris[0]
-            if len(data_uris) > 1:
-                model_input["input_image2"] = data_uris[1]
-            if len(data_uris) > 2:
-                model_input["input_image3"] = data_uris[2]
-            if len(data_uris) > 3:
-                model_input["input_image4"] = data_uris[3]
-            # Обязательный триггер "img" в промпте
-            if subject_gender == "male":
-                model_input["prompt"] = f"A photo of a man img, {style.prompt}"
-            elif subject_gender == "female":
-                model_input["prompt"] = f"A photo of a woman img, {style.prompt}"
-            else:
-                model_input["prompt"] = f"A photo of a person img, {style.prompt}"
-            model_input["negative_prompt"] = (
-                "nsfw, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, "
-                "cropped, worst quality, low quality, jpeg artifacts, signature, watermark, username, blurry"
-            )
-            model_input["num_steps"] = settings.photomaker_num_steps
-            model_input["guidance_scale"] = settings.photomaker_guidance_scale
-            model_input["style_strength_ratio"] = settings.photomaker_style_strength_ratio
-            model_input["num_outputs"] = 1
-
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_message_id,
-            text=f"Генерирую в стиле «{style.title}». Обычно это занимает до пары минут…",
-        )
-
-        result = await run_prediction_and_wait(
-            api_token=settings.replicate_api_token,
-            model_version=model_version_to_use,
-            model_input=model_input,
-            max_seconds=settings.replicate_max_seconds,
-            poll_seconds=2.0,
-        )
-
-        if result.status != "succeeded":
-            msg = f"Не получилось обработать изображение (status={result.status})."
-            err_text = str(result.error or "").strip()
-            if err_text:
-                # Частая причина для InstantID: не нашлось лицо
-                if "face detector could not find a face" in err_text.lower():
-                    msg = (
-                        "Я не смог найти лицо на фото.\n\n"
-                        "Пришли другое фото, где:\n"
-                        "- лицо видно крупно (селфи/портрет)\n"
-                        "- одно лицо в кадре\n"
-                        "- нормальный свет, без сильной тени\n"
-                        "- без маски/закрытого лица (очки/капюшон могут мешать)"
-                    )
-                else:
-                    msg += f"\nОшибка: {err_text}"
-            await _safe_edit_status(bot, chat_id, status_message_id, text=msg)
-            return
-
-        await _safe_edit_status(bot, chat_id, status_message_id, text="Скачиваю результат…")
-        out_bytes = await download_output_image_bytes(result.output)
+        out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
         out_bytes = _postprocess_output(style_id, out_bytes)
+
         bio = io.BytesIO(out_bytes)
         bio.name = f"{settings.app_name}_{style.id}.png"
+        if not is_persona_style:
+            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
+        tune_type_label = "LoRA" if use_lora else "FaceID"
 
-        # Отправляем как документ, чтобы Telegram не "пережал" качество.
-        await _safe_edit_status(bot, chat_id, status_message_id, text="Отправляю в Telegram…")
+        persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
         await _safe_send_document(
             bot=bot,
             chat_id=chat_id,
             document=bio,
-            caption=f"Готово (без сжатия): «{style.title}»",
+            caption=persona_caption,
         )
-        profile = store.get_user(user_id)
-        await _safe_edit_status(
-            bot, chat_id, status_message_id,
-            text="Готово. Хочешь другой стиль на это же фото?",
-            reply_markup=_start_keyboard(profile),
-        )
+        # Логируем успешную генерацию для аналитики
+        try:
+            store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria"})
+        except Exception:
+            pass
+
+        if is_persona_style and context:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
+            except Exception:
+                pass
+            credits = store.decrement_persona_credits(user_id)
+            if not skip_post_message:
+                if credits <= 0:
+                    profile = store.get_user(user_id)
+                    text, reply_markup = _persona_credits_out_content(profile)
+                else:
+                    text = f"<b>Готово!</b>\n\nМожете вернуться в приложение ✨<b>Персона</b> и попробовать новые стили\n\n{_format_balance_persona(credits)}"
+                    reply_markup = _persona_app_keyboard()
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+        else:
+            profile = store.get_user(user_id)
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_message_id,
+                text="Готово. Хочешь другой стиль?",
+                reply_markup=_start_keyboard(profile),
+            )
+        return
 
     except AstriaError as e:
         logger.warning("Astria error: %s", e)
@@ -7149,7 +6565,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
     if not query:
         return
     await query.answer()
-    
+
     # Парсим модель из callback_data: "pl_kie_test:model_name" или "pl_kie_test:model_name:param" или "pl_kie_test" (дефолт)
     data = query.data or ""
     upscale_factor_from_button = None
@@ -7161,7 +6577,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
             upscale_factor_from_button = parts[2]
     else:
         model_name = "nano-banana-pro"  # Дефолт
-    
+
     # Названия моделей и их лейблы
     model_labels = {
         "google/imagen4-ultra": "🚀 Imagen4 Ultra",
@@ -7183,43 +6599,43 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
     }
     # Для отображения используем короткое имя
     model_label = model_labels.get(model_name, model_name)
-    
+
     settings = load_settings()
     if not settings.kie_api_key:
         await query.edit_message_text(
             USER_FRIENDLY_ERROR,
         )
         return
-    
+
     # Для Nano Banana проверяем оба источника фото (обычные и multi)
     # Всегда используем обычные фото (USERDATA_PHOTO_FILE_IDS)
     photo_file_ids = list(context.user_data.get(USERDATA_PHOTO_FILE_IDS, []))
-    
+
     if not photo_file_ids:
         await query.edit_message_text("Сначала отправь фото, потом нажимай кнопку.")
         return
-    
+
     user_id = int(query.from_user.id) if query.from_user else 0
     gen_lock = await _acquire_user_generation_lock(user_id)
     if gen_lock is None:
         await query.edit_message_text("Пожалуйста, немного подождите. Ещё обрабатываю прошлый запрос")
         return
-    
+
     status_msg = await query.message.reply_text(f"{model_label} Запускаю генерацию…")
-    
+
     async def runner():
         try:
             bot = context.bot
             chat_id = query.message.chat_id
             status_message_id = status_msg.message_id
-            
+
             # Скачиваем фото пользователя
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
                 text="📥 Скачиваю твоё фото…",
             )
-            
+
             # Берём последнее (самое свежее) фото из списка
             photo_file_id = photo_file_ids[-1] if photo_file_ids else None
             if not photo_file_id:
@@ -7230,14 +6646,14 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 )
                 return
             photo_bytes = await _safe_get_file_bytes(bot, photo_file_id)
-            
+
             # Загружаем фото в KIE для получения публичного URL
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
                 text="📤 Загружаю фото…",
             )
-            
+
             import secrets
             random_id = secrets.token_hex(8)
             uploaded_url = await asyncio.to_thread(
@@ -7248,9 +6664,9 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 upload_path="user-uploads",
                 timeout_s=60.0,
             )
-            
+
             logger.info(f"KIE: фото загружено, URL: {uploaded_url}")
-            
+
             # Промпт для Character, Seedream и Nano Banana
             if "ideogram/character" in model_name.lower() or "seedream/4.5-text-to-image" in model_name.lower() or "nano-banana-pro" in model_name.lower():
                 test_prompt = (
@@ -7274,7 +6690,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 "plastic skin, doll face, over-smooth skin, "
                 "cartoon, anime, illustration, text, watermark, logo"
             )
-            
+
             # Для обратной совместимости оставляем старую логику, но она не используется
             if False:  # Отключено - используем единый промпт выше
                 # Промпт для остальных моделей - используем NYC для обеих моделей
@@ -7303,17 +6719,17 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                         "plastic skin, doll face, over-smooth skin, "
                         "cartoon, anime, illustration, text, watermark, logo"
                     )
-            
+
             logger.info(f"KIE: используем промпт для {model_name} (длина {len(test_prompt)}): {test_prompt[:100]}...")
-            
+
             # Инициализируем переменные для всех моделей
             use_upscale_factor = None
-            
+
             # Для upscale моделей определяем коэффициент ДО использования
             if "upscale" in model_name.lower() or "topaz" in model_name.lower() or "recraft" in model_name.lower():
                 if "topaz" in model_name.lower():
                     use_upscale_factor = upscale_factor_from_button if upscale_factor_from_button else "2"
-            
+
             # Показываем промпт пользователю
             prompt_preview = test_prompt[:100] + "..." if len(test_prompt) > 100 else test_prompt
             # Определяем режим работы модели
@@ -7337,7 +6753,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 message_id=status_message_id,
                 text=status_text,
             )
-            
+
             # Параметры для разных моделей
             # Используем локальную переменную для модели, которая может быть изменена
             use_model_name = model_name
@@ -7406,20 +6822,20 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 use_aspect_ratio = "1:1"
                 # Для всех моделей используем одно фото
                 use_image_input = [uploaded_url]
-            
+
             # Для upscale моделей промпт не нужен (они только увеличивают разрешение)
             # Передаём None вместо пустой строки, чтобы промпт не добавлялся в input_data
             is_upscale = "upscale" in model_name.lower() or "topaz" in model_name.lower() or "recraft" in model_name.lower()
             use_prompt = test_prompt if not is_upscale else None
             use_negative_prompt = negative_prompt if not is_upscale else None
-            
+
             # Для Topaz upscale_factor обязателен - убеждаемся что он установлен
             if "topaz" in use_model_name.lower() and not use_upscale_factor:
                 use_upscale_factor = "2"  # Дефолт для Topaz
                 logger.warning(f"KIE: use_upscale_factor был None для Topaz, установил дефолт 2x")
-            
+
             logger.info(f"KIE: финальные параметры для {use_model_name}: upscale_factor={use_upscale_factor}, prompt={'есть' if use_prompt else 'нет'}, image_input={'есть' if use_image_input else 'нет'}")
-            
+
             # Запускаем задачу через KIE API с reference image (если поддерживается)
             kie_result = await kie_run_task_and_wait(
                 api_key=settings.kie_api_key,
@@ -7435,7 +6851,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 max_seconds=settings.kie_max_seconds,
                 poll_seconds=3.0,
             )
-            
+
             if not kie_result.image_url:
                 await bot.edit_message_text(
                     chat_id=chat_id,
@@ -7443,33 +6859,33 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                     text="❌ Генератор вернул задачу без изображения. Попробуй ещё раз.",
                 )
                 return
-            
+
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
                 text="Скачиваю результат…",
             )
-            
+
             # Скачиваем изображение
             image_bytes = await asyncio.to_thread(
                 kie_download_image_bytes,
                 kie_result.image_url,
                 timeout_s=30.0,
             )
-            
+
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_message_id,
                 text="Отправляю в Telegram…",
             )
-            
+
             # Отправляем результат
             import io
             bio = io.BytesIO(image_bytes)
             # Очищаем имя модели для имени файла
             safe_model_name = model_name.replace("/", "_").replace(":", "_")
             bio.name = f"{settings.app_name}_kie_{safe_model_name}.png"
-            
+
             # Определяем режим для caption
             if "upscale" in model_name.lower() or "topaz" in model_name.lower() or "recraft" in model_name.lower():
                 mode_text = "upscale"
@@ -7490,13 +6906,13 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 store.log_event(user_id, "generation", {"mode": mode_text, "model": model_name, "provider": "kie"})
             except Exception:
                 pass
-            
+
             await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
-            
+
         except KieError as e:
             error_msg = str(e)
             logger.error(f"KIE ошибка: {error_msg}")
-            
+
             # Специальная обработка NSFW ошибки
             if "nsfw" in error_msg.lower():
                 user_msg = (
@@ -7510,7 +6926,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
                 )
             else:
                 user_msg = USER_FRIENDLY_ERROR
-            
+
             await bot.edit_message_text(
                 chat_id=query.message.chat_id,
                 message_id=status_msg.message_id,
@@ -7525,7 +6941,7 @@ async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT
             )
         finally:
             gen_lock.release()
-    
+
     context.application.create_task(runner())
 
 
@@ -7535,15 +6951,15 @@ async def handle_astria_generate_callback(update: Update, context: ContextTypes.
     if not query:
         return
     await query.answer()
-    
+
     # Используем тот же обработчик, что и для стилей, но с фиксированным style_id="test"
     # Это запустит генерацию через Astria с единым промптом
     context.user_data["pl_last_style_id"] = "test"
-    
+
     # Для Astria генерации фото не обязательно - используется LoRA/FaceID из базы
     # Но если есть фото - используем их, если нет - работаем только с LoRA/FaceID
     photo_file_ids = list(context.user_data.get(USERDATA_PHOTO_FILE_IDS, []))
-    
+
     # Если нет фото, но есть LoRA/FaceID - всё равно можно генерировать
     # Проверяем наличие LoRA/FaceID в базе
     user_id = int(query.from_user.id) if query.from_user else 0
@@ -7558,22 +6974,22 @@ async def handle_astria_generate_callback(update: Update, context: ContextTypes.
                 "• Либо создать LoRA (10 фото) или FaceID (1 фото)"
             )
             return
-    
+
     settings = load_settings()
     ps = _get_prompt_strength(settings, context)
     uid = int(query.from_user.id) if query.from_user else 0
     gender = context.user_data.get(USERDATA_SUBJECT_GENDER)
     use_personal_requested = _is_personal_enabled(context)
-    
+
     # Промпт про смеющуюся девушку
     test_prompt = (
         "same reference female character, candid laugh, head turned left, eyes squinting, looking away from camera, "
         "tropical greenery background, golden hour, realistic photo, 35mm, shallow depth of field. "
         "identity preserved, natural expression change, no face morphing, no distortion, correct anatomy, no extra fingers, no text"
     )
-    
+
     status_msg = await query.message.reply_text("Запускаю генерацию…")
-    
+
     await _run_style_job(
         bot=context.bot,
         chat_id=query.message.chat_id,
@@ -7600,7 +7016,7 @@ async def handle_style_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not data.startswith("pl_style:"):
         return
     style_id = data.split(":", 1)[1]
-    
+
     # Сохраняем последний выбранный стиль для использования в KIE
     context.user_data["pl_last_style_id"] = style_id
 
@@ -7646,7 +7062,7 @@ async def handle_style_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         context.application.create_task(runner())
         return
-    
+
     # Для остальных стилей - через Astria
     # KIE запускается отдельной кнопкой и использует сохранённый стиль
     gen_lock = await _acquire_user_generation_lock(uid)
@@ -7850,7 +7266,6 @@ def main() -> None:
         default_commands = [
             BotCommand("menu", "🏠 Главное меню"),
             BotCommand("profile", "👤 Профиль"),
-            BotCommand("newpersona", "✨ Создать новую Персону"),
             BotCommand("help", "❓ Помощь"),
         ]
         await app.bot.set_my_commands(default_commands, scope=BotCommandScopeDefault())

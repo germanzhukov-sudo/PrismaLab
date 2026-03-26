@@ -8,9 +8,9 @@ import logging
 import os
 from datetime import datetime
 from html import escape
+from pathlib import Path
 
 from dotenv import load_dotenv
-from pathlib import Path
 
 _load_env = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_load_env)

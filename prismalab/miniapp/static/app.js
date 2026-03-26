@@ -81,6 +81,10 @@ async function authenticate() {
             const mainCreditsWord = document.getElementById('main-persona-credits-word');
             if (mainCreditsWord) mainCreditsWord.textContent = pluralCredits(state.personaCredits);
 
+            // Бейдж скидки — только если нет персоны
+            const discountBadge = document.getElementById('main-card-discount-badge');
+            if (discountBadge) discountBadge.style.display = state.hasPersona ? 'none' : '';
+
             // Проверяем возврат из ЮKassa после оплаты пака
             const params = new URLSearchParams(window.location.search);
             if (params.get('pack_paid')) {

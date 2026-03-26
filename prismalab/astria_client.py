@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
-import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -336,12 +336,12 @@ async def run_prompt_and_wait(
 
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     deadline = time.monotonic() + int(max_seconds)
     last = created
     poll_count = 0
     logger.info(f"Astria prompt {prompt_id} создан, начинаю опрос статуса (таймаут: {max_seconds}с)")
-    
+
     while True:
         elapsed = time.monotonic() - (deadline - int(max_seconds))
         if time.monotonic() > deadline:
@@ -351,7 +351,7 @@ async def run_prompt_and_wait(
         poll_count += 1
         if poll_count % 5 == 0:  # Логируем каждые 5 попыток
             logger.info(f"Astria prompt {prompt_id} - опрос #{poll_count}, прошло {elapsed:.0f}с, статус: {last.get('status')}")
-        
+
         # Таймаут для GET при polling: не меньше 45с, иначе при PRISMALAB_ASTRIA_HTTP_TIMEOUT_SECONDS=10 опрос обрывается до появления images
         polling_timeout = max(45.0, _timeout_s(60.0))
         try:
@@ -364,24 +364,24 @@ async def run_prompt_and_wait(
                 last = await asyncio.to_thread(_get_prompt, api_key=api_key, tune_id=tune_id, prompt_id=prompt_id, timeout_s=polling_timeout)
             except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e2:
                 raise AstriaError(f"Astria API не отвечает (таймаут при polling): {e2}") from e2
-        
+
         # Проверяем статус и ошибки
         status = str(last.get("status") or "").lower()
         error_msg = last.get("error") or last.get("user_error") or last.get("message")
-        
+
         # Если есть ошибка - сразу падаем
         if error_msg:
             logger.error(f"Astria prompt {prompt_id} - ошибка: {error_msg}")
             raise AstriaError(f"Astria вернул ошибку: {error_msg}")
-        
+
         # Проверяем статусы ошибок
         if status in {"failed", "error", "cancelled"}:
             error_text = error_msg or str(last)
             logger.error(f"Astria prompt {prompt_id} - статус ошибки: {status}, детали: {error_text}")
             raise AstriaError(f"Astria prompt завершился с ошибкой (status={status}): {error_text}")
-        
+
         images = _extract_image_urls(last)
-        
+
         # Логируем полный ответ каждые 10 попыток для отладки
         if poll_count % 10 == 0:
             logger.info(f"Astria prompt {prompt_id} - полный ответ API (ключи: {list(last.keys())}): {last}")
@@ -446,7 +446,7 @@ def _create_faceid_tune(
     if not api_key:
         raise AstriaError("PRISMALAB_ASTRIA_API_KEY не задан")
     url = "https://api.astria.ai/tunes"
-    
+
     # Определяем тип изображения по первым байтам
     import imghdr
     image_type = "png"  # по умолчанию
@@ -458,13 +458,13 @@ def _create_faceid_tune(
             image_type = "jpeg"
         elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
             image_type = "png"
-    
+
     # Используем стандартный способ requests для multipart/form-data
     # Это автоматически правильно формирует boundary и кодировку
     files = {
         "tune[images][]": (f"face.{image_type}", image_bytes, f"image/{image_type}")
     }
-    
+
     data = {
         "tune[name]": str(name),
         "tune[title]": str(title),
@@ -474,7 +474,7 @@ def _create_faceid_tune(
     }
     if base_tune_id:
         data["tune[base_tune_id]"] = str(base_tune_id)
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
     }
@@ -563,19 +563,19 @@ async def create_faceid_tune_and_wait(
     )
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     tune_id = str(created.get("id") or "")
     if not tune_id:
         raise AstriaError(f"Неожиданный ответ Astria при создании tune (нет id): {created}")
-    
+
     # Проверяем разные возможные поля статуса
     status = str(created.get("status") or created.get("state") or "").lower()
     trained_at = created.get("trained_at")
     eta = created.get("eta")
-    
+
     logger.info(f"Astria FaceID tune {tune_id} создан, статус: '{status}', trained_at: {trained_at}, eta: {eta}")
     logger.info(f"Полный ответ API при создании: {json.dumps(created, indent=2)}")
-    
+
     # Для FaceID: по документации Astria, FaceID готов сразу (instant)
     # Проверяем все возможные признаки готовности
     if status in {"completed", "succeeded", "ready", "created", "trained", "finished", "pending"}:
@@ -588,33 +588,33 @@ async def create_faceid_tune_and_wait(
         if status in {"completed", "succeeded", "ready", "trained", "finished"}:
             logger.info(f"Astria FaceID tune {tune_id} готов сразу по статусу: {status}")
             return AstriaTuneResult(tune_id=tune_id, status=status, raw=created)
-    
+
     # Если не готов сразу, опрашиваем статус
     deadline = time.monotonic() + int(max_seconds)
     last = created
     poll_count = 0
     logger.info(f"Astria FaceID tune {tune_id} не готов сразу, начинаю опрос (таймаут: {max_seconds}с)")
-    
+
     while True:
         if time.monotonic() > deadline:
             logger.error(f"Astria FaceID tune {tune_id} - таймаут после {max_seconds}с, последний статус: {status}")
             raise AstriaError(f"Таймаут ожидания готовности Astria FaceID tune {tune_id} (последний статус: {status})")
-        
+
         await asyncio.sleep(poll_seconds)
         poll_count += 1
-        
+
         try:
             last = await asyncio.to_thread(_get_tune, api_key=api_key, tune_id=tune_id, timeout_s=timeout_s)
             status = str(last.get("status") or last.get("state") or "").lower()
             trained_at = last.get("trained_at")
-            
+
             if poll_count % 5 == 0 or status in {"completed", "succeeded", "ready", "trained", "failed", "error"}:
                 logger.info(f"Astria FaceID tune {tune_id} - опрос #{poll_count}, статус: '{status}', trained_at: {trained_at}")
-            
+
             if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
                 logger.info(f"Astria FaceID tune {tune_id} готов! Статус: {status}, trained_at: {trained_at}")
                 return AstriaTuneResult(tune_id=tune_id, status=status or "trained", raw=last)
-            
+
             if status in {"failed", "error", "cancelled"}:
                 error_msg = last.get("error") or last.get("user_error") or str(last)
                 logger.error(f"Astria FaceID tune {tune_id} завершился с ошибкой: {error_msg}")
@@ -649,9 +649,9 @@ def _create_lora_tune(
         raise AstriaError("base_tune_id обязателен для LoRA (1504944 для Flux1.dev)")
     if not image_bytes_list and not image_urls:
         raise AstriaError("Нужны train-изображения: image_bytes_list или image_urls")
-    
+
     url = "https://api.astria.ai/tunes"
-    
+
     # Подготавливаем файлы для multipart/form-data
     files = []
     for idx, image_bytes in enumerate(image_bytes_list or []):
@@ -666,7 +666,7 @@ def _create_lora_tune(
             elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
                 image_type = "png"
         files.append(("tune[images][]", (f"image_{idx}.{image_type}", image_bytes, f"image/{image_type}")))
-    
+
     data = {
         "tune[name]": str(name),  # man, woman, boy, girl
         "tune[title]": str(title),
@@ -677,11 +677,11 @@ def _create_lora_tune(
     # Токен нужен для Flux1.dev (1504944) - дефолтный "ohwx"
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     # Явно удаляем token, если он был добавлен ранее
     if "tune[token]" in data:
         del data["tune[token]"]
-    
+
     # Добавляем token для Flux1.dev (обязательно для LoRA)
     data["tune[token]"] = "ohwx"  # Дефолтный токен для Flux1.dev
     logger.info(f"[LoRA] Передаю token='ohwx' для base_tune_id={base_tune_id}")
@@ -690,9 +690,9 @@ def _create_lora_tune(
     if image_urls:
         for idx, image_url in enumerate(image_urls):
             data[f"tune[image_urls][{idx}]"] = str(image_url)
-    
+
     headers = {"Authorization": f"Bearer {api_key}"}
-    
+
     # Логируем, что именно отправляем (без файлов)
     data_for_log = {k: v for k, v in data.items()}
     logger.info(f"[LoRA] Отправляю запрос на создание LoRA: base_tune_id={base_tune_id}, model_type={data.get('tune[model_type]')}, data keys={list(data_for_log.keys())}, token в data: {'tune[token]' in data_for_log}")
@@ -770,7 +770,7 @@ async def create_lora_tune_and_wait(
     )
     import logging
     logger = logging.getLogger("prismalab")
-    
+
     tune_id = str(created.get("id") or "")
     if not tune_id:
         raise AstriaError(f"Неожиданный ответ Astria при создании LoRA tune (нет id): {created}")
@@ -785,48 +785,48 @@ async def create_lora_tune_and_wait(
     # Логируем model_type из ответа для диагностики
     model_type = created.get("model_type") or created.get("type") or "unknown"
     logger.info(f"Astria tune {tune_id} создан, model_type в ответе: '{model_type}'")
-    
+
     status = str(created.get("status") or created.get("state") or "").lower()
     trained_at = created.get("trained_at")
     eta = created.get("eta")
-    
+
     logger.info(f"Astria LoRA tune {tune_id} создан, статус: '{status}', trained_at: {trained_at}, eta: {eta}")
-    
+
     # Если уже готов
     if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
         logger.info(f"Astria LoRA tune {tune_id} готов сразу")
         return AstriaTuneResult(tune_id=tune_id, status=status or "trained", raw=created)
-    
+
     # Polling для LoRA training
     deadline = time.monotonic() + int(max_seconds)
     last = created
     poll_count = 0
     logger.info(f"Astria LoRA tune {tune_id} - начинаю опрос статуса training (таймаут: {max_seconds}с)")
-    
+
     while True:
         if time.monotonic() > deadline:
             logger.error(f"Astria LoRA tune {tune_id} - таймаут после {max_seconds}с, последний статус: {last.get('status')}")
             raise AstriaError(f"Таймаут ожидания готовности Astria LoRA tune {tune_id}")
-        
+
         await asyncio.sleep(poll_seconds)
         poll_count += 1
-        
+
         last = await asyncio.to_thread(_get_tune, api_key=api_key, tune_id=tune_id, timeout_s=timeout_s)
         status = str(last.get("status") or last.get("state") or "").lower()
         trained_at = last.get("trained_at")
-        
+
         if poll_count % 4 == 0:  # Логируем каждые 4 попытки
             elapsed = time.monotonic() - (deadline - int(max_seconds))
             logger.info(f"Astria LoRA tune {tune_id} - опрос #{poll_count}, прошло {elapsed:.0f}с, статус: {status}")
-        
+
         if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
             logger.info(f"Astria LoRA tune {tune_id} готов! Найдено trained_at: {trained_at}")
             return AstriaTuneResult(tune_id=tune_id, status=status or "trained", raw=last)
-        
+
         if status in {"failed", "error", "cancelled"}:
             error_msg = last.get("error") or last.get("user_error") or "Unknown error"
             raise AstriaError(f"Astria LoRA tune {tune_id} завершился с ошибкой: {error_msg}")
-    
+
     # unreachable, но для mypy
     raise AstriaError("Unexpected end of polling loop")
 

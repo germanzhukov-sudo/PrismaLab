@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import hashlib
+import hmac
 import io
 import json
 import logging
@@ -95,8 +95,10 @@ TELEGRAM_PROVIDER_TOKEN = (os.getenv("TELEGRAM_PROVIDER_TOKEN") or "").strip()
 # Алерты
 from prismalab.alerts import (
     alert_pack_error,
-    alert_payment as send_payment_alert,
     alert_payment_error,
+)
+from prismalab.alerts import (
+    alert_payment as send_payment_alert,
 )
 
 
@@ -118,7 +120,7 @@ INVOICE_PAYLOAD_PREFIX = "pl:"
 # Цены в рублях (для отображения и реальной оплаты если PAYMENT_TEST_AMOUNT=0)
 PRICES_FAST = {5: 199, 10: 299, 30: 699}
 PRICES_PERSONA_TOPUP = {10: 229, 20: 439, 30: 629}
-PRICES_PERSONA_CREATE = {20: 599, 40: 999}
+PRICES_PERSONA_CREATE = {5: 299, 20: 599, 40: 999}
 
 
 def is_yookassa_configured() -> bool:
@@ -268,10 +270,10 @@ def _yookassa_success_content(
     """Текст и клавиатура после успешной оплаты ЮKassa — как в Telegram Payments."""
     if product_type == "fast":
         from prismalab.bot import (
-            _format_balance_express,
-            _fast_style_choice_keyboard,
-            _generations_count_fast,
             STYLE_EXAMPLES_FOOTER,
+            _fast_style_choice_keyboard,
+            _format_balance_express,
+            _generations_count_fast,
         )
         profile = store.get_user(user_id)
         credits_now = _generations_count_fast(profile)
@@ -286,8 +288,9 @@ def _yookassa_success_content(
         return text, kb
 
     if product_type == "persona_topup":
-        from prismalab.bot import _format_balance_persona, MINIAPP_URL
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+        from prismalab.bot import MINIAPP_URL, _format_balance_persona
         profile = store.get_user(user_id)
         new_total = profile.persona_credits_remaining
         text = (
@@ -399,7 +402,8 @@ async def poll_payment_status(
                 if has_persona and chat_id:
                     try:
                         from html import escape
-                        from prismalab.bot import _run_persona_pack_generation, _find_pack_offer, _persona_training_keyboard
+
+                        from prismalab.bot import _find_pack_offer, _persona_training_keyboard, _run_persona_pack_generation
                         offer = _find_pack_offer(pack_id_int)
                         if offer:
                             msg = await bot.send_message(
@@ -449,10 +453,10 @@ async def poll_payment_status(
                         try:
                             from prismalab.bot import (
                                 USERDATA_MODE,
-                                USERDATA_PERSONA_SELECTED_PACK_ID,
-                                USERDATA_PERSONA_WAITING_UPLOAD,
                                 USERDATA_PERSONA_PHOTOS,
+                                USERDATA_PERSONA_SELECTED_PACK_ID,
                                 USERDATA_PERSONA_UPLOAD_MSG_IDS,
+                                USERDATA_PERSONA_WAITING_UPLOAD,
                             )
                             ud = application._user_data[user_id]
                             ud[USERDATA_MODE] = "persona"
@@ -595,7 +599,8 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
             # Есть Персона — запускаем пак сразу, без загрузки фото
             try:
                 from html import escape
-                from prismalab.bot import _run_persona_pack_generation, _find_pack_offer, _persona_training_keyboard
+
+                from prismalab.bot import _find_pack_offer, _persona_training_keyboard, _run_persona_pack_generation
                 offer = _find_pack_offer(pack_id_int)
                 if offer:
                     msg = await bot.send_message(
@@ -645,10 +650,10 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
                 try:
                     from prismalab.bot import (
                         USERDATA_MODE,
-                        USERDATA_PERSONA_SELECTED_PACK_ID,
-                        USERDATA_PERSONA_WAITING_UPLOAD,
                         USERDATA_PERSONA_PHOTOS,
+                        USERDATA_PERSONA_SELECTED_PACK_ID,
                         USERDATA_PERSONA_UPLOAD_MSG_IDS,
+                        USERDATA_PERSONA_WAITING_UPLOAD,
                     )
                     ud = application._user_data[user_id]
                     ud[USERDATA_MODE] = "persona"
@@ -778,7 +783,7 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
                     if not isinstance(prompts, list):
                         return web.Response(status=400, text="Expected JSON array")
                     from prismalab.astria_client import collect_prompt_image_urls
-                    from prismalab.bot import _safe_send_document, _find_pack_offer
+                    from prismalab.bot import _find_pack_offer, _safe_send_document
                     urls = collect_prompt_image_urls(prompts)
                     if not urls:
                         logger.info("Astria pack callback: no images in prompts")
