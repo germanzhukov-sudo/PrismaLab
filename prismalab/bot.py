@@ -146,114 +146,56 @@ async def _acquire_user_generation_lock(user_id: int) -> asyncio.Lock | None:
         return None
 
 
-USERDATA_PHOTO_FILE_IDS = "prismalab_photo_file_ids"
-USERDATA_ASTRIA_FACEID_FILE_IDS = "prismalab_astria_faceid_file_ids"
-USERDATA_ASTRIA_LORA_FILE_IDS = "prismalab_astria_lora_file_ids"
-USERDATA_NANO_BANANA_FILE_IDS = "prismalab_nano_banana_file_ids"
-USERDATA_MODE = "prismalab_mode"  # normal | fast | persona | persona_pack_upload | astria_faceid | astria_lora
-USERDATA_JOB_LOCK = "prismalab_job_lock"  # deprecated: используем _acquire_user_generation_lock
-USERDATA_PROMPT_STRENGTH = "prismalab_prompt_strength"
-USERDATA_USE_PERSONAL = "prismalab_use_personal"
-USERDATA_SUBJECT_GENDER = "prismalab_subject_gender"  # male | female | None
-USERDATA_PERSONA_WAITING_UPLOAD = "prismalab_persona_waiting_upload"  # bool, ждём 10 фото
-USERDATA_PERSONA_PHOTOS = "prismalab_persona_photos"  # list of file_id для 10 фото Персоны
-USERDATA_PERSONA_CREDITS = "prismalab_persona_credits"  # 10 или 20
-USERDATA_PERSONA_TRAINING_STATUS = "prismalab_persona_training"  # "training" | "done" | "error"
-USERDATA_FAST_SELECTED_STYLE = "prismalab_fast_selected_style"  # style_id когда ждём фото
-USERDATA_FAST_CUSTOM_PROMPT = "prismalab_fast_custom_prompt"  # текст промпта при style_id == "custom"
-USERDATA_FAST_LAST_MSG_ID = "prismalab_fast_last_msg_id"  # id сообщения "Загрузите фото" для удаления
-USERDATA_FAST_STYLE_MSG_ID = "prismalab_fast_style_msg_id"  # id сообщения со стилями (для удаления при смене пола)
-USERDATA_FAST_PERSONA_MSG_ID = "prismalab_fast_persona_msg_id"  # id первого сообщения (Персона) в двухсообщенном экране тарифов
-USERDATA_FAST_STYLE_PAGE = "prismalab_fast_style_page"  # страница стилей для возврата после генерации
-USERDATA_PERSONA_UPLOAD_MSG_IDS = "prismalab_persona_upload_msg_ids"  # id сообщений «Фото X/10» для удаления при 10-м фото
-USERDATA_PERSONA_STYLE_MSG_ID = "prismalab_persona_style_msg_id"  # id сообщения со стилями (для удаления при смене пола)
-USERDATA_PERSONA_SELECTED_STYLE = "prismalab_persona_selected_style"  # (style_id, label) когда 0 кредитов, ждём докупки
-USERDATA_PERSONA_STYLE_PAGE = "prismalab_persona_style_page"  # страница стилей для возврата после генерации
-USERDATA_PERSONA_RECREATING = "prismalab_persona_recreating"  # True — в процессе пересоздания, удалять старую только при оплате
-USERDATA_PERSONA_PACK_WAITING_UPLOAD = "prismalab_persona_pack_waiting_upload"  # bool, ждём 10 фото для пака
-USERDATA_PERSONA_PACK_PHOTOS = "prismalab_persona_pack_photos"  # list of file_id для pak-run (10 фото)
-USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS = "prismalab_persona_pack_upload_msg_ids"  # id прогресс-сообщений upload пака
-USERDATA_PERSONA_PACK_IN_PROGRESS = "prismalab_persona_pack_in_progress"  # bool, идёт подготовка/генерация фотосета
-USERDATA_PERSONA_PACK_GIFT_APPLIED = "prismalab_persona_pack_gift_applied"  # bool, за этот flow подарен +1 кредит Персоны
-USERDATA_PROFILE_DELETE_JOB = "prismalab_profile_delete_job"  # Job для автоудаления профиля через 10 сек
-USERDATA_GETFILEID_EXPECTING_PHOTO = "prismalab_getfileid_expecting_photo"  # owner вызвал /getfileid, ждём фото
-USERDATA_EXAMPLES_MEDIA_IDS = "prismalab_examples_media_ids"  # id сообщений текущего альбома (для удаления при навигации)
-USERDATA_EXAMPLES_NAV_MSG_ID = "prismalab_examples_nav_msg_id"  # id сообщения с кнопками навигации
-USERDATA_EXAMPLES_PAGE = "prismalab_examples_page"  # последняя просмотренная страница альбомов
-USERDATA_EXAMPLES_INTRO_MSG_ID = "prismalab_examples_intro_msg_id"  # id сообщения с intro (для удаления при возврате)
-USERDATA_PERSONA_SELECTED_PACK_ID = "prismalab_persona_selected_pack_id"  # выбранный pack_id для оплаты
-USERDATA_PERSONA_TRAINING_MSG_ID = "prismalab_persona_training_msg_id"  # id сообщения «Все 10 фото получил» — удалить при переходе к фотосету
-
-# Единое сообщение об ошибке для пользователя (без технических деталей)
-USER_FRIENDLY_ERROR = "Произошла ошибка. Кредит не списали. Попробуйте ещё раз."
-
-# Лимит размера изображения: 15 МБ (Telegram до 20 МБ для фото, 50 МБ для документов)
-MAX_IMAGE_SIZE_BYTES = 15 * 1024 * 1024
-
-OWNER_ID = int(os.getenv("PRISMALAB_OWNER_ID") or "0")
-
-# URL Mini App (задаётся после покупки домена + SSL)
-MINIAPP_URL = os.getenv("MINIAPP_URL", "")
-
-# Ограничение доступа для dev-режима: если задан ALLOWED_USERS, только эти юзеры могут пользоваться ботом
-_allowed_users_str = os.getenv("ALLOWED_USERS", "")
-ALLOWED_USERS: set[int] = set(int(x.strip()) for x in _allowed_users_str.split(",") if x.strip().isdigit()) if _allowed_users_str else set()
-
-
-def _dev_skip_pack_payment() -> bool:
-    """
-    Dev-флаг для теста паков без оплаты.
-    В проде должен быть выключен.
-    """
-    raw = (os.getenv("PRISMALAB_DEV_SKIP_PACK_PAYMENT") or "").strip().lower()
-    return _is_dev_runtime() and raw in {"1", "true", "yes", "y"}
-
-
-def _dev_pack_train_from_images() -> bool:
-    """
-    Dev-флаг: запускать паки через загрузку 10 фото (без tune_ids).
-    Нужен как обходной путь, если Astria не отдает prompts в режиме tune_ids.
-    """
-    raw = (os.getenv("PRISMALAB_DEV_PACKS_TRAIN_FROM_IMAGES") or "").strip().lower()
-    return _is_dev_runtime() and raw in {"1", "true", "yes", "y"}
-
-
-def _use_unified_pack_persona_flow() -> bool:
-    """
-    Новый флоу покупки фотосетов:
-    - если Персоны нет, ведём через стандартный persona-flow (rules -> 10 фото -> person),
-      затем автозапуск фотосета.
-    """
-    raw = (os.getenv("PRISMALAB_UNIFIED_PACK_PERSONA_FLOW") or "1").strip().lower()
-    return raw not in {"0", "false", "no", "n", "off"}
-
-
-def _is_dev_runtime() -> bool:
-    """
-    Жестко считаем dev только при TABLE_PREFIX=dev_*
-    """
-    prefix = (os.getenv("TABLE_PREFIX") or "").strip().lower()
-    return prefix.startswith("dev_")
-
-
-def _guard_dev_only_flags() -> None:
-    """
-    Fail-fast защита: если dev-флаги включили не в dev-среде — не стартуем.
-    Это исключает случайный запуск dev-поведения на проде.
-    """
-    if _is_dev_runtime():
-        return
-    bad: list[str] = []
-    for key in ("PRISMALAB_DEV_SKIP_PACK_PAYMENT", "PRISMALAB_DEV_PACKS_TRAIN_FROM_IMAGES"):
-        raw = (os.getenv(key) or "").strip().lower()
-        if raw in {"1", "true", "yes", "y"}:
-            bad.append(key)
-    if bad:
-        raise RuntimeError(
-            "Dev-only flags are enabled outside dev runtime: "
-            + ", ".join(bad)
-            + ". Disable them or set TABLE_PREFIX=dev_."
-        )
+# --- Конфигурация, константы и feature flags импортируются из config.py ---
+from prismalab.config import (  # noqa: E402
+    ALLOWED_USERS,
+    MAX_IMAGE_SIZE_BYTES,
+    MINIAPP_URL,
+    OWNER_ID,
+    USER_FRIENDLY_ERROR,
+    USERDATA_ASTRIA_FACEID_FILE_IDS,
+    USERDATA_ASTRIA_LORA_FILE_IDS,
+    USERDATA_EXAMPLES_INTRO_MSG_ID,
+    USERDATA_EXAMPLES_MEDIA_IDS,
+    USERDATA_EXAMPLES_NAV_MSG_ID,
+    USERDATA_EXAMPLES_PAGE,
+    USERDATA_FAST_CUSTOM_PROMPT,
+    USERDATA_FAST_LAST_MSG_ID,
+    USERDATA_FAST_PERSONA_MSG_ID,
+    USERDATA_FAST_SELECTED_STYLE,
+    USERDATA_FAST_STYLE_MSG_ID,
+    USERDATA_FAST_STYLE_PAGE,
+    USERDATA_GETFILEID_EXPECTING_PHOTO,
+    USERDATA_JOB_LOCK,
+    USERDATA_MODE,
+    USERDATA_NANO_BANANA_FILE_IDS,
+    USERDATA_PERSONA_CREDITS,
+    USERDATA_PERSONA_PACK_GIFT_APPLIED,
+    USERDATA_PERSONA_PACK_IN_PROGRESS,
+    USERDATA_PERSONA_PACK_PHOTOS,
+    USERDATA_PERSONA_PACK_UPLOAD_MSG_IDS,
+    USERDATA_PERSONA_PACK_WAITING_UPLOAD,
+    USERDATA_PERSONA_PHOTOS,
+    USERDATA_PERSONA_RECREATING,
+    USERDATA_PERSONA_SELECTED_PACK_ID,
+    USERDATA_PERSONA_SELECTED_STYLE,
+    USERDATA_PERSONA_STYLE_MSG_ID,
+    USERDATA_PERSONA_STYLE_PAGE,
+    USERDATA_PERSONA_TRAINING_MSG_ID,
+    USERDATA_PERSONA_TRAINING_STATUS,
+    USERDATA_PERSONA_UPLOAD_MSG_IDS,
+    USERDATA_PERSONA_WAITING_UPLOAD,
+    USERDATA_PHOTO_FILE_IDS,
+    USERDATA_PROFILE_DELETE_JOB,
+    USERDATA_PROMPT_STRENGTH,
+    USERDATA_SUBJECT_GENDER,
+    USERDATA_USE_PERSONAL,
+    _dev_pack_train_from_images,
+    _dev_skip_pack_payment,
+    _guard_dev_only_flags,
+    _is_dev_runtime,
+    _use_unified_pack_persona_flow,
+)
 
 
 # Паки, которые всегда в списке (Mini App + бот)
