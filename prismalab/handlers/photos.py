@@ -50,6 +50,13 @@ from prismalab.messages import (
     _generations_count_fast,
 )
 from prismalab.telegram_utils import _acquire_user_generation_lock
+from prismalab.handlers.fast_photo import (
+    _run_fast_generation_impl,
+    _send_fast_tariffs_two_messages,
+    _update_fast_style_message,
+)
+from prismalab.handlers.packs import _run_persona_pack_generation
+from prismalab.handlers.persona import _start_astria_lora
 
 logger = logging.getLogger("prismalab")
 
@@ -83,7 +90,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             profile = _bot.store.get_user(user_id)
             if _generations_count_fast(profile) <= 0:
                 chat_id = update.effective_chat.id if update.effective_chat else 0
-                await _bot._send_fast_tariffs_two_messages(context.bot, chat_id, context)
+                await _send_fast_tariffs_two_messages(context.bot, chat_id, context)
                 return
             gen_lock = await _acquire_user_generation_lock(user_id)
             if gen_lock is None:
@@ -94,7 +101,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
             async def _run_and_release() -> None:
                 try:
-                    await _bot._run_fast_generation_impl(
+                    await _run_fast_generation_impl(
                         context=context,
                         chat_id=chat_id,
                         user_id=user_id,
@@ -197,7 +204,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await update.message.reply_text("❌ Не удалось найти выбранный фотосет. Откройте «Персона» и выберите заново.")
                 return
             context.application.create_task(
-                _bot._run_persona_pack_generation(
+                _run_persona_pack_generation(
                     context=context,
                     chat_id=update.effective_chat.id,
                     user_id=user_id,
@@ -243,7 +250,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if _use_unified_pack_persona_flow() and _bot.store.get_pending_pack_upload(user_id) is not None:
                 context.user_data[USERDATA_PERSONA_TRAINING_MSG_ID] = msg.message_id
             context.application.create_task(
-                _bot._start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
+                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
             )
         return
 
@@ -309,7 +316,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if _generations_count_fast(profile) <= 0:
                 context.user_data[USERDATA_FAST_SELECTED_STYLE] = selected_style
                 chat_id = update.effective_chat.id if update.effective_chat else 0
-                await _bot._send_fast_tariffs_two_messages(context.bot, chat_id, context)
+                await _send_fast_tariffs_two_messages(context.bot, chat_id, context)
                 return
             # Стиль уже выбран — сохраняем фото и запускаем генерацию
             gen_lock = await _acquire_user_generation_lock(user_id)
@@ -341,7 +348,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
             async def _run_and_release() -> None:
                 try:
-                    await _bot._run_fast_generation_impl(
+                    await _run_fast_generation_impl(
                         context=context,
                         chat_id=chat_id,
                         user_id=user_id,
@@ -370,7 +377,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 disable_web_page_preview=True,
             )
             chat_id = update.effective_chat.id if update.effective_chat else 0
-            await _bot._update_fast_style_message(context, chat_id, msg)
+            await _update_fast_style_message(context, chat_id, msg)
         return
 
     user_id = int(update.effective_user.id) if update.effective_user else 0
@@ -436,7 +443,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await update.message.reply_text("❌ Не удалось найти выбранный фотосет. Откройте «Персона» и выберите заново.")
                 return
             context.application.create_task(
-                _bot._run_persona_pack_generation(
+                _run_persona_pack_generation(
                     context=context,
                     chat_id=update.effective_chat.id,
                     user_id=user_id,
@@ -482,7 +489,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if _use_unified_pack_persona_flow() and _bot.store.get_pending_pack_upload(user_id) is not None:
                 context.user_data[USERDATA_PERSONA_TRAINING_MSG_ID] = msg.message_id
             context.application.create_task(
-                _bot._start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
+                _start_astria_lora(context, update.effective_chat.id, user_id, from_persona=True, file_ids=lora_file_ids)
             )
         return
 
@@ -538,7 +545,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if _generations_count_fast(_profile) <= 0:
                 context.user_data[USERDATA_FAST_SELECTED_STYLE] = selected_style
                 _chat_id = update.effective_chat.id if update.effective_chat else 0
-                await _bot._send_fast_tariffs_two_messages(context.bot, _chat_id, context)
+                await _send_fast_tariffs_two_messages(context.bot, _chat_id, context)
                 return
             gen_lock = await _acquire_user_generation_lock(_user_id)
             if gen_lock is None:
@@ -569,7 +576,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             async def _run_and_release() -> None:
                 try:
-                    await _bot._run_fast_generation_impl(
+                    await _run_fast_generation_impl(
                         context=context,
                         chat_id=_chat_id,
                         user_id=_user_id,
@@ -597,7 +604,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 disable_web_page_preview=True,
             )
             chat_id = update.effective_chat.id if update.effective_chat else 0
-            await _bot._update_fast_style_message(context, chat_id, msg)
+            await _update_fast_style_message(context, chat_id, msg)
         return
 
     user_id = int(update.effective_user.id) if update.effective_user else 0

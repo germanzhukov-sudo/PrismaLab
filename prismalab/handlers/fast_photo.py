@@ -9,7 +9,7 @@ import secrets
 import time
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Update, WebAppInfo
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -47,6 +47,15 @@ from prismalab.messages import (
     _generations_count_fast,
 )
 from prismalab.telegram_utils import _acquire_user_generation_lock, _safe_get_file_bytes, _safe_send_document
+from prismalab.alerts import alert_payment_error, alert_slow_generation
+from prismalab.payment import (
+    INVOICE_AMOUNT_KOPECKS,
+    INVOICE_PAYLOAD_PREFIX,
+    TELEGRAM_PROVIDER_TOKEN,
+    _amount_rub,
+    create_payment,
+    poll_payment_status,
+)
 
 logger = logging.getLogger("prismalab")
 
@@ -219,10 +228,10 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
         pass
 
     if _bot.use_yookassa():
-        amount = _bot._amount_rub("fast", count)
+        amount = _amount_rub("fast", count)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
-        url, payment_id = _bot.create_payment(
+        url, payment_id = create_payment(
             amount_rub=amount,
             description=f"Экспресс-фото: {count} кредитов",
             metadata={
@@ -240,7 +249,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
                 reply_markup=_payment_yookassa_keyboard(url, "pl_fast_show_tariffs"),
             )
             # Запускаем поллинг статуса в фоне
-            asyncio.create_task(_bot.poll_payment_status(
+            asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
                 bot=context.bot,
                 store=_bot.store,
@@ -253,7 +262,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             return
         else:
             logger.warning("Ошибка создания платежа (fast): %s", payment_id)
-            asyncio.create_task(_bot.alert_payment_error(user_id, "fast", str(payment_id)))
+            asyncio.create_task(alert_payment_error(user_id, "fast", str(payment_id)))
             await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
@@ -265,9 +274,9 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
                 title="Экспресс-фото",
                 description=f"Экспресс-фото: {count} кредитов",
                 payload=payload,
-                provider_token=_bot.TELEGRAM_PROVIDER_TOKEN,
+                provider_token=TELEGRAM_PROVIDER_TOKEN,
                 currency="RUB",
-                prices=[_bot.LabeledPrice(label="Оплата", amount=_bot.INVOICE_AMOUNT_KOPECKS)],
+                prices=[LabeledPrice(label="Оплата", amount=INVOICE_AMOUNT_KOPECKS)],
             )
         except BadRequest as e:
             logger.exception("send_invoice (fast) BadRequest: %s", e)
@@ -335,7 +344,7 @@ async def handle_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not query:
             return
         payload = (query.invoice_payload or "").strip()
-        if payload.startswith(_bot.INVOICE_PAYLOAD_PREFIX):
+        if payload.startswith(INVOICE_PAYLOAD_PREFIX):
             await query.answer(ok=True)
             try:
                 pre_uid = int(query.from_user.id) if query.from_user else 0
@@ -359,7 +368,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
         if not msg or not msg.successful_payment:
             return
         payload = (msg.successful_payment.invoice_payload or "").strip()
-        if not payload.startswith(_bot.INVOICE_PAYLOAD_PREFIX):
+        if not payload.startswith(INVOICE_PAYLOAD_PREFIX):
             return
         parts = payload.split(":")
         if len(parts) != 4:  # pl, product_type, credits, user_id
@@ -643,7 +652,7 @@ async def _run_fast_generation_impl(
         duration = time.time() - start_time
         # Алерт о медленной генерации (> 5 минут)
         if duration > 300:
-            await _bot.alert_slow_generation(user_id, duration, "express")
+            await alert_slow_generation(user_id, duration, "express")
     except asyncio.TimeoutError:
         logger.warning("Быстрое фото: таймаут %sс (стиль %s)", total_timeout, style_id)
         await _bot.alert_generation_error(user_id, f"Таймаут {total_timeout}с", "express")

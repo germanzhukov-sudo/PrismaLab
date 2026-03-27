@@ -47,6 +47,21 @@ from prismalab.keyboards import _persona_app_keyboard
 from prismalab.pack_offers import _find_pack_offer, _pack_offers
 from prismalab.telegram_utils import _acquire_user_generation_lock, _safe_edit_status, _safe_get_file_bytes, _safe_send_document
 from prismalab.image_utils import _prepare_image_for_photomaker
+from prismalab.alerts import alert_pack_error, alert_payment_error
+from prismalab.astria_client import (
+    create_tune_from_pack as astria_create_tune_from_pack,
+    get_pack as astria_get_pack,
+    get_tune_prompt_ids as astria_get_tune_prompt_ids,
+    wait_pack_images as astria_wait_pack_images,
+)
+from prismalab.payment import (
+    apply_test_amount,
+    build_pack_callback_url,
+    create_payment,
+    get_payment_status,
+    pack_delivered_set,
+    pack_in_progress_set,
+)
 
 logger = logging.getLogger("prismalab")
 
@@ -358,7 +373,7 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
         tune_id = str(row.get("tune_id") or "").strip()
         if not tune_id or not run_id:
             continue
-        if run_id in _bot.pack_delivered_set:
+        if run_id in pack_delivered_set:
             logger.info("pack recovery: уже доставлено run_id=%s", run_id)
             _bot.store.clear_pending_pack_run(user_id)
             try:
@@ -366,7 +381,7 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception:
                 pass
             continue
-        if run_id in _bot.pack_in_progress_set:
+        if run_id in pack_in_progress_set:
             logger.info("pack recovery: доставка уже в процессе run_id=%s", run_id)
             continue
         if run_id in _bot._pack_polling_active:
@@ -400,14 +415,14 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
             title = f"{offer['title']} user:{user_id} ts:{int(time.time())}"
             known_prompt_ids: set[str] | None = None
             try:
-                known_prompt_ids = await _bot.astria_get_tune_prompt_ids(
+                known_prompt_ids = await astria_get_tune_prompt_ids(
                     api_key=settings.astria_api_key,
                     tune_id=tune_id,
                 )
             except Exception as e:
                 logger.warning("pack recovery: не удалось получить prompt_ids для tune %s: %s", tune_id, e)
-            callback_url = _bot.build_pack_callback_url(user_id, chat_id, pack_id, run_id)
-            await _bot.astria_create_tune_from_pack(
+            callback_url = build_pack_callback_url(user_id, chat_id, pack_id, run_id)
+            await astria_create_tune_from_pack(
                 api_key=settings.astria_api_key,
                 pack_id=pack_id,
                 title=title[:120],
@@ -428,7 +443,7 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
             logger.info("pack recovery: начинаю polling tune_id=%s run_id=%s timeout=%ss", tune_id, run_id, wait_timeout)
             _bot._pack_polling_active.add(run_id)
             try:
-                urls = await _bot.astria_wait_pack_images(
+                urls = await astria_wait_pack_images(
                     api_key=settings.astria_api_key,
                     tune_id=tune_id,
                     expected_images=expected,
@@ -444,16 +459,16 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                     text="❌ Фотосет завершился без изображений. Попробуйте еще раз.",
                 )
                 continue
-            if run_id in _bot.pack_delivered_set:
+            if run_id in pack_delivered_set:
                 logger.info("pack recovery: уже доставлено через callback run_id=%s", run_id)
                 continue
-            if run_id in _bot.pack_in_progress_set:
+            if run_id in pack_in_progress_set:
                 logger.info("pack recovery: доставка уже идёт (основной flow?) run_id=%s", run_id)
                 continue
             total = len(urls)
             sent_count = 0
             pack_title = offer.get("title", "") or str(pack_id)
-            _bot.pack_in_progress_set.add(run_id)
+            pack_in_progress_set.add(run_id)
             for i, url in enumerate(urls, start=1):
                 try:
                     out_bytes = await _bot.astria_download_first_image_bytes(
@@ -476,9 +491,9 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                 except Exception as e:
                     logger.warning("pack recovery: download/send failed %s: %s", url[:50], e)
             if sent_count <= 0:
-                _bot.pack_in_progress_set.discard(run_id)
+                pack_in_progress_set.discard(run_id)
                 asyncio.create_task(
-                    _bot.alert_pack_error(
+                    alert_pack_error(
                         user_id,
                         pack_id=pack_id,
                         pack_title=offer_title or str(pack_id),
@@ -494,9 +509,9 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                     reply_markup=_photoset_retry_keyboard(pack_id),
                 )
                 continue
-            _bot.pack_in_progress_set.discard(run_id)
+            pack_in_progress_set.discard(run_id)
             if sent_count > 0:
-                _bot.pack_delivered_set.add(run_id)
+                pack_delivered_set.add(run_id)
             _bot.store.log_event(
                 user_id,
                 "pack_generation",
@@ -518,9 +533,9 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
             logger.info("pack recovery: успешно user=%s pack=%s sent=%s (источник: recovery)", user_id, pack_id, sent_count)
         except Exception as e:
             logger.exception("pack recovery error (user=%s pack=%s): %s", user_id, pack_id, e)
-            _bot.pack_in_progress_set.discard(run_id)
+            pack_in_progress_set.discard(run_id)
             asyncio.create_task(
-                _bot.alert_pack_error(
+                alert_pack_error(
                     user_id,
                     pack_id=pack_id,
                     pack_title=offer_title,
@@ -551,13 +566,13 @@ async def _pack_fallback_polling(
     delay_min: int | None = None,
 ) -> None:
     """Fallback: опрашиваем prompts фотосета (резерв, если callback/polling не доставили)."""
-    if run_id in _bot.pack_delivered_set:
+    if run_id in pack_delivered_set:
         logger.info("pack fallback: уже доставлено run_id=%s", run_id)
         return
     if run_id in _bot._pack_polling_active:
         logger.info("pack fallback: основной polling ещё активен run_id=%s", run_id)
         return
-    if run_id in _bot.pack_in_progress_set:
+    if run_id in pack_in_progress_set:
         logger.info("pack fallback: доставка уже в процессе run_id=%s", run_id)
         return
     logger.info(
@@ -572,7 +587,7 @@ async def _pack_fallback_polling(
         fallback_wait_timeout = max(900, min(3600, _pack_wait_timeout_seconds(expected)))
         _bot._pack_polling_active.add(run_id)
         try:
-            urls = await _bot.astria_wait_pack_images(
+            urls = await astria_wait_pack_images(
                 api_key=settings.astria_api_key,
                 tune_id=str(lora_tune_id),
                 expected_images=expected,
@@ -585,15 +600,15 @@ async def _pack_fallback_polling(
         if not urls:
             logger.info("pack fallback: prompts не найдены (user=%s pack=%s)", user_id, pack_id)
             return
-        if run_id in _bot.pack_delivered_set:
+        if run_id in pack_delivered_set:
             logger.info("pack fallback: уже доставлено во время ожидания run_id=%s", run_id)
             return
-        if run_id in _bot.pack_in_progress_set:
+        if run_id in pack_in_progress_set:
             logger.info("pack fallback: доставка уже стартовала run_id=%s", run_id)
             return
         pack_title = offer.get("title", "") or str(pack_id)
         sent_count = 0
-        _bot.pack_in_progress_set.add(run_id)
+        pack_in_progress_set.add(run_id)
         try:
             for i, url in enumerate(urls):
                 try:
@@ -608,16 +623,16 @@ async def _pack_fallback_polling(
                 except Exception as e:
                     logger.warning("pack fallback: download/send failed %s: %s", url[:50], e)
         finally:
-            _bot.pack_in_progress_set.discard(run_id)
+            pack_in_progress_set.discard(run_id)
         if sent_count > 0:
-            _bot.pack_delivered_set.add(run_id)
+            pack_delivered_set.add(run_id)
         try:
             _bot.store.log_event(user_id, "pack_fallback", {"pack_id": pack_id, "images_sent": sent_count})
         except Exception:
             pass
         if sent_count <= 0:
             asyncio.create_task(
-                _bot.alert_pack_error(
+                alert_pack_error(
                     user_id,
                     pack_id=pack_id,
                     pack_title=pack_title,
@@ -644,7 +659,7 @@ async def _pack_fallback_polling(
     except Exception as e:
         logger.exception("pack fallback error (user=%s pack=%s): %s", user_id, pack_id, e)
         asyncio.create_task(
-            _bot.alert_pack_error(
+            alert_pack_error(
                 user_id,
                 pack_id=pack_id,
                 pack_title=str(offer.get("title") or ""),
@@ -694,7 +709,7 @@ async def _run_persona_pack_generation(
             return
         profile = _bot.store.get_user(user_id)
         class_name = _resolve_pack_class_name(offer, profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER))
-        pack = await _bot.astria_get_pack(api_key=settings.astria_api_key, pack_id=pack_id)
+        pack = await astria_get_pack(api_key=settings.astria_api_key, pack_id=pack_id)
         configured_expected = int(offer.get("expected_images") or 0)
         expected = configured_expected
         try:
@@ -726,7 +741,7 @@ async def _run_persona_pack_generation(
             for fid in train_file_ids[:10]:
                 img_bytes = await _safe_get_file_bytes(context.bot, fid)
                 image_bytes_list.append(_prepare_image_for_photomaker(img_bytes))
-            tune = await _bot.astria_create_tune_from_pack(
+            tune = await astria_create_tune_from_pack(
                 api_key=settings.astria_api_key,
                 pack_id=pack_id,
                 title=title[:120],
@@ -799,20 +814,20 @@ async def _run_persona_pack_generation(
                 assert active_tune_id is not None
                 known_prompt_ids: set[str] | None = None
                 try:
-                    known_prompt_ids = await _bot.astria_get_tune_prompt_ids(
+                    known_prompt_ids = await astria_get_tune_prompt_ids(
                         api_key=settings.astria_api_key,
                         tune_id=str(active_tune_id),
                     )
                 except Exception as e:
                     logger.warning("Не удалось получить существующие prompts для tune %s: %s", active_tune_id, e)
                 # Защита от дубля: recovery мог уже создать промпты
-                if run_id in _bot._pack_polling_active or run_id in _bot.pack_delivered_set:
+                if run_id in _bot._pack_polling_active or run_id in pack_delivered_set:
                     logger.info("pack: конфликт перед созданием промптов run_id=%s (polling=%s delivered=%s), пропускаем",
-                                run_id, run_id in _bot._pack_polling_active, run_id in _bot.pack_delivered_set)
+                                run_id, run_id in _bot._pack_polling_active, run_id in pack_delivered_set)
                     _bot._pack_processing_active.discard(run_id)
                     return
-                callback_url = _bot.build_pack_callback_url(user_id, chat_id, pack_id, run_id)
-                tune = await _bot.astria_create_tune_from_pack(
+                callback_url = build_pack_callback_url(user_id, chat_id, pack_id, run_id)
+                tune = await astria_create_tune_from_pack(
                     api_key=settings.astria_api_key,
                     pack_id=pack_id,
                     title=title[:120],
@@ -879,7 +894,7 @@ async def _run_persona_pack_generation(
             _bot._pack_processing_active.discard(run_id)
             logger.info("pack: polling уже запущен (recovery?) для run_id=%s, пропускаем", run_id)
             return
-        if run_id in _bot.pack_delivered_set:
+        if run_id in pack_delivered_set:
             _bot._pack_processing_active.discard(run_id)
             logger.info("pack: уже доставлено для run_id=%s, пропускаем", run_id)
             return
@@ -891,7 +906,7 @@ async def _run_persona_pack_generation(
         )
         _bot._pack_polling_active.add(run_id)
         try:
-            urls = await _bot.astria_wait_pack_images(
+            urls = await astria_wait_pack_images(
                 api_key=settings.astria_api_key,
                 tune_id=poll_tune_id,
                 expected_images=expected,
@@ -909,15 +924,15 @@ async def _run_persona_pack_generation(
             )
             return
 
-        if run_id in _bot.pack_delivered_set:
+        if run_id in pack_delivered_set:
             logger.info("pack: уже доставлено через callback run_id=%s, пропускаем отправку", run_id)
             return
-        if run_id in _bot.pack_in_progress_set:
+        if run_id in pack_in_progress_set:
             logger.info("pack: доставка уже идёт (recovery?) run_id=%s, пропускаем", run_id)
             return
 
         logger.info("pack: доставлено через polling run_id=%s urls=%s", run_id, len(urls) if urls else 0)
-        _bot.pack_in_progress_set.add(run_id)
+        pack_in_progress_set.add(run_id)
 
         # Сохраняем tune_id как Persona, если у пользователя её ещё нет (пак создал tune из загруженных фото)
         if train_file_ids and tune.tune_id and not profile.astria_lora_tune_id:
@@ -983,7 +998,7 @@ async def _run_persona_pack_generation(
 
         if sent_count <= 0:
             asyncio.create_task(
-                _bot.alert_pack_error(
+                alert_pack_error(
                     user_id,
                     pack_id=pack_id,
                     pack_title=str(offer.get("title") or ""),
@@ -1001,7 +1016,7 @@ async def _run_persona_pack_generation(
             return
 
         if sent_count > 0:
-            _bot.pack_delivered_set.add(run_id)
+            pack_delivered_set.add(run_id)
         _bot.store.log_event(
             user_id,
             "pack_generation",
@@ -1021,7 +1036,7 @@ async def _run_persona_pack_generation(
     except _bot.AstriaError as e:
         logger.exception("Ошибка генерации фотосета %s (Astria): %s", pack_id, e)
         asyncio.create_task(
-            _bot.alert_pack_error(
+            alert_pack_error(
                 user_id,
                 pack_id=pack_id,
                 pack_title=str(offer.get("title") or ""),
@@ -1044,7 +1059,7 @@ async def _run_persona_pack_generation(
     except Exception as e:
         logger.exception("Ошибка генерации фотосета %s: %s", pack_id, e)
         asyncio.create_task(
-            _bot.alert_pack_error(
+            alert_pack_error(
                 user_id,
                 pack_id=pack_id,
                 pack_title=str(offer.get("title") or ""),
@@ -1065,7 +1080,7 @@ async def _run_persona_pack_generation(
                 reply_markup=_photoset_retry_keyboard(pack_id),
             )
     finally:
-        _bot.pack_in_progress_set.discard(run_id)
+        pack_in_progress_set.discard(run_id)
         context.user_data[USERDATA_PERSONA_PACK_IN_PROGRESS] = False
         gen_lock.release()
 
@@ -1085,11 +1100,11 @@ async def _poll_persona_pack_payment_and_run(
         if time.monotonic() - started > timeout_seconds:
             logger.info("Таймаут поллинга оплаты пака %s", payment_id)
             return
-        status = await asyncio.to_thread(_bot.get_payment_status, payment_id)
+        status = await asyncio.to_thread(get_payment_status, payment_id)
         if status == "succeeded":
             if _bot.store.is_payment_processed(payment_id):
                 return
-            amount_rub = _bot.apply_test_amount(float(offer["price_rub"]))
+            amount_rub = apply_test_amount(float(offer["price_rub"]))
             expected_images = int(offer.get("expected_images") or 0)
             try:
                 payment_log_id = _bot.store.log_payment(
@@ -1215,7 +1230,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
     logger.info("persona_pack_buy: fetching pack from astria pack_id=%s class=%s", pack_id, class_name)
     try:
         pack = await asyncio.wait_for(
-            _bot.astria_get_pack(api_key=settings.astria_api_key, pack_id=pack_id),
+            astria_get_pack(api_key=settings.astria_api_key, pack_id=pack_id),
             timeout=35.0,
         )
         logger.info("persona_pack_buy: astria pack fetched pack_id=%s", pack_id)
@@ -1276,14 +1291,14 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         )
         return
 
-    amount = _bot.apply_test_amount(float(offer["price_rub"]))
+    amount = apply_test_amount(float(offer["price_rub"]))
     me = await context.bot.get_me()
     return_url = f"https://t.me/{me.username}" if me and me.username else None
     logger.info("persona_pack_buy: creating payment amount=%s", amount)
     try:
         url, payment_id = await asyncio.wait_for(
             asyncio.to_thread(
-                _bot.create_payment,
+                create_payment,
                 amount_rub=amount,
                 description=f"Фотосет: {offer['title']}",
                 metadata={
@@ -1310,8 +1325,8 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         )
         return
     except Exception as e:
-        logger.warning("Ошибка _bot.create_payment для pack %s: %s", pack_id, e)
-        asyncio.create_task(_bot.alert_payment_error(user_id, "persona_pack", str(e)))
+        logger.warning("Ошибка create_payment для pack %s: %s", pack_id, e)
+        asyncio.create_task(alert_payment_error(user_id, "persona_pack", str(e)))
         await query.edit_message_text(
             "❌ Ошибка оплаты. Попробуйте еще раз.",
             reply_markup=_persona_packs_keyboard(),
@@ -1319,7 +1334,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         return
     if not (url and payment_id):
         err = str(payment_id or "unknown")
-        asyncio.create_task(_bot.alert_payment_error(user_id, "persona_pack", err))
+        asyncio.create_task(alert_payment_error(user_id, "persona_pack", err))
         if "network error" in err.lower() or "readtimeout" in err.lower() or "connecttimeout" in err.lower():
             await query.edit_message_text(
                 "❌ Не удалось связаться с платёжной системой (сеть/таймаут). Попробуйте еще раз через 1-2 минуты.",

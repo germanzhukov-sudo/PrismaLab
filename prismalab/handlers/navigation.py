@@ -71,6 +71,7 @@ logger = logging.getLogger("prismalab")
 # Используем import модуля (не from ... import), чтобы избежать circular import.
 # Всё обращение к _bot.xxx происходит в рантайме (внутри функций), не при импорте.
 import prismalab.bot as _bot  # noqa: E402
+from prismalab.handlers.persona import _clear_persona_flow_state, _run_persona_batch
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +92,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Deep link: /start persona_batch
     args = context.args
     if args and args[0] == "persona_batch":
-        _bot._clear_persona_flow_state(context)
+        _clear_persona_flow_state(context)
         pending_json = store.get_pending_persona_batch(user_id)
         if pending_json:
             store.clear_pending_persona_batch(user_id)
@@ -100,7 +101,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             except (json.JSONDecodeError, TypeError):
                 styles_list = []
             if styles_list:
-                await _bot._run_persona_batch(update, context, user_id, styles_list)
+                await _run_persona_batch(update, context, user_id, styles_list)
                 return
         await update.message.reply_text(
             "Нет запланированных генераций. Откройте Mini App и выберите стили.",
@@ -140,7 +141,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
             return
 
-    _bot._clear_persona_flow_state(context)
+    _clear_persona_flow_state(context)
     await update.message.reply_text(
         _start_message_text(profile),
         reply_markup=_start_keyboard(profile),
@@ -267,6 +268,8 @@ async def handle_getfileid_album_callback(update: Update, context: ContextTypes.
 
 async def handle_start_fast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Кнопка «Быстрое фото»."""
+    from prismalab.handlers.fast_photo import _fast_after_gender_content, _send_fast_tariffs_two_messages
+
     query = update.callback_query
     if not query:
         return
@@ -282,13 +285,13 @@ async def handle_start_fast_callback(update: Update, context: ContextTypes.DEFAU
         context.user_data[USERDATA_SUBJECT_GENDER] = known_gender
         context.user_data[USERDATA_MODE] = "fast"
         has_photo = bool(context.user_data.get(USERDATA_PHOTO_FILE_IDS))
-        text, reply_markup = _bot._fast_after_gender_content(profile, gender=known_gender, has_photo=has_photo)
+        text, reply_markup = _fast_after_gender_content(profile, gender=known_gender, has_photo=has_photo)
         if text is not None:
             extra = {"parse_mode": "HTML", "disable_web_page_preview": True}
             await query.edit_message_text(text, reply_markup=reply_markup, **extra)
             context.user_data[USERDATA_FAST_STYLE_MSG_ID] = query.message.message_id
         else:
-            await _bot._send_fast_tariffs_two_messages(context.bot, query.message.chat_id, context, edit_message=query.message)
+            await _send_fast_tariffs_two_messages(context.bot, query.message.chat_id, context, edit_message=query.message)
         return
     await query.edit_message_text(
         "Выбери пол – так нейросеть точнее настроит результат",
@@ -670,6 +673,8 @@ async def handle_profile_toggle_gender_callback(update: Update, context: Context
 
 async def handle_profile_fast_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Кнопка «Экспресс-фото» из Профиля."""
+    from prismalab.handlers.fast_photo import _fast_style_screen_text, _send_fast_tariffs_two_messages
+
     query = update.callback_query
     if not query:
         return
@@ -687,13 +692,13 @@ async def handle_profile_fast_tariffs_callback(update: Update, context: ContextT
         credits = _generations_count_fast(profile)
         credits_word = _fast_credits_word(credits)
         has_photo = bool(context.user_data.get(USERDATA_PHOTO_FILE_IDS))
-        text = _bot._fast_style_screen_text(credits, credits_word, has_photo=has_photo)
+        text = _fast_style_screen_text(credits, credits_word, has_photo=has_photo)
         page = context.user_data.get(USERDATA_FAST_STYLE_PAGE, 0)
         kb = _fast_style_choice_keyboard(gender, include_tariffs=True, from_profile=True, page=page)
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
         context.user_data[USERDATA_FAST_STYLE_MSG_ID] = query.message.message_id
     else:
-        await _bot._send_fast_tariffs_two_messages(
+        await _send_fast_tariffs_two_messages(
             context.bot, query.message.chat_id, context, edit_message=query.message, back_callback="pl_profile"
         )
 
@@ -732,7 +737,7 @@ async def handle_fast_back_callback(update: Update, context: ContextTypes.DEFAUL
             await bot.delete_message(chat_id=chat_id, message_id=persona_msg_id)
         except Exception:
             pass
-    _bot._clear_persona_flow_state(context)
+    _clear_persona_flow_state(context)
     user_id = int(query.from_user.id) if query.from_user else 0
     try:
         _bot.store.log_event(user_id, "nav_back_main")

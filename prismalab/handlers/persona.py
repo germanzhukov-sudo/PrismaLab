@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Update, WebAppInfo
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -62,6 +62,14 @@ from prismalab.messages import (
 )
 from prismalab.image_utils import _prepare_image_for_photomaker
 from prismalab.telegram_utils import _acquire_user_generation_lock, _safe_get_file_bytes
+from prismalab.alerts import alert_payment_error
+from prismalab.payment import (
+    TELEGRAM_PROVIDER_TOKEN,
+    _amount_rub,
+    create_payment,
+    poll_payment_status,
+)
+from prismalab.handlers.packs import _start_pending_paid_photoset_after_persona
 
 logger = logging.getLogger("prismalab")
 
@@ -293,10 +301,10 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
         pass
 
     if _bot.use_yookassa():
-        amount = _bot._amount_rub("persona_create", credits)
+        amount = _amount_rub("persona_create", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
-        url, payment_id = _bot.create_payment(
+        url, payment_id = create_payment(
             amount_rub=amount,
             description=f"Персона: {credits} кредитов",
             metadata={
@@ -313,7 +321,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
                 parse_mode="HTML",
                 reply_markup=_payment_yookassa_keyboard(url, "pl_persona_back"),
             )
-            asyncio.create_task(_bot.poll_payment_status(
+            asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
                 bot=context.bot,
                 store=_bot.store,
@@ -326,12 +334,12 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
             return
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
-            asyncio.create_task(_bot.alert_payment_error(user_id, "persona_create", str(payment_id)))
+            asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
             await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if _bot.use_telegram_payments():
-        amount = _bot._amount_rub("persona_create", credits)
+        amount = _amount_rub("persona_create", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_create:{credits}:{user_id}"
         try:
@@ -340,9 +348,9 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
                 title="Персона: создание",
                 description=f"Персона: {credits} кредитов",
                 payload=payload,
-                provider_token=_bot.TELEGRAM_PROVIDER_TOKEN,
+                provider_token=TELEGRAM_PROVIDER_TOKEN,
                 currency="RUB",
-                prices=[_bot.LabeledPrice(label="Оплата", amount=amount_kop)],
+                prices=[LabeledPrice(label="Оплата", amount=amount_kop)],
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_create) BadRequest: %s", e)
@@ -428,10 +436,10 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
         pass
 
     if _bot.use_yookassa():
-        amount = _bot._amount_rub("persona_topup", credits)
+        amount = _amount_rub("persona_topup", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
-        url, payment_id = _bot.create_payment(
+        url, payment_id = create_payment(
             amount_rub=amount,
             description=f"Докупка Персона: {credits} кредитов",
             metadata={
@@ -448,7 +456,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
                 parse_mode="HTML",
                 reply_markup=_payment_yookassa_keyboard(url, "pl_persona_show_credits_out"),
             )
-            asyncio.create_task(_bot.poll_payment_status(
+            asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
                 bot=context.bot,
                 store=_bot.store,
@@ -461,12 +469,12 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             return
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
-            asyncio.create_task(_bot.alert_payment_error(user_id, "persona_topup", str(payment_id)))
+            asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
             await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if _bot.use_telegram_payments():
-        amount = _bot._amount_rub("persona_topup", credits)
+        amount = _amount_rub("persona_topup", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_topup:{credits}:{user_id}"
         try:
@@ -475,9 +483,9 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
                 title="Докупка кредитов Персоны",
                 description=f"{credits} кредитов Персоны",
                 payload=payload,
-                provider_token=_bot.TELEGRAM_PROVIDER_TOKEN,
+                provider_token=TELEGRAM_PROVIDER_TOKEN,
                 currency="RUB",
-                prices=[_bot.LabeledPrice(label="Оплата", amount=amount_kop)],
+                prices=[LabeledPrice(label="Оплата", amount=amount_kop)],
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_topup) BadRequest: %s", e)
@@ -554,10 +562,10 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
         pass
 
     if _bot.use_yookassa():
-        amount = _bot._amount_rub("persona_topup", credits)
+        amount = _amount_rub("persona_topup", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
-        url, payment_id = _bot.create_payment(
+        url, payment_id = create_payment(
             amount_rub=amount,
             description=f"Докупка Персона: {credits} кредитов",
             metadata={
@@ -574,7 +582,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
                 parse_mode="HTML",
                 reply_markup=_payment_yookassa_keyboard(url, "pl_persona_show_credits_out"),
             )
-            asyncio.create_task(_bot.poll_payment_status(
+            asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
                 bot=context.bot,
                 store=_bot.store,
@@ -587,12 +595,12 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
             return
         else:
             logger.warning("Ошибка создания платежа (persona_topup): %s", payment_id)
-            asyncio.create_task(_bot.alert_payment_error(user_id, "persona_topup", str(payment_id)))
+            asyncio.create_task(alert_payment_error(user_id, "persona_topup", str(payment_id)))
             await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if _bot.use_telegram_payments():
-        amount = _bot._amount_rub("persona_topup", credits)
+        amount = _amount_rub("persona_topup", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_topup:{credits}:{user_id}"
         try:
@@ -601,9 +609,9 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
                 title="Докупка кредитов Персоны",
                 description=f"{credits} кредитов Персоны",
                 payload=payload,
-                provider_token=_bot.TELEGRAM_PROVIDER_TOKEN,
+                provider_token=TELEGRAM_PROVIDER_TOKEN,
                 currency="RUB",
-                prices=[_bot.LabeledPrice(label="Оплата", amount=amount_kop)],
+                prices=[LabeledPrice(label="Оплата", amount=amount_kop)],
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_topup) BadRequest: %s", e)
@@ -771,10 +779,10 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
     chat_id = query.message.chat_id if query.message else 0
 
     if _bot.use_yookassa():
-        amount = _bot._amount_rub("persona_create", credits)
+        amount = _amount_rub("persona_create", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
-        url, payment_id = _bot.create_payment(
+        url, payment_id = create_payment(
             amount_rub=amount,
             description=f"Персона: {credits} кредитов",
             metadata={
@@ -791,7 +799,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
                 parse_mode="HTML",
                 reply_markup=_payment_yookassa_keyboard(url, "pl_persona_back"),
             )
-            asyncio.create_task(_bot.poll_payment_status(
+            asyncio.create_task(poll_payment_status(
                 payment_id=payment_id,
                 bot=context.bot,
                 store=_bot.store,
@@ -804,12 +812,12 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
             return
         else:
             logger.warning("Ошибка создания платежа (persona_create): %s", payment_id)
-            asyncio.create_task(_bot.alert_payment_error(user_id, "persona_create", str(payment_id)))
+            asyncio.create_task(alert_payment_error(user_id, "persona_create", str(payment_id)))
             await query.edit_message_text("❌ Ошибка оплаты. Попробуйте еще раз.")
             return
 
     if _bot.use_telegram_payments():
-        amount = _bot._amount_rub("persona_create", credits)
+        amount = _amount_rub("persona_create", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_create:{credits}:{user_id}"
         try:
@@ -818,9 +826,9 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
                 title="Персона: создание",
                 description=f"Персона: {credits} кредитов",
                 payload=payload,
-                provider_token=_bot.TELEGRAM_PROVIDER_TOKEN,
+                provider_token=TELEGRAM_PROVIDER_TOKEN,
                 currency="RUB",
-                prices=[_bot.LabeledPrice(label="Оплата", amount=amount_kop)],
+                prices=[LabeledPrice(label="Оплата", amount=amount_kop)],
             )
         except BadRequest as e:
             logger.exception("send_invoice (persona_create) BadRequest: %s", e)
@@ -1010,7 +1018,7 @@ async def handle_persona_check_status_callback(update: Update, context: ContextT
             if status in {"completed", "succeeded", "ready", "trained", "finished"} or trained_at:
                 _bot.store.set_astria_lora_tune(user_id=user_id, tune_id=pending_tune_id, class_name=getattr(profile, "persona_lora_class_name", None) or "person")
                 context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
-                if await _bot._start_pending_paid_photoset_after_persona(
+                if await _start_pending_paid_photoset_after_persona(
                     context=context,
                     chat_id=query.message.chat_id if query.message else user_id,
                     user_id=user_id,
@@ -1230,7 +1238,7 @@ async def _start_astria_lora(
             context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "done"
             gen_lock.release()
             gen_lock = None
-            if await _bot._start_pending_paid_photoset_after_persona(
+            if await _start_pending_paid_photoset_after_persona(
                 context=context,
                 chat_id=chat_id,
                 user_id=user_id,

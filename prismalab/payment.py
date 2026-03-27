@@ -31,6 +31,11 @@ _pack_delivered: set[str] = set()
 # Пак сейчас в процессе отправки пользователю (polling/recovery) — чтобы fallback/callback не дублировали финал
 _pack_in_progress: set[str] = set()
 
+# Публичные алиасы для межмодульной координации pack-flow.
+# Используем ссылку на те же множества (не копии).
+pack_delivered_set = _pack_delivered
+pack_in_progress_set = _pack_in_progress
+
 
 def _get_pack_callback_base_url() -> str:
     """Базовый URL для Astria pack callback. Из PRISMALAB_PUBLIC_URL или MINIAPP_URL."""
