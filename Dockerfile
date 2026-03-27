@@ -22,4 +22,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-CMD ["python", "-m", "prismalab.bot"]
+CMD ["python", "-m", "prismalab"]
