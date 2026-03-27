@@ -26,4 +26,4 @@ echo "Bot token: ${PRISMALAB_BOT_TOKEN:0:10}..."
 echo "================"
 
 # Запускаем бота
-python3 -m prismalab.bot
+python3 -m prismalab
