@@ -1151,7 +1151,7 @@ class PrismaLabStore:
     def _funnel_count(self, cur, event_type: str, d_from: str | None, d_to: str | None,
                       data_filter: dict | None = None) -> int:
         """Считает DISTINCT user_id по event_type за период с опциональным фильтром event_data."""
-        conditions = [f"event_type = %s"]
+        conditions = ["event_type = %s"]
         params: list = [event_type]
         if d_from and d_to:
             conditions.append("created_at >= %s AND created_at <= %s")

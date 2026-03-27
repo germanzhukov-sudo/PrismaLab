@@ -356,7 +356,7 @@ async def run_prompt_and_wait(
         polling_timeout = max(45.0, _timeout_s(60.0))
         try:
             last = await asyncio.to_thread(_get_prompt, api_key=api_key, tune_id=tune_id, prompt_id=prompt_id, timeout_s=polling_timeout)
-        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
             # Retry при таймауте - Astria может быть медленным
             logger.warning(f"Astria prompt {prompt_id} - таймаут при polling (попытка {poll_count}), жду 5с и повторяю...")
             await asyncio.sleep(5.0)

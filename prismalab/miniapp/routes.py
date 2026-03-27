@@ -13,7 +13,7 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -996,7 +996,6 @@ async def api_pack_buy(request: Request):
 
     # Запускаем поллинг платежа
     store = get_store()
-    from prismalab.payment import poll_payment_status
     # Нужен bot для отправки сообщения после оплаты — получаем из контекста
     # В Mini App нет прямого доступа к bot; поллинг запустится в payment.py через webhook
     # Поэтому просто возвращаем ссылку, webhook обработает оплату

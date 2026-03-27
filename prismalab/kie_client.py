@@ -399,7 +399,7 @@ async def run_task_and_wait(
                 task_id=task_id,
                 timeout_s=polling_timeout,
             )
-        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
             # Retry при таймауте
             logger.warning(f"KIE task {task_id} - таймаут при polling (попытка {poll_count}), жду 5с и повторяю...")
             await asyncio.sleep(5.0)

@@ -6,7 +6,6 @@ import hmac
 import json
 import time
 import urllib.parse
-from typing import Any
 
 
 def validate_init_data(init_data_str: str, bot_token: str, max_age: int = 86400) -> dict | None:

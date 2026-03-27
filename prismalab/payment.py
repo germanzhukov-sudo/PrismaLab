@@ -245,7 +245,7 @@ def _pack_alert_details_from_metadata(metadata: dict[str, Any] | None) -> dict[s
     if not pack_title and pack_id.isdigit():
         # Fallback для старых платежей mini app, где title не писался в metadata.
         try:
-            from prismalab.bot import _find_pack_offer
+            from prismalab.pack_offers import _find_pack_offer
             offer = _find_pack_offer(int(pack_id))
             if offer:
                 pack_title = str(offer.get("title") or "").strip()
@@ -269,9 +269,9 @@ def _yookassa_success_content(
 ) -> tuple[str, Any]:
     """Текст и клавиатура после успешной оплаты ЮKassa — как в Telegram Payments."""
     if product_type == "fast":
-        from prismalab.bot import (
+        from prismalab.keyboards import _fast_style_choice_keyboard
+        from prismalab.messages import (
             STYLE_EXAMPLES_FOOTER,
-            _fast_style_choice_keyboard,
             _format_balance_express,
             _generations_count_fast,
         )
@@ -290,7 +290,8 @@ def _yookassa_success_content(
     if product_type == "persona_topup":
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-        from prismalab.bot import MINIAPP_URL, _format_balance_persona
+        from prismalab.config import MINIAPP_URL
+        from prismalab.messages import _format_balance_persona
         profile = store.get_user(user_id)
         new_total = profile.persona_credits_remaining
         text = (
@@ -306,7 +307,8 @@ def _yookassa_success_content(
         return text, kb
 
     if product_type == "persona_create":
-        from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
+        from prismalab.keyboards import _persona_rules_keyboard
+        from prismalab.messages import PERSONA_RULES_MESSAGE
         return PERSONA_RULES_MESSAGE, _persona_rules_keyboard()
 
     # fallback
@@ -403,7 +405,9 @@ async def poll_payment_status(
                     try:
                         from html import escape
 
-                        from prismalab.bot import _find_pack_offer, _persona_training_keyboard, _run_persona_pack_generation
+                        from prismalab.bot import _run_persona_pack_generation
+                        from prismalab.keyboards import _persona_training_keyboard
+                        from prismalab.pack_offers import _find_pack_offer
                         offer = _find_pack_offer(pack_id_int)
                         if offer:
                             msg = await bot.send_message(
@@ -451,7 +455,7 @@ async def poll_payment_status(
 
                     if application is not None:
                         try:
-                            from prismalab.bot import (
+                            from prismalab.config import (
                                 USERDATA_MODE,
                                 USERDATA_PERSONA_PHOTOS,
                                 USERDATA_PERSONA_SELECTED_PACK_ID,
@@ -469,7 +473,8 @@ async def poll_payment_status(
                             logger.warning("Не удалось установить user_data для пака: %s", e)
 
                     try:
-                        from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
+                        from prismalab.keyboards import _persona_rules_keyboard
+                        from prismalab.messages import PERSONA_RULES_MESSAGE
                         await bot.send_message(
                             chat_id=chat_id,
                             text=PERSONA_RULES_MESSAGE,
@@ -600,7 +605,9 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
             try:
                 from html import escape
 
-                from prismalab.bot import _find_pack_offer, _persona_training_keyboard, _run_persona_pack_generation
+                from prismalab.bot import _run_persona_pack_generation
+                from prismalab.keyboards import _persona_training_keyboard
+                from prismalab.pack_offers import _find_pack_offer
                 offer = _find_pack_offer(pack_id_int)
                 if offer:
                     msg = await bot.send_message(
@@ -648,7 +655,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
 
             if application is not None:
                 try:
-                    from prismalab.bot import (
+                    from prismalab.config import (
                         USERDATA_MODE,
                         USERDATA_PERSONA_PHOTOS,
                         USERDATA_PERSONA_SELECTED_PACK_ID,
@@ -667,7 +674,8 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
 
             if chat_id:
                 try:
-                    from prismalab.bot import PERSONA_RULES_MESSAGE, _persona_rules_keyboard
+                    from prismalab.keyboards import _persona_rules_keyboard
+                    from prismalab.messages import PERSONA_RULES_MESSAGE
                     await bot.send_message(
                         chat_id=int(chat_id),
                         text=PERSONA_RULES_MESSAGE,
@@ -783,7 +791,8 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
                     if not isinstance(prompts, list):
                         return web.Response(status=400, text="Expected JSON array")
                     from prismalab.astria_client import collect_prompt_image_urls
-                    from prismalab.bot import _find_pack_offer, _safe_send_document
+                    from prismalab.telegram_utils import _safe_send_document
+                    from prismalab.pack_offers import _find_pack_offer
                     urls = collect_prompt_image_urls(prompts)
                     if not urls:
                         logger.info("Astria pack callback: no images in prompts")
@@ -819,7 +828,8 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
                         store.log_event(user_id, "pack_callback", {"pack_id": pack_id, "images_sent": sent_count})
                     except Exception:
                         pass
-                    from prismalab.bot import _photoset_done_keyboard, _photoset_done_message, _photoset_retry_keyboard
+                    from prismalab.keyboards import _photoset_done_keyboard, _photoset_retry_keyboard
+                    from prismalab.messages import _photoset_done_message
                     if sent_count > 0:
                         done_text = _photoset_done_message(include_gift=False)
                         await bot.send_message(
