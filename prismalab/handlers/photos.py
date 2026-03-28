@@ -303,6 +303,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
         return
 
+    # DB-fallback: если mode потерян (рестарт, /menu), но в БД есть оплаченная персона без модели
+    if mode != "persona":
+        _fb_profile = _bot.store.get_user(user_id)
+        _fb_credits = getattr(_fb_profile, "persona_credits_remaining", 0) or 0
+        _fb_pending = getattr(_fb_profile, "astria_lora_tune_id_pending", None)
+        _fb_has_pending_pack = _use_unified_pack_persona_flow() and _bot.store.get_pending_pack_upload(user_id) is not None
+        if (_fb_credits > 0 or _fb_has_pending_pack) and not _fb_profile.astria_lora_tune_id:
+            context.user_data[USERDATA_MODE] = "persona"
+            if _fb_pending:
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+                await update.message.reply_text(
+                    PERSONA_TRAINING_MESSAGE,
+                    reply_markup=_persona_training_keyboard(),
+                )
+            else:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
+                ])
+                await update.message.reply_text("Правила прочитали? 🫶", reply_markup=kb)
+            return
+
     # Режим fast или fallback: есть генерации — обрабатываем как Быстрое фото
     user_id = int(update.effective_user.id) if update.effective_user else 0
     profile = _bot.store.get_user(user_id)
@@ -531,6 +552,28 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
         return
+
+    # DB-fallback: если mode потерян (рестарт, /menu), но в БД есть оплаченная персона без модели
+    if mode != "persona":
+        _fb_uid = int(update.effective_user.id) if update.effective_user else 0
+        _fb_profile = _bot.store.get_user(_fb_uid)
+        _fb_credits = getattr(_fb_profile, "persona_credits_remaining", 0) or 0
+        _fb_pending = getattr(_fb_profile, "astria_lora_tune_id_pending", None)
+        _fb_has_pending_pack = _use_unified_pack_persona_flow() and _bot.store.get_pending_pack_upload(_fb_uid) is not None
+        if (_fb_credits > 0 or _fb_has_pending_pack) and not _fb_profile.astria_lora_tune_id:
+            context.user_data[USERDATA_MODE] = "persona"
+            if _fb_pending:
+                context.user_data[USERDATA_PERSONA_TRAINING_STATUS] = "training"
+                await update.message.reply_text(
+                    PERSONA_TRAINING_MESSAGE,
+                    reply_markup=_persona_training_keyboard(),
+                )
+            else:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Да, всё понятно!", callback_data="pl_persona_got_it")],
+                ])
+                await update.message.reply_text("Правила прочитали? 🫶", reply_markup=kb)
+            return
 
     # Режим fast или fallback: есть генерации — обрабатываем как Быстрое фото
     _user_id = int(update.effective_user.id) if update.effective_user else 0
