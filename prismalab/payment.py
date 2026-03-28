@@ -410,7 +410,7 @@ async def poll_payment_status(
                     try:
                         from html import escape
 
-                        from prismalab.bot import _run_persona_pack_generation
+                        from prismalab.handlers.packs import _run_persona_pack_generation
                         from prismalab.keyboards import _persona_training_keyboard
                         from prismalab.pack_offers import _find_pack_offer
                         offer = _find_pack_offer(pack_id_int)
@@ -610,7 +610,7 @@ async def handle_webhook(body: bytes, bot: Any, store: Any, application: Any = N
             try:
                 from html import escape
 
-                from prismalab.bot import _run_persona_pack_generation
+                from prismalab.handlers.packs import _run_persona_pack_generation
                 from prismalab.keyboards import _persona_training_keyboard
                 from prismalab.pack_offers import _find_pack_offer
                 offer = _find_pack_offer(pack_id_int)
