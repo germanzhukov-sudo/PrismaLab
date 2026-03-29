@@ -2539,3 +2539,160 @@ class PrismaLabStore:
                 )
                 conn.commit()
                 return cur.rowcount > 0
+
+    def swap_express_style_order(self, style_id_a: int, style_id_b: int) -> bool:
+        """Поменять sort_order двух экспресс-стилей местами."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"SELECT id, sort_order FROM {self._express_styles_table} WHERE id IN (%s, %s)",
+                        (int(style_id_a), int(style_id_b)),
+                    )
+                    rows = cur.fetchall()
+                    if len(rows) != 2:
+                        return False
+                    a, b = rows[0], rows[1]
+                    cur.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = %s, updated_at = NOW() WHERE id = %s",
+                        (b["sort_order"], a["id"]),
+                    )
+                    cur.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = %s, updated_at = NOW() WHERE id = %s",
+                        (a["sort_order"], b["id"]),
+                    )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"SELECT id, sort_order FROM {self._express_styles_table} WHERE id IN (?, ?)",
+                    (int(style_id_a), int(style_id_b)),
+                ).fetchall()
+                if len(rows) != 2:
+                    return False
+                a, b = dict(rows[0]), dict(rows[1])
+                conn.execute(
+                    f"UPDATE {self._express_styles_table} SET sort_order = ? WHERE id = ?",
+                    (b["sort_order"], a["id"]),
+                )
+                conn.execute(
+                    f"UPDATE {self._express_styles_table} SET sort_order = ? WHERE id = ?",
+                    (a["sort_order"], b["id"]),
+                )
+                conn.commit()
+        self._renumber_express_styles()
+        return True
+
+    def _renumber_express_styles(self) -> None:
+        """Перенумеровать sort_order всех экспресс-стилей подряд 1, 2, 3, ..."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT id FROM {self._express_styles_table} ORDER BY sort_order, id")
+                    rows = cur.fetchall()
+                    for i, row in enumerate(rows, start=1):
+                        cur.execute(
+                            f"UPDATE {self._express_styles_table} SET sort_order = %s WHERE id = %s",
+                            (i, row["id"]),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    f"SELECT id FROM {self._express_styles_table} ORDER BY sort_order, id"
+                ).fetchall()
+                for i, row in enumerate(rows, start=1):
+                    conn.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = ? WHERE id = ?",
+                        (i, row["id"]),
+                    )
+                conn.commit()
+
+    def _shift_express_style_sort_order(self, sort_order: int, exclude_id: int | None = None) -> None:
+        """Сдвинуть sort_order >= заданного на +1, чтобы освободить место."""
+        if self._use_pg:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    if exclude_id is not None:
+                        cur.execute(
+                            f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= %s AND id != %s",
+                            (int(sort_order), int(exclude_id)),
+                        )
+                    else:
+                        cur.execute(
+                            f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= %s",
+                            (int(sort_order),),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                if exclude_id is not None:
+                    conn.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= ? AND id != ?",
+                        (int(sort_order), int(exclude_id)),
+                    )
+                else:
+                    conn.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 WHERE sort_order >= ?",
+                        (int(sort_order),),
+                    )
+                conn.commit()
+
+    def move_express_style_to_order(self, style_id: int, new_order: int) -> None:
+        """Переместить стиль на позицию new_order (directional shift).
+
+        Move up (old=4 → new=2): сдвинуть [new..old-1] на +1, поставить style на new.
+        Move down (old=2 → new=4): сдвинуть [old+1..new] на -1, поставить style на new.
+        """
+        sid = int(style_id)
+        existing = self.get_express_style(sid)
+        if not existing:
+            return
+        old_order = existing.get("sort_order", 0) or 0
+        if old_order == new_order:
+            return
+
+        if self._use_pg:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    if new_order < old_order:
+                        # Move up: shift [new..old-1] → +1
+                        cur.execute(
+                            f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 "
+                            f"WHERE sort_order >= %s AND sort_order < %s AND id != %s",
+                            (new_order, old_order, sid),
+                        )
+                    else:
+                        # Move down: shift [old+1..new] → -1
+                        cur.execute(
+                            f"UPDATE {self._express_styles_table} SET sort_order = sort_order - 1 "
+                            f"WHERE sort_order > %s AND sort_order <= %s AND id != %s",
+                            (old_order, new_order, sid),
+                        )
+                    cur.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = %s, updated_at = NOW() WHERE id = %s",
+                        (new_order, sid),
+                    )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                if new_order < old_order:
+                    conn.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = sort_order + 1 "
+                        f"WHERE sort_order >= ? AND sort_order < ? AND id != ?",
+                        (new_order, old_order, sid),
+                    )
+                else:
+                    conn.execute(
+                        f"UPDATE {self._express_styles_table} SET sort_order = sort_order - 1 "
+                        f"WHERE sort_order > ? AND sort_order <= ? AND id != ?",
+                        (old_order, new_order, sid),
+                    )
+                conn.execute(
+                    f"UPDATE {self._express_styles_table} SET sort_order = ? WHERE id = ?",
+                    (new_order, sid),
+                )
+                conn.commit()
+        self._renumber_express_styles()

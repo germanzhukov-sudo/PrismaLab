@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}{% if style %}Редактировать{% else %}Новый{% endif %} экспресс-стиль — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>
+        <i class="bi bi-lightning me-2"></i>
+        {% if style %}Редактировать экспресс-стиль{% else %}Новый экспресс-стиль{% endif %}
+    </h2>
+    <a href="{{ admin_base }}/express-styles" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Назад
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="POST" action="{{ admin_base }}/express-styles/save" enctype="multipart/form-data">
+                    {% if style %}
+                    <input type="hidden" name="style_id" value="{{ style.id }}">
+                    <input type="hidden" name="existing_image_url" value="{{ style.image_url or '' }}">
+                    {% endif %}
+
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">Название</label>
+                            <input type="text" class="form-control" name="title"
+                                   value="{{ style.title if style else '' }}"
+                                   placeholder="Вечерний гламур" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Эмодзи</label>
+                            <input type="text" class="form-control" name="emoji"
+                                   value="{{ style.emoji if style else '' }}"
+                                   placeholder="✨" maxlength="4">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Промт для генерации</label>
+                        <textarea class="form-control font-monospace" name="prompt" rows="5"
+                                  placeholder="IDENTICAL FACE AND FEATURES from reference photo...">{{ style.prompt if style else '' }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Негативный промт</label>
+                        <textarea class="form-control font-monospace" name="negative_prompt" rows="2"
+                                  placeholder="blurry, bad quality, deformed...">{{ style.negative_prompt if style else '' }}</textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Пол</label>
+                            <select class="form-select" name="gender">
+                                <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
+                                <option value="male" {% if style and style.gender == 'male' %}selected{% endif %}>Male</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Тема</label>
+                            <input type="text" class="form-control" name="theme"
+                                   value="{{ style.theme if style else 'lifestyle' }}"
+                                   placeholder="lifestyle" list="theme-list">
+                            <datalist id="theme-list">
+                                <option value="lifestyle">
+                                <option value="glamour">
+                                <option value="mood">
+                                <option value="beauty">
+                                <option value="creative">
+                                <option value="outdoor">
+                                <option value="business">
+                            </datalist>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Провайдер</label>
+                            <select class="form-select" name="provider">
+                                <option value="seedream" {% if style and style.provider == 'seedream' %}selected{% endif %}>seedream</option>
+                                <option value="nano-banana-pro" {% if style and style.provider == 'nano-banana-pro' %}selected{% endif %}>nano-banana-pro</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Порядок</label>
+                            <input type="number" class="form-control" name="sort_order"
+                                   value="{{ style.sort_order if style else 1 }}" min="1">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">model_params (JSON)</label>
+                        <textarea class="form-control font-monospace" name="model_params" rows="2"
+                                  placeholder='{"resolution": "4K"}'>{{ style.model_params if style else '' }}</textarea>
+                        <small class="text-muted">Override параметров KIE API. Пусто = дефолты провайдера.</small>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Картинка</label>
+                            {% if style and style.image_url %}
+                            <div class="mb-2">
+                                <img src="{{ style.image_url }}" alt="{{ style.title }}"
+                                     style="max-width: 200px; max-height: 200px; object-fit: cover; border-radius: 12px;">
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" name="image" accept="image/*">
+                            <small class="text-muted">JPG/PNG, рекомендуемый размер 400x600px.</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Статус</label>
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                                       {% if not style or style.is_active %}checked{% endif %}>
+                                <label class="form-check-label">Активен</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>
+                        {% if style %}Сохранить{% else %}Создать{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Подсказка
+            </div>
+            <div class="card-body">
+                <p><strong>Провайдер</strong> — seedream (быстрый, JPEG) или nano-banana-pro (качественный, PNG).</p>
+                <p><strong>Тема</strong> — группировка стилей в Mini App (lifestyle, glamour, mood, beauty, creative, outdoor).</p>
+                <p><strong>model_params</strong> — JSON для override KIE параметров. Например <code>{"resolution": "4K"}</code> для nano.</p>
+                <p class="mb-0"><strong>Slug</strong> — генерируется автоматически из названия.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

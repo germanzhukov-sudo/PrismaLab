@@ -912,6 +912,187 @@ async def persona_style_delete(request: Request):
     return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?deleted=1", status_code=303)
 
 
+# ========== Экспресс-стили ==========
+
+@require_auth
+async def express_styles_page(request: Request):
+    """Список экспресс-стилей с фильтрами."""
+    store = get_store()
+    filter_gender = request.query_params.get("gender", "").strip()
+    filter_theme = request.query_params.get("theme", "").strip()
+    filter_provider = request.query_params.get("provider", "").strip()
+    saved = request.query_params.get("saved") == "1"
+    deleted = request.query_params.get("deleted") == "1"
+
+    styles = store.get_express_styles(
+        gender=filter_gender or None,
+        active_only=False,
+    )
+
+    # Фильтр по теме и провайдеру (в storage нет этих фильтров)
+    if filter_theme:
+        styles = [s for s in styles if s.get("theme") == filter_theme]
+    if filter_provider:
+        styles = [s for s in styles if (s.get("provider") or "seedream") == filter_provider]
+
+    # Уникальные темы для фильтра
+    all_styles = store.get_express_styles(active_only=False)
+    themes = sorted(set(s.get("theme", "") for s in all_styles if s.get("theme")))
+
+    return templates.TemplateResponse("express_styles.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "styles": styles,
+        "themes": themes,
+        "filter_gender": filter_gender,
+        "filter_theme": filter_theme,
+        "filter_provider": filter_provider,
+        "saved": saved,
+        "deleted": deleted,
+    })
+
+
+@require_auth
+async def express_style_form(request: Request):
+    """Форма создания/редактирования экспресс-стиля."""
+    style_id = request.path_params.get("style_id")
+    store = get_store()
+    style = None
+    if style_id:
+        style = store.get_express_style(int(style_id))
+        if not style:
+            return RedirectResponse(url=f"{ADMIN_BASE}/express-styles", status_code=302)
+
+    return templates.TemplateResponse("express_style_form.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "style": style,
+    })
+
+
+@require_auth
+async def express_style_save(request: Request):
+    """Сохранение экспресс-стиля (создание или обновление)."""
+    store = get_store()
+    form = await request.form()
+
+    style_id = form.get("style_id", "").strip()
+    title = form.get("title", "").strip()
+    emoji = form.get("emoji", "").strip()
+    prompt = form.get("prompt", "").strip()
+    negative_prompt = form.get("negative_prompt", "").strip()
+    gender = form.get("gender", "female")
+    theme = form.get("theme", "lifestyle").strip()
+    provider = form.get("provider", "seedream")
+    model_params = form.get("model_params", "").strip()
+    sort_order = int(form.get("sort_order", 0) or 0)
+    is_active = form.get("is_active") == "1"
+
+    # Auto-generate slug from title
+    import re
+    import time as _time
+    _translit = {"а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"}
+    slug = "".join(_translit.get(c, c) for c in title.lower())
+    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_") or f"express_{int(_time.time())}"
+
+    # Обработка загрузки картинки
+    image_url = form.get("existing_image_url", "").strip()
+    image_file = form.get("image")
+    if image_file and hasattr(image_file, "read"):
+        file_bytes = await image_file.read()
+        if file_bytes and len(file_bytes) > 0:
+            from prismalab.supabase_storage import upload_image
+            content_type = getattr(image_file, "content_type", "image/jpeg") or "image/jpeg"
+            filename = getattr(image_file, "filename", "style.jpg") or "style.jpg"
+            new_url = upload_image(file_bytes, filename, content_type)
+            if new_url:
+                if image_url:
+                    from prismalab.supabase_storage import delete_image
+                    delete_image(image_url)
+                image_url = new_url
+
+    if style_id:
+        existing = store.get_express_style(int(style_id))
+        old_sort = existing.get("sort_order", 0) if existing else 0
+        old_slug = existing.get("slug", "") if existing else ""
+        if sort_order != old_sort:
+            store.move_express_style_to_order(int(style_id), sort_order)
+        # При edit сохраняем старый slug если title не менялся (стабильный id в API)
+        if old_slug and existing and existing.get("title") == title:
+            slug = old_slug
+        else:
+            # Title изменился → проверяем уникальность нового slug
+            base_slug = slug
+            counter = 1
+            conflict = store.get_express_style_by_slug(slug)
+            while conflict and conflict.get("id") != int(style_id):
+                slug = f"{base_slug}_{counter}"
+                counter += 1
+                conflict = store.get_express_style_by_slug(slug)
+        store.update_express_style(
+            int(style_id),
+            slug=slug, title=title, emoji=emoji,
+            prompt=prompt, negative_prompt=negative_prompt,
+            gender=gender, theme=theme, provider=provider,
+            model_params=model_params, image_url=image_url,
+            sort_order=sort_order, is_active=is_active,
+        )
+        store._renumber_express_styles()
+    else:
+        if not title:
+            return RedirectResponse(url=f"{ADMIN_BASE}/express-styles/new", status_code=302)
+        # Уникальный slug — добавляем суффикс при коллизии
+        base_slug = slug
+        counter = 1
+        while store.get_express_style_by_slug(slug):
+            slug = f"{base_slug}_{counter}"
+            counter += 1
+        store._shift_express_style_sort_order(sort_order)
+        store.create_express_style(
+            slug=slug, title=title, emoji=emoji,
+            prompt=prompt, negative_prompt=negative_prompt,
+            gender=gender, theme=theme, provider=provider,
+            model_params=model_params, image_url=image_url,
+            sort_order=sort_order,
+        )
+        store._renumber_express_styles()
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-styles?saved=1", status_code=303)
+
+
+@require_auth
+async def express_style_move(request: Request):
+    """Переместить экспресс-стиль вверх/вниз."""
+    style_id = int(request.path_params["style_id"])
+    direction = request.path_params.get("direction", "")
+    store = get_store()
+
+    styles = store.get_express_styles()
+    idx = next((i for i, s in enumerate(styles) if s["id"] == style_id), None)
+    if idx is not None:
+        if direction == "up" and idx > 0:
+            store.swap_express_style_order(styles[idx]["id"], styles[idx - 1]["id"])
+        elif direction == "down" and idx < len(styles) - 1:
+            store.swap_express_style_order(styles[idx]["id"], styles[idx + 1]["id"])
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-styles", status_code=303)
+
+
+@require_auth
+async def express_style_delete(request: Request):
+    """Удаление экспресс-стиля."""
+    style_id = int(request.path_params["style_id"])
+    store = get_store()
+
+    style = store.get_express_style(style_id)
+    if style and style.get("image_url"):
+        from prismalab.supabase_storage import delete_image
+        delete_image(style["image_url"])
+
+    store.delete_express_style(style_id)
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-styles?deleted=1", status_code=303)
+
+
 routes = [
     Route("/admin", dashboard, methods=["GET"]),  # без слэша — тот же дашборд
     Route("/admin/", dashboard, methods=["GET"]),
@@ -937,6 +1118,12 @@ routes = [
     Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
     Route("/admin/persona-styles/{style_id:int}/move/{direction}", persona_style_move, methods=["POST"]),
     Route("/admin/persona-styles/{style_id:int}/delete", persona_style_delete, methods=["POST"]),
+    Route("/admin/express-styles", express_styles_page, methods=["GET"]),
+    Route("/admin/express-styles/new", express_style_form, methods=["GET"]),
+    Route("/admin/express-styles/{style_id:int}/edit", express_style_form, methods=["GET"]),
+    Route("/admin/express-styles/save", express_style_save, methods=["POST"]),
+    Route("/admin/express-styles/{style_id:int}/move/{direction}", express_style_move, methods=["POST"]),
+    Route("/admin/express-styles/{style_id:int}/delete", express_style_delete, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
     Route("/admin/api/chart", api_chart_data, methods=["GET"]),
     Mount("/admin/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static"),

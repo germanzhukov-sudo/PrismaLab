@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Экспресс-стили — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-lightning me-2"></i>Экспресс-стили</h2>
+    <a href="{{ admin_base }}/express-styles/new" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-1"></i>Добавить стиль
+    </a>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Стиль сохранён
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if deleted %}
+<div class="alert alert-warning alert-dismissible fade show" role="alert">
+    <i class="bi bi-trash me-2"></i>Стиль удалён
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<!-- Фильтры -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="GET" class="row g-2 align-items-center">
+            <div class="col-auto">
+                <select class="form-select form-select-sm" name="gender" onchange="this.form.submit()">
+                    <option value="">Все</option>
+                    <option value="female" {% if filter_gender == 'female' %}selected{% endif %}>Female</option>
+                    <option value="male" {% if filter_gender == 'male' %}selected{% endif %}>Male</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <select class="form-select form-select-sm" name="theme" onchange="this.form.submit()">
+                    <option value="">Все темы</option>
+                    {% for t in themes %}
+                    <option value="{{ t }}" {% if filter_theme == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <select class="form-select form-select-sm" name="provider" onchange="this.form.submit()">
+                    <option value="">Все провайдеры</option>
+                    <option value="seedream" {% if filter_provider == 'seedream' %}selected{% endif %}>seedream</option>
+                    <option value="nano-banana-pro" {% if filter_provider == 'nano-banana-pro' %}selected{% endif %}>nano-banana-pro</option>
+                </select>
+            </div>
+            <div class="col-auto text-muted">
+                <small>{{ styles|length }} стилей</small>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th style="width: 50px">№</th>
+                    <th style="width: 70px">Фото</th>
+                    <th>Название</th>
+                    <th>Тема</th>
+                    <th>Пол</th>
+                    <th>Провайдер</th>
+                    <th>Статус</th>
+                    <th style="width: 200px">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in styles %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>
+                        {% if s.image_url %}
+                        <img src="{{ s.image_url }}" alt="" style="width: 45px; height: 45px; object-fit: cover; border-radius: 8px;">
+                        {% else %}
+                        <div style="width: 45px; height: 45px; background: #eee; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                            <span>{{ s.emoji or '🎨' }}</span>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ s.emoji }} {{ s.title }}</strong>
+                        <br><small class="text-muted font-monospace">{{ s.slug }}</small>
+                    </td>
+                    <td><span class="badge bg-light text-dark">{{ s.theme or '—' }}</span></td>
+                    <td>
+                        {% if s.gender == 'male' %}
+                        <span class="badge bg-primary">M</span>
+                        {% elif s.gender == 'female' %}
+                        <span class="badge bg-danger">F</span>
+                        {% else %}
+                        <span class="badge bg-secondary">{{ s.gender or '—' }}</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge bg-info text-dark">{{ s.provider or 'seedream' }}</span></td>
+                    <td>
+                        {% if s.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Off</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                        {% if not loop.first %}
+                        <form method="POST" action="{{ admin_base }}/express-styles/{{ s.id }}/move/up" style="display: inline">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" title="Вверх">
+                                <i class="bi bi-arrow-up"></i>
+                            </button>
+                        </form>
+                        {% else %}
+                        <button class="btn btn-sm btn-outline-secondary invisible"><i class="bi bi-arrow-up"></i></button>
+                        {% endif %}
+                        {% if not loop.last %}
+                        <form method="POST" action="{{ admin_base }}/express-styles/{{ s.id }}/move/down" style="display: inline">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" title="Вниз">
+                                <i class="bi bi-arrow-down"></i>
+                            </button>
+                        </form>
+                        {% else %}
+                        <button class="btn btn-sm btn-outline-secondary invisible"><i class="bi bi-arrow-down"></i></button>
+                        {% endif %}
+                        <a href="{{ admin_base }}/express-styles/{{ s.id }}/edit" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                        <form method="POST" action="{{ admin_base }}/express-styles/{{ s.id }}/delete"
+                              style="display: inline" onsubmit="return confirm('Удалить стиль «{{ s.title }}»?')">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not styles %}
+                <tr>
+                    <td colspan="8" class="text-center text-muted py-4">
+                        Стилей пока нет. <a href="{{ admin_base }}/express-styles/new">Добавить первый</a>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -316,6 +316,84 @@ def test_express_themes(store):
     assert sorted(active_themes) == ["glamour", "mood"]
 
 
+def test_express_styles_swap_and_renumber(store):
+    """swap_express_style_order + _renumber → contiguous 1..N."""
+    id1 = store.create_express_style(slug="s1", title="S1", sort_order=1)
+    id2 = store.create_express_style(slug="s2", title="S2", sort_order=2)
+    id3 = store.create_express_style(slug="s3", title="S3", sort_order=3)
+
+    # Swap s1 и s2
+    store.swap_express_style_order(id1, id2)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["s2", "s1", "s3"]
+
+    # Sort orders contiguous 1,2,3
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3]
+
+
+def test_express_styles_renumber_fills_gaps(store):
+    """_renumber_express_styles заполняет дыры в sort_order."""
+    store.create_express_style(slug="g1", title="G1", sort_order=1)
+    store.create_express_style(slug="g2", title="G2", sort_order=5)
+    store.create_express_style(slug="g3", title="G3", sort_order=10)
+
+    store._renumber_express_styles()
+
+    styles = store.get_express_styles()
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3]
+
+
+def test_express_styles_move_down(store):
+    """move_express_style_to_order: позиция 2→4 → стиль оказывается на 4."""
+    id1 = store.create_express_style(slug="m1", title="M1", sort_order=1)
+    id2 = store.create_express_style(slug="m2", title="M2", sort_order=2)
+    id3 = store.create_express_style(slug="m3", title="M3", sort_order=3)
+    id4 = store.create_express_style(slug="m4", title="M4", sort_order=4)
+    id5 = store.create_express_style(slug="m5", title="M5", sort_order=5)
+
+    # Двигаем m2 с позиции 2 на позицию 4
+    store.move_express_style_to_order(id2, 4)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["m1", "m3", "m4", "m2", "m5"]
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3, 4, 5]
+
+
+def test_express_styles_move_up(store):
+    """move_express_style_to_order: позиция 4→2 → стиль оказывается на 2."""
+    id1 = store.create_express_style(slug="u1", title="U1", sort_order=1)
+    id2 = store.create_express_style(slug="u2", title="U2", sort_order=2)
+    id3 = store.create_express_style(slug="u3", title="U3", sort_order=3)
+    id4 = store.create_express_style(slug="u4", title="U4", sort_order=4)
+
+    # Двигаем u4 с позиции 4 на позицию 2
+    store.move_express_style_to_order(id4, 2)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["u1", "u4", "u2", "u3"]
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3, 4]
+
+
+def test_express_styles_move_noop(store):
+    """move_express_style_to_order: same position → no change."""
+    id1 = store.create_express_style(slug="n1", title="N1", sort_order=1)
+    id2 = store.create_express_style(slug="n2", title="N2", sort_order=2)
+
+    store.move_express_style_to_order(id1, 1)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["n1", "n2"]
+
+
 def test_log_event(store):
     """log_event не падает."""
     store.get_user(1)
