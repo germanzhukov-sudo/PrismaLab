@@ -164,30 +164,41 @@ def test_persona_style_credit_cost_default(store):
 
 
 def test_express_styles_crud(store):
-    """express_styles — полный CRUD цикл."""
+    """express_styles — полный CRUD цикл с новыми полями."""
     # Create
     style_id = store.create_express_style(
         slug="night_bar",
         title="Ночной бар",
         emoji="🍸",
+        theme="lifestyle",
         gender="male",
         prompt="test prompt",
-        model="seedream",
+        negative_prompt="bad quality",
+        provider="seedream",
+        image_url="https://example.com/img.jpg",
+        model_params='{"quality": "hd"}',
         sort_order=1,
     )
     assert style_id is not None
 
-    # Read all
+    # Read all — проверяем все поля
     styles = store.get_express_styles()
     assert len(styles) == 1
-    assert styles[0]["slug"] == "night_bar"
-    assert styles[0]["emoji"] == "🍸"
-    assert styles[0]["model"] == "seedream"
+    s = styles[0]
+    assert s["slug"] == "night_bar"
+    assert s["emoji"] == "🍸"
+    assert s["theme"] == "lifestyle"
+    assert s["provider"] == "seedream"
+    assert s["model"] == "seedream"  # backward compat
+    assert s["negative_prompt"] == "bad quality"
+    assert s["image_url"] == "https://example.com/img.jpg"
+    assert s["model_params"] == '{"quality": "hd"}'
 
     # Read by id
     s = store.get_express_style(style_id)
     assert s is not None
     assert s["title"] == "Ночной бар"
+    assert s["provider"] == "seedream"
 
     # Read by slug
     s2 = store.get_express_style_by_slug("night_bar")
@@ -195,11 +206,15 @@ def test_express_styles_crud(store):
     assert s2["id"] == style_id
 
     # Update
-    ok = store.update_express_style(style_id, title="Night Bar", emoji="🌙")
+    ok = store.update_express_style(style_id, title="Night Bar", emoji="🌙",
+                                     provider="nano-banana-pro", theme="mood")
     assert ok is True
     s3 = store.get_express_style(style_id)
     assert s3["title"] == "Night Bar"
     assert s3["emoji"] == "🌙"
+    assert s3["provider"] == "nano-banana-pro"
+    assert s3["model"] == "nano-banana-pro"  # synced
+    assert s3["theme"] == "mood"
 
     # Delete
     ok = store.delete_express_style(style_id)
@@ -209,8 +224,8 @@ def test_express_styles_crud(store):
 
 def test_express_styles_filter_gender(store):
     """express_styles — фильтрация по полу."""
-    store.create_express_style(slug="male_1", title="Male Style", gender="male")
-    store.create_express_style(slug="female_1", title="Female Style", gender="female")
+    store.create_express_style(slug="male_1", title="Male Style", gender="male", theme="general")
+    store.create_express_style(slug="female_1", title="Female Style", gender="female", theme="general")
 
     males = store.get_express_styles(gender="male")
     assert len(males) == 1
@@ -235,22 +250,70 @@ def test_express_styles_active_filter(store):
 
 
 def test_express_styles_upsert(store):
-    """upsert_express_style — insert + update по slug."""
+    """upsert_express_style — insert + update по slug с новыми полями."""
     # Insert
-    sid1 = store.upsert_express_style(slug="upsert_test", title="V1", emoji="🔥", gender="female")
+    sid1 = store.upsert_express_style(
+        slug="upsert_test", title="V1", emoji="🔥", gender="female",
+        theme="glamour", provider="seedream",
+        negative_prompt="", image_url="", model_params="",
+    )
     assert sid1 is not None
     s1 = store.get_express_style(sid1)
     assert s1["title"] == "V1"
+    assert s1["theme"] == "glamour"
+    assert s1["provider"] == "seedream"
 
     # Upsert (update existing)
-    sid2 = store.upsert_express_style(slug="upsert_test", title="V2", emoji="✨", gender="female")
+    sid2 = store.upsert_express_style(
+        slug="upsert_test", title="V2", emoji="✨", gender="female",
+        theme="beauty", provider="nano-banana-pro",
+    )
     assert sid2 == sid1  # same id
     s2 = store.get_express_style(sid1)
     assert s2["title"] == "V2"
     assert s2["emoji"] == "✨"
+    assert s2["theme"] == "beauty"
+    assert s2["provider"] == "nano-banana-pro"
 
     # Only 1 row
     assert len(store.get_express_styles()) == 1
+
+
+def test_express_styles_backward_compat_model(store):
+    """Передача model= вместо provider= должна работать (backward compat)."""
+    sid = store.create_express_style(
+        slug="compat_test", title="Compat", gender="female", model="nano-banana-pro",
+    )
+    s = store.get_express_style(sid)
+    assert s["provider"] == "nano-banana-pro"
+    assert s["model"] == "nano-banana-pro"
+
+
+def test_express_themes(store):
+    """get_express_themes — distinct темы с фильтрацией."""
+    store.create_express_style(slug="t1", title="T1", gender="female", theme="glamour")
+    store.create_express_style(slug="t2", title="T2", gender="female", theme="mood")
+    store.create_express_style(slug="t3", title="T3", gender="female", theme="glamour")  # дубль
+    store.create_express_style(slug="t4", title="T4", gender="male", theme="outdoor")
+
+    # Все темы
+    themes = store.get_express_themes(active_only=False)
+    assert sorted(themes) == ["glamour", "mood", "outdoor"]
+
+    # Фильтр по gender
+    f_themes = store.get_express_themes(gender="female", active_only=False)
+    assert sorted(f_themes) == ["glamour", "mood"]
+
+    m_themes = store.get_express_themes(gender="male", active_only=False)
+    assert m_themes == ["outdoor"]
+
+    # active_only
+    store.update_express_style(
+        store.get_express_style_by_slug("t4")["id"], is_active=0,
+    )
+    active_themes = store.get_express_themes(active_only=True)
+    assert "outdoor" not in active_themes
+    assert sorted(active_themes) == ["glamour", "mood"]
 
 
 def test_log_event(store):

@@ -946,9 +946,14 @@ class PrismaLabStore:
                             slug TEXT UNIQUE NOT NULL,
                             title TEXT NOT NULL,
                             emoji TEXT DEFAULT '',
+                            theme TEXT NOT NULL DEFAULT 'general',
                             gender TEXT NOT NULL DEFAULT 'female',
                             prompt TEXT,
+                            negative_prompt TEXT,
+                            provider TEXT NOT NULL DEFAULT 'seedream',
                             model TEXT DEFAULT 'seedream',
+                            image_url TEXT,
+                            model_params TEXT,
                             sort_order INTEGER DEFAULT 0,
                             is_active BOOLEAN DEFAULT TRUE,
                             created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -956,6 +961,29 @@ class PrismaLabStore:
                         )
                     """)
                     conn.commit()
+                    # Миграции express_styles: новые колонки для существующих таблиц
+                    for col, col_def in [
+                        ("theme", "TEXT NOT NULL DEFAULT 'general'"),
+                        ("provider", "TEXT NOT NULL DEFAULT 'seedream'"),
+                        ("negative_prompt", "TEXT"),
+                        ("image_url", "TEXT"),
+                        ("model_params", "TEXT"),
+                    ]:
+                        try:
+                            cur.execute(f"ALTER TABLE {self._express_styles_table} ADD COLUMN {col} {col_def}")
+                            conn.commit()
+                        except Exception:
+                            conn.rollback()
+                    # Миграция: model → provider (one-time)
+                    try:
+                        cur.execute(f"""
+                            UPDATE {self._express_styles_table}
+                            SET provider = model
+                            WHERE (provider IS NULL OR provider = '') AND model IS NOT NULL AND model != ''
+                        """)
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
                     # Добавить prompt в persona_styles если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN prompt TEXT")
@@ -1094,15 +1122,41 @@ class PrismaLabStore:
                         slug TEXT UNIQUE NOT NULL,
                         title TEXT NOT NULL,
                         emoji TEXT DEFAULT '',
+                        theme TEXT NOT NULL DEFAULT 'general',
                         gender TEXT NOT NULL DEFAULT 'female',
                         prompt TEXT,
+                        negative_prompt TEXT,
+                        provider TEXT NOT NULL DEFAULT 'seedream',
                         model TEXT DEFAULT 'seedream',
+                        image_url TEXT,
+                        model_params TEXT,
                         sort_order INTEGER DEFAULT 0,
                         is_active INTEGER DEFAULT 1,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # Миграции express_styles (SQLite)
+                for col, col_def in [
+                    ("theme", "TEXT NOT NULL DEFAULT 'general'"),
+                    ("provider", "TEXT NOT NULL DEFAULT 'seedream'"),
+                    ("negative_prompt", "TEXT"),
+                    ("image_url", "TEXT"),
+                    ("model_params", "TEXT"),
+                ]:
+                    try:
+                        conn.execute(f"ALTER TABLE {self._express_styles_table} ADD COLUMN {col} {col_def}")
+                    except Exception:
+                        pass
+                # Миграция: model → provider (one-time)
+                try:
+                    conn.execute(f"""
+                        UPDATE {self._express_styles_table}
+                        SET provider = model
+                        WHERE (provider IS NULL OR provider = '') AND model IS NOT NULL AND model != ''
+                    """)
+                except Exception:
+                    pass
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -2352,15 +2406,44 @@ class PrismaLabStore:
                 ).fetchone()
                 return dict(row) if row else None
 
+    def get_express_themes(self, *, gender: str | None = None, active_only: bool = True) -> list[str]:
+        """Получить список уникальных тем экспресс-стилей (для drill-down)."""
+        conditions = []
+        params: list = []
+        if active_only:
+            conditions.append("is_active = " + ("TRUE" if self._use_pg else "1"))
+        if gender:
+            conditions.append("gender = %s")
+            params.append(gender)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT DISTINCT theme FROM {self._express_styles_table}{where} ORDER BY theme"
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, params)
+                    return [row["theme"] for row in cur.fetchall()]
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql.replace("%s", "?"), params).fetchall()
+                return [row["theme"] if isinstance(row, dict) else row[0] for row in rows]
+
     def create_express_style(self, *, slug: str, title: str, emoji: str = "",
-                             gender: str = "female", prompt: str = "",
-                             model: str = "seedream", sort_order: int = 0) -> int | None:
+                             theme: str = "general", gender: str = "female",
+                             prompt: str = "", negative_prompt: str = "",
+                             provider: str = "", image_url: str = "",
+                             model_params: str = "", sort_order: int = 0,
+                             # backward compat: model= falls back to provider
+                             model: str = "") -> int | None:
         """Создать экспресс-стиль. Возвращает id."""
+        actual_provider = provider or model or "seedream"
         sql = f"""
-            INSERT INTO {self._express_styles_table} (slug, title, emoji, gender, prompt, model, sort_order)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO {self._express_styles_table}
+            (slug, title, emoji, theme, gender, prompt, negative_prompt, provider, model, image_url, model_params, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        params = (slug, title, emoji, gender, prompt, model, int(sort_order))
+        params = (slug, title, emoji, theme, gender, prompt, negative_prompt,
+                  actual_provider, actual_provider, image_url, model_params, int(sort_order))
         if self._use_pg:
             with self._connect() as conn:
                 from psycopg2.extras import RealDictCursor
@@ -2377,10 +2460,14 @@ class PrismaLabStore:
 
     def update_express_style(self, style_id: int, **kwargs) -> bool:
         """Обновить экспресс-стиль."""
-        allowed = {"slug", "title", "emoji", "gender", "prompt", "model", "sort_order", "is_active"}
+        allowed = {"slug", "title", "emoji", "theme", "gender", "prompt", "negative_prompt",
+                   "provider", "model", "image_url", "model_params", "sort_order", "is_active"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return False
+        # Если передан provider — синхронизируем model для совместимости
+        if "provider" in fields and "model" not in fields:
+            fields["model"] = fields["provider"]
         if self._use_pg:
             fields["updated_at"] = "NOW()"
         set_parts = []
@@ -2411,18 +2498,27 @@ class PrismaLabStore:
                 return cur.rowcount > 0
 
     def upsert_express_style(self, *, slug: str, title: str, emoji: str = "",
-                              gender: str = "female", prompt: str = "",
-                              model: str = "seedream", sort_order: int = 0) -> int | None:
+                              theme: str = "general", gender: str = "female",
+                              prompt: str = "", negative_prompt: str = "",
+                              provider: str = "seedream", image_url: str = "",
+                              model_params: str = "", sort_order: int = 0,
+                              model: str = "") -> int | None:
         """Upsert экспресс-стиля по slug (для сидера). Возвращает id."""
         existing = self.get_express_style_by_slug(slug)
         if existing:
-            self.update_express_style(existing["id"], title=title, emoji=emoji,
-                                      gender=gender, prompt=prompt, model=model,
-                                      sort_order=sort_order)
+            self.update_express_style(
+                existing["id"], title=title, emoji=emoji, theme=theme,
+                gender=gender, prompt=prompt, negative_prompt=negative_prompt,
+                provider=provider or model or "seedream", image_url=image_url,
+                model_params=model_params, sort_order=sort_order,
+            )
             return existing["id"]
-        return self.create_express_style(slug=slug, title=title, emoji=emoji,
-                                         gender=gender, prompt=prompt, model=model,
-                                         sort_order=sort_order)
+        return self.create_express_style(
+            slug=slug, title=title, emoji=emoji, theme=theme,
+            gender=gender, prompt=prompt, negative_prompt=negative_prompt,
+            provider=provider or model or "seedream", image_url=image_url,
+            model_params=model_params, sort_order=sort_order,
+        )
 
     def delete_express_style(self, style_id: int) -> bool:
         """Удалить экспресс-стиль."""
