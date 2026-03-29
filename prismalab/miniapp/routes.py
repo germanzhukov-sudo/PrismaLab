@@ -740,6 +740,120 @@ async def api_track(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ========== API V2 — Express & Photosets ==========
+
+
+async def api_v2_express_themes(request: Request):
+    """V2: Список тем экспресс-стилей."""
+    from .services.express import get_themes
+
+    user = _get_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    gender = request.query_params.get("gender", "")
+    store = get_store()
+    themes = get_themes(store, gender=gender or None)
+    return JSONResponse({"themes": themes, "gender": gender})
+
+
+async def api_v2_express_styles(request: Request):
+    """V2: Каталог экспресс-стилей (из БД с fallback)."""
+    from .services.express import get_styles
+
+    user = _get_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    gender = request.query_params.get("gender", "female")
+    theme = request.query_params.get("theme", "")
+    store = get_store()
+    styles = get_styles(store, gender=gender, theme=theme or None)
+    return JSONResponse({
+        "styles": [s.to_api_dict() for s in styles],
+        "gender": gender,
+        "theme": theme,
+    })
+
+
+async def api_v2_express_generate(request: Request):
+    """V2: Генерация экспресс-фото (поддержка провайдеров из БД)."""
+    from .services.express import resolve_style
+
+    form = await request.form()
+    init_data = form.get("init_data", "")
+
+    user = validate_init_data(str(init_data), BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    user_id = user["user_id"]
+    style_slug = str(form.get("style_id", "") or form.get("style_slug", "")).strip()
+    photo = form.get("photo")
+
+    if not style_slug:
+        return JSONResponse({"error": "No style selected"}, status_code=400)
+    if not photo:
+        return JSONResponse({"error": "No photo uploaded"}, status_code=400)
+
+    # Проверяем что стиль существует и активен
+    store = get_store()
+    resolved = resolve_style(store, style_slug)
+    if not resolved:
+        return JSONResponse({"error": "Style not found or inactive"}, status_code=404)
+
+    # Проверяем кредиты
+    profile = store.get_user(user_id)
+    has_free = not profile.free_generation_used
+    has_paid = profile.paid_generations_remaining > 0
+
+    if not has_free and not has_paid:
+        return JSONResponse({"error": "no_credits", "message": "Нет кредитов"}, status_code=402)
+
+    # Читаем фото
+    photo_bytes = await photo.read()
+    if len(photo_bytes) > 15 * 1024 * 1024:
+        return JSONResponse({"error": "Photo too large (max 15MB)"}, status_code=413)
+
+    # Создаём задачу генерации
+    task_id = str(uuid.uuid4())[:8]
+    _generation_tasks[task_id] = {
+        "status": "processing",
+        "user_id": user_id,
+        "style_id": style_slug,
+        "result_url": None,
+        "error": None,
+    }
+
+    asyncio.get_event_loop().create_task(
+        _run_generation(task_id, user_id, style_slug, photo_bytes, has_free, profile)
+    )
+
+    return JSONResponse({
+        "task_id": task_id,
+        "status": "processing",
+        "provider": resolved.provider,
+    })
+
+
+async def api_v2_photosets(request: Request):
+    """V2: Список фотосетов (паков)."""
+    from .services.photosets import get_packs_list
+
+    user = _get_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY)
+
+    # Опциональный фильтр по category
+    category = request.query_params.get("category", "")
+    if category:
+        packs = [p for p in packs if p.get("category") == category]
+
+    return JSONResponse({"packs": packs})
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -759,6 +873,11 @@ routes = [
     Route("/app/api/persona/topup", api_persona_topup, methods=["POST"]),
     Route("/app/api/persona/generate", api_persona_generate, methods=["POST"]),
     Route("/app/api/track", api_track, methods=["POST"]),
+    # V2 endpoints
+    Route("/app/api/v2/express-themes", api_v2_express_themes, methods=["GET"]),
+    Route("/app/api/v2/express-styles", api_v2_express_styles, methods=["GET"]),
+    Route("/app/api/v2/express-generate", api_v2_express_generate, methods=["POST"]),
+    Route("/app/api/v2/photosets", api_v2_photosets, methods=["GET"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 
