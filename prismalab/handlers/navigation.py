@@ -39,6 +39,7 @@ from prismalab.config import (
 from prismalab.keyboards import (
     _examples_intro_keyboard,
     _examples_nav_keyboard,
+    _express_button,
     _express_button_label,
     _fast_gender_keyboard,
     _fast_style_choice_keyboard,
@@ -464,7 +465,7 @@ async def handle_start_examples_callback(update: Update, context: ContextTypes.D
         empty_rows: list[list[InlineKeyboardButton]] = []
         if MINIAPP_URL:
             empty_rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
-        empty_rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+        empty_rows.append([_express_button(profile)])
         empty_rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
         empty_kb = InlineKeyboardMarkup(empty_rows)
         await query.edit_message_text(
@@ -540,7 +541,7 @@ async def handle_start_tariffs_callback(update: Update, context: ContextTypes.DE
     rows = []
     if MINIAPP_URL:
         rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
-    rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+    rows.append([_express_button(profile)])
     rows.append([InlineKeyboardButton("Назад", callback_data="pl_fast_back")])
     kb = InlineKeyboardMarkup(rows)
     await query.edit_message_text(TARIFFS_MESSAGE, reply_markup=kb, parse_mode="HTML")
@@ -574,7 +575,7 @@ async def handle_start_faq_callback(update: Update, context: ContextTypes.DEFAUL
     rows = []
     if MINIAPP_URL:
         rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
-    rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+    rows.append([_express_button(profile)])
     rows.append([InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     kb = InlineKeyboardMarkup(rows)

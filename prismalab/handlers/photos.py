@@ -33,6 +33,7 @@ from prismalab.config import (
     _use_unified_pack_persona_flow,
 )
 from prismalab.keyboards import (
+    _express_button,
     _express_button_label,
     _fast_style_choice_keyboard,
     _fast_style_label,
@@ -287,7 +288,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
-                [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
+                [_express_button(profile)],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         else:
@@ -297,7 +298,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})],
-                [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
+                [_express_button(profile)],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
@@ -537,7 +538,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Создать новую Персону", callback_data="pl_persona_recreate")],
-                [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
+                [_express_button(_profile)],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         else:
@@ -547,7 +548,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})],
-                [InlineKeyboardButton(_express_button_label(_profile), callback_data="pl_start_fast")],
+                [_express_button(_profile)],
                 [InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")],
             ])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")

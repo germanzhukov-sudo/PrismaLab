@@ -76,6 +76,19 @@ def _is_dev_runtime() -> bool:
     return prefix.startswith("dev_")
 
 
+def miniapp_v2_enabled() -> bool:
+    """Feature flag: V2 Mini App UI (два раздела: Экспресс + Фотосеты).
+    Default: off (0). Включается MINIAPP_V2=1."""
+    raw = (os.getenv("MINIAPP_V2") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def express_via_miniapp() -> bool:
+    """Кнопка «Экспресс-фото» в боте ведёт в Mini App (вместо inline-кнопок).
+    Включается когда MINIAPP_V2=1 и MINIAPP_URL задан."""
+    return miniapp_v2_enabled() and bool(MINIAPP_URL)
+
+
 def packs_use_credits() -> bool:
     """Feature flag: паки покупаются за persona_credits вместо ₽.
     Default: off (0). Включается PACKS_USE_CREDITS=1."""

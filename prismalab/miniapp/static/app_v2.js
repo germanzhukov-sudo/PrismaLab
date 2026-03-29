@@ -54,6 +54,7 @@ const state = {
     photosetFilter: 'all',
     // General
     hasPersona: false,
+    packsUseCredits: false,
 };
 
 // === Telegram SDK ===

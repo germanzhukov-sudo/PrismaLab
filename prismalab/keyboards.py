@@ -7,7 +7,7 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from prismalab.config import MINIAPP_URL
+from prismalab.config import MINIAPP_URL, express_via_miniapp
 from prismalab.pack_offers import _pack_offers
 
 
@@ -22,6 +22,14 @@ def _express_button_label(profile: Any | None) -> str:
     return "⚡️ Экспресс-фото"
 
 
+def _express_button(profile: Any | None = None) -> InlineKeyboardButton:
+    """Кнопка Экспресс: web_app (если MINIAPP_V2=1) или callback (fallback)."""
+    label = _express_button_label(profile)
+    if express_via_miniapp():
+        return InlineKeyboardButton(label, web_app=WebAppInfo(url=MINIAPP_URL))
+    return InlineKeyboardButton(label, callback_data="pl_start_fast")
+
+
 # ---------------------------------------------------------------------------
 # Главное меню / Навигация
 # ---------------------------------------------------------------------------
@@ -32,7 +40,7 @@ def _start_keyboard(profile: Any | None = None) -> InlineKeyboardMarkup:
     if MINIAPP_URL:
         rows.append([InlineKeyboardButton("Персона", web_app=WebAppInfo(url=MINIAPP_URL), api_kwargs={"style": "primary", "icon_custom_emoji_id": "5235702276424737428"})])
     rows.extend([
-        [InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")],
+        [_express_button(profile)],
         [InlineKeyboardButton("Тарифы и форматы съёмки", callback_data="pl_start_tariffs")],
         [InlineKeyboardButton("Примеры работ", callback_data="pl_start_examples")],
         [InlineKeyboardButton("А точно ли получится круто?", callback_data="pl_start_faq")],
@@ -312,7 +320,7 @@ def _persona_credits_out_keyboard(*, with_express: bool = False, profile: Any | 
         [InlineKeyboardButton("✨ 30 кредитов – 629 руб", callback_data="pl_persona_topup_buy:30")],
     ]
     if with_express:
-        rows.append([InlineKeyboardButton(_express_button_label(profile), callback_data="pl_start_fast")])
+        rows.append([_express_button(profile)])
     rows.append([InlineKeyboardButton("Главное меню", callback_data="pl_fast_back")])
     return InlineKeyboardMarkup(rows)
 
