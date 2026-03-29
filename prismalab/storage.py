@@ -84,6 +84,7 @@ class PrismaLabStore:
         self._admin_pack_costs_table = f"public.{self._prefix}admin_pack_costs" if self._use_pg else f"{self._prefix}admin_pack_costs"
         self._pending_pack_runs_table = f"public.{self._prefix}pending_pack_runs" if self._use_pg else f"{self._prefix}pending_pack_runs"
         self._persona_styles_table = f"public.{self._prefix}persona_styles" if self._use_pg else f"{self._prefix}persona_styles"
+        self._express_styles_table = f"public.{self._prefix}express_styles" if self._use_pg else f"{self._prefix}express_styles"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -938,9 +939,32 @@ class PrismaLabStore:
                         )
                     """)
                     conn.commit()
+                    # Таблица экспресс-стилей
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_styles_table} (
+                            id SERIAL PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            title TEXT NOT NULL,
+                            emoji TEXT DEFAULT '',
+                            gender TEXT NOT NULL DEFAULT 'female',
+                            prompt TEXT,
+                            model TEXT DEFAULT 'seedream',
+                            sort_order INTEGER DEFAULT 0,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        )
+                    """)
+                    conn.commit()
                     # Добавить prompt в persona_styles если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN prompt TEXT")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                    # Добавить credit_cost в persona_styles если нет
+                    try:
+                        cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN credit_cost INTEGER DEFAULT 4")
                         conn.commit()
                     except Exception:
                         conn.rollback()
@@ -1041,6 +1065,44 @@ class PrismaLabStore:
                     conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
                 except Exception:
                     pass
+                # Таблица стилей персоны (SQLite)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._persona_styles_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        slug TEXT UNIQUE NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        gender TEXT NOT NULL DEFAULT 'female',
+                        image_url TEXT,
+                        prompt TEXT,
+                        credit_cost INTEGER DEFAULT 4,
+                        sort_order INTEGER DEFAULT 0,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Добавить credit_cost если нет (миграция)
+                try:
+                    conn.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN credit_cost INTEGER DEFAULT 4")
+                except Exception:
+                    pass
+                # Таблица экспресс-стилей (SQLite)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_styles_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        slug TEXT UNIQUE NOT NULL,
+                        title TEXT NOT NULL,
+                        emoji TEXT DEFAULT '',
+                        gender TEXT NOT NULL DEFAULT 'female',
+                        prompt TEXT,
+                        model TEXT DEFAULT 'seedream',
+                        sort_order INTEGER DEFAULT 0,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -2041,42 +2103,56 @@ class PrismaLabStore:
 
     def get_persona_styles(self, *, active_only: bool = False, gender: str | None = None) -> list[dict]:
         """Получить список стилей персоны."""
-        if not self._use_pg:
-            return []
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                conditions = []
-                params: list = []
-                if active_only:
-                    conditions.append("is_active = TRUE")
-                if gender:
-                    conditions.append("gender = %s")
-                    params.append(gender)
-                where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-                cur.execute(f"SELECT * FROM {self._persona_styles_table}{where} ORDER BY sort_order, id", params)
-                return [dict(row) for row in cur.fetchall()]
+        conditions = []
+        params: list = []
+        if active_only:
+            conditions.append("is_active = " + ("TRUE" if self._use_pg else "1"))
+        if gender:
+            conditions.append("gender = %s")
+            params.append(gender)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM {self._persona_styles_table}{where} ORDER BY sort_order, id"
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, params)
+                    return [dict(row) for row in cur.fetchall()]
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql.replace("%s", "?"), params).fetchall()
+                return [dict(row) for row in rows]
 
     def get_persona_style(self, style_id: int) -> dict | None:
         """Получить один стиль по id."""
-        if not self._use_pg:
-            return None
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
-                row = cur.fetchone()
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+        else:
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM {self._persona_styles_table} WHERE id = ?", (int(style_id),)
+                ).fetchone()
                 return dict(row) if row else None
 
     def get_persona_style_by_slug(self, slug: str) -> dict | None:
         """Получить один стиль по slug."""
-        if not self._use_pg:
-            return None
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE slug = %s", (slug,))
-                row = cur.fetchone()
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT * FROM {self._persona_styles_table} WHERE slug = %s", (slug,))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+        else:
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM {self._persona_styles_table} WHERE slug = ?", (slug,)
+                ).fetchone()
                 return dict(row) if row else None
 
     def swap_persona_style_order(self, style_id_a: int, style_id_b: int) -> bool:
@@ -2143,31 +2219,36 @@ class PrismaLabStore:
 
     def create_persona_style(self, *, slug: str, title: str, description: str = "",
                              gender: str = "female", image_url: str = "",
-                             prompt: str = "", sort_order: int = 0) -> int | None:
+                             prompt: str = "", sort_order: int = 0,
+                             credit_cost: int = 4) -> int | None:
         """Создать стиль. Возвращает id."""
-        if not self._use_pg:
-            return None
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"""
-                    INSERT INTO {self._persona_styles_table} (slug, title, description, gender, image_url, prompt, sort_order)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (slug, title, description, gender, image_url, prompt, int(sort_order)))
-                row = cur.fetchone()
+        sql = f"""
+            INSERT INTO {self._persona_styles_table} (slug, title, description, gender, image_url, prompt, sort_order, credit_cost)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        params = (slug, title, description, gender, image_url, prompt, int(sort_order), int(credit_cost))
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql + " RETURNING id", params)
+                    row = cur.fetchone()
+                    conn.commit()
+                    return int(row["id"]) if row else None
+        else:
+            with self._connect() as conn:
+                cur = conn.execute(sql.replace("%s", "?"), params)
                 conn.commit()
-                return int(row["id"]) if row else None
+                return cur.lastrowid
 
     def update_persona_style(self, style_id: int, **kwargs) -> bool:
-        """Обновить стиль. Допустимые поля: slug, title, description, gender, image_url, sort_order, is_active."""
-        if not self._use_pg:
-            return False
-        allowed = {"slug", "title", "description", "gender", "image_url", "prompt", "sort_order", "is_active"}
+        """Обновить стиль. Допустимые поля: slug, title, description, gender, image_url, sort_order, is_active, credit_cost."""
+        allowed = {"slug", "title", "description", "gender", "image_url", "prompt", "sort_order", "is_active", "credit_cost"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return False
-        fields["updated_at"] = "NOW()"
+        if self._use_pg:
+            fields["updated_at"] = "NOW()"
         set_parts = []
         params: list = []
         for k, v in fields.items():
@@ -2177,25 +2258,186 @@ class PrismaLabStore:
                 set_parts.append(f"{k} = %s")
                 params.append(v)
         params.append(int(style_id))
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    f"UPDATE {self._persona_styles_table} SET {', '.join(set_parts)} WHERE id = %s",
-                    params,
-                )
-                updated = cur.rowcount > 0
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"UPDATE {self._persona_styles_table} SET {', '.join(set_parts)} WHERE id = %s",
+                        params,
+                    )
+                    updated = cur.rowcount > 0
+                    conn.commit()
+                    return updated
+        else:
+            sql = f"UPDATE {self._persona_styles_table} SET {', '.join(set_parts)} WHERE id = ?"
+            with self._connect() as conn:
+                cur = conn.execute(sql.replace("%s", "?"), params)
                 conn.commit()
-                return updated
+                return cur.rowcount > 0
 
     def delete_persona_style(self, style_id: int) -> bool:
         """Удалить стиль."""
-        if not self._use_pg:
-            return False
-        with self._connect() as conn:
-            from psycopg2.extras import RealDictCursor
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"DELETE FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
-                deleted = cur.rowcount > 0
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"DELETE FROM {self._persona_styles_table} WHERE id = %s", (int(style_id),))
+                    deleted = cur.rowcount > 0
+                    conn.commit()
+                    return deleted
+        else:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    f"DELETE FROM {self._persona_styles_table} WHERE id = ?", (int(style_id),)
+                )
                 conn.commit()
-                return deleted
+                return cur.rowcount > 0
+
+    # ========================================
+    # Express Styles (экспресс-фото стили из БД)
+    # ========================================
+
+    def get_express_styles(self, *, active_only: bool = False, gender: str | None = None) -> list[dict]:
+        """Получить список экспресс-стилей."""
+        conditions = []
+        params: list = []
+        if active_only:
+            conditions.append("is_active = " + ("TRUE" if self._use_pg else "1"))
+        if gender:
+            conditions.append("gender = %s")
+            params.append(gender)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"SELECT * FROM {self._express_styles_table}{where} ORDER BY sort_order, id"
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, params)
+                    return [dict(row) for row in cur.fetchall()]
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql.replace("%s", "?"), params).fetchall()
+                return [dict(row) for row in rows]
+
+    def get_express_style(self, style_id: int) -> dict | None:
+        """Получить один экспресс-стиль по id."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT * FROM {self._express_styles_table} WHERE id = %s", (int(style_id),))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+        else:
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM {self._express_styles_table} WHERE id = ?", (int(style_id),)
+                ).fetchone()
+                return dict(row) if row else None
+
+    def get_express_style_by_slug(self, slug: str) -> dict | None:
+        """Получить один экспресс-стиль по slug."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT * FROM {self._express_styles_table} WHERE slug = %s", (slug,))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+        else:
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM {self._express_styles_table} WHERE slug = ?", (slug,)
+                ).fetchone()
+                return dict(row) if row else None
+
+    def create_express_style(self, *, slug: str, title: str, emoji: str = "",
+                             gender: str = "female", prompt: str = "",
+                             model: str = "seedream", sort_order: int = 0) -> int | None:
+        """Создать экспресс-стиль. Возвращает id."""
+        sql = f"""
+            INSERT INTO {self._express_styles_table} (slug, title, emoji, gender, prompt, model, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        params = (slug, title, emoji, gender, prompt, model, int(sort_order))
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql + " RETURNING id", params)
+                    row = cur.fetchone()
+                    conn.commit()
+                    return int(row["id"]) if row else None
+        else:
+            with self._connect() as conn:
+                cur = conn.execute(sql.replace("%s", "?"), params)
+                conn.commit()
+                return cur.lastrowid
+
+    def update_express_style(self, style_id: int, **kwargs) -> bool:
+        """Обновить экспресс-стиль."""
+        allowed = {"slug", "title", "emoji", "gender", "prompt", "model", "sort_order", "is_active"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return False
+        if self._use_pg:
+            fields["updated_at"] = "NOW()"
+        set_parts = []
+        params: list = []
+        for k, v in fields.items():
+            if v == "NOW()":
+                set_parts.append(f"{k} = NOW()")
+            else:
+                set_parts.append(f"{k} = %s")
+                params.append(v)
+        params.append(int(style_id))
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"UPDATE {self._express_styles_table} SET {', '.join(set_parts)} WHERE id = %s",
+                        params,
+                    )
+                    updated = cur.rowcount > 0
+                    conn.commit()
+                    return updated
+        else:
+            sql = f"UPDATE {self._express_styles_table} SET {', '.join(set_parts)} WHERE id = ?"
+            with self._connect() as conn:
+                cur = conn.execute(sql.replace("%s", "?"), params)
+                conn.commit()
+                return cur.rowcount > 0
+
+    def upsert_express_style(self, *, slug: str, title: str, emoji: str = "",
+                              gender: str = "female", prompt: str = "",
+                              model: str = "seedream", sort_order: int = 0) -> int | None:
+        """Upsert экспресс-стиля по slug (для сидера). Возвращает id."""
+        existing = self.get_express_style_by_slug(slug)
+        if existing:
+            self.update_express_style(existing["id"], title=title, emoji=emoji,
+                                      gender=gender, prompt=prompt, model=model,
+                                      sort_order=sort_order)
+            return existing["id"]
+        return self.create_express_style(slug=slug, title=title, emoji=emoji,
+                                         gender=gender, prompt=prompt, model=model,
+                                         sort_order=sort_order)
+
+    def delete_express_style(self, style_id: int) -> bool:
+        """Удалить экспресс-стиль."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"DELETE FROM {self._express_styles_table} WHERE id = %s", (int(style_id),))
+                    deleted = cur.rowcount > 0
+                    conn.commit()
+                    return deleted
+        else:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    f"DELETE FROM {self._express_styles_table} WHERE id = ?", (int(style_id),)
+                )
+                conn.commit()
+                return cur.rowcount > 0
