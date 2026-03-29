@@ -89,9 +89,13 @@ def _get_user_from_request(request: Request) -> dict | None:
 
 # ========== Страницы ==========
 
+MINIAPP_V2 = os.getenv("MINIAPP_V2", "") == "1"
+
+
 async def app_page(request: Request):
-    """Главная страница Mini App."""
-    return templates.TemplateResponse("app.html", {"request": request})
+    """Главная страница Mini App. MINIAPP_V2=1 → V2 UI."""
+    template = "app_v2.html" if MINIAPP_V2 else "app.html"
+    return templates.TemplateResponse(template, {"request": request})
 
 
 # ========== API ==========
@@ -452,6 +456,7 @@ async def api_persona_styles(request: Request):
             "description": s.get("description") or "",
             "gender": s["gender"],
             "image_url": s.get("image_url") or "",
+            "credit_cost": int(s.get("credit_cost", 4) or 4),
         })
     return JSONResponse({"styles": result})
 
@@ -711,6 +716,23 @@ ALLOWED_TRACK_EVENTS = {
     "pack_category_select",
     "pack_detail_view",
     "pack_buy",
+    # V2 Express
+    "v2_express_theme_select",
+    "v2_express_style_select",
+    "v2_express_upload",
+    "v2_express_generate_start",
+    "v2_express_generate_done",
+    "v2_express_download",
+    # V2 Photosets
+    "v2_photoset_view",
+    "v2_photoset_detail",
+    "v2_photoset_generate_start",
+    "v2_photoset_generate_done",
+    "v2_photoset_buy",
+    # V2 Navigation
+    "v2_nav_express",
+    "v2_nav_photosets",
+    "v2_nav_profile",
 }
 
 

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>PrismaLab Studio</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/app/static/style_v2.css?v=1">
+</head>
+<body>
+    <div id="app">
+        <!-- Screen: Loading -->
+        <div id="screen-loading" class="screen active">
+            <div class="loading-container">
+                <div class="logo-pulse"><span class="logo-icon">&#10024;</span></div>
+                <div class="loading-text">PrismaLab</div>
+                <div class="loading-dots"><span></span><span></span><span></span></div>
+            </div>
+        </div>
+
+        <!-- Screen: Gender -->
+        <div id="screen-gender" class="screen">
+            <div class="screen-content">
+                <h1 class="screen-title">Кто на фото?</h1>
+                <p class="screen-subtitle">Подберём стили специально для вас</p>
+                <div class="gender-cards">
+                    <button class="gender-card" onclick="selectGender('male')">
+                        <div class="gender-icon">&#128104;</div>
+                        <div class="gender-label">Мужчина</div>
+                    </button>
+                    <button class="gender-card" onclick="selectGender('female')">
+                        <div class="gender-icon">&#128105;</div>
+                        <div class="gender-label">Женщина</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Main — Two Sections -->
+        <div id="screen-main" class="screen">
+            <div class="main-container">
+                <div class="main-header">
+                    <h1 class="main-logo">PrismaLab</h1>
+                    <button class="profile-btn" onclick="goToProfile()">&#128100;</button>
+                </div>
+                <p class="main-tagline">AI-фотостудия в вашем телефоне</p>
+
+                <div class="section-cards">
+                    <button class="section-card express-card" onclick="goToExpress()">
+                        <div class="section-card-glow express-glow"></div>
+                        <div class="section-card-icon">&#9889;</div>
+                        <div class="section-card-title">Экспресс</div>
+                        <div class="section-card-desc">Одно фото в любом стиле за секунды</div>
+                        <div class="section-card-balance">
+                            <span class="balance-icon">&#9889;</span>
+                            <span id="main-express-balance">0</span>
+                        </div>
+                        <div class="section-card-cta">Выбрать стиль</div>
+                    </button>
+
+                    <button class="section-card photosets-card" onclick="goToPhotosets()">
+                        <div class="section-card-glow photosets-glow"></div>
+                        <div class="section-card-icon">&#128247;</div>
+                        <div class="section-card-title">Фотосеты</div>
+                        <div class="section-card-desc">Серия фото в едином стиле</div>
+                        <div class="section-card-balance">
+                            <span class="balance-icon">&#128142;</span>
+                            <span id="main-photosets-balance">0</span> <span id="main-photosets-balance-word">кредитов</span>
+                        </div>
+                        <div class="section-card-cta">Открыть каталог</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== EXPRESS FLOW ========== -->
+
+        <!-- Screen: Express Themes -->
+        <div id="screen-express-themes" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Экспресс</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="express-credits-count">0</span>
+                </div>
+            </div>
+            <div class="themes-grid" id="themes-grid">
+                <!-- Темы загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Express Styles (inside theme) -->
+        <div id="screen-express-styles" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('express-themes')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="express-theme-title">Тема</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="express-styles-credits">0</span>
+                </div>
+            </div>
+            <div class="styles-grid" id="express-styles-grid">
+                <!-- Стили загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Express Upload -->
+        <div id="screen-express-upload" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('express-styles')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="express-selected-style">Стиль</h2>
+                <div></div>
+            </div>
+            <div class="upload-container">
+                <div class="upload-zone" id="express-upload-zone" onclick="document.getElementById('express-file-input').click()">
+                    <div class="upload-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <div class="upload-text">Загрузите фото</div>
+                    <div class="upload-hint">Нажмите или перетащите</div>
+                    <div class="upload-hint">JPG, PNG до 15 МБ</div>
+                </div>
+                <input type="file" id="express-file-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handleExpressFile(event)">
+                <div class="upload-preview" id="express-preview" style="display:none">
+                    <img id="express-preview-image" src="" alt="Preview">
+                    <button class="preview-change" onclick="resetExpressUpload()">Сменить фото</button>
+                </div>
+                <button class="generate-btn" id="express-generate-btn" style="display:none" onclick="startExpressGeneration()">
+                    <span class="btn-text">&#10024; Создать</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Express Generating -->
+        <div id="screen-express-generating" class="screen">
+            <div class="generating-container">
+                <div class="generating-visual">
+                    <div class="generating-ring"></div>
+                    <div class="generating-ring ring-2"></div>
+                    <div class="generating-ring ring-3"></div>
+                    <div class="generating-center"><span>&#127912;</span></div>
+                </div>
+                <h2 class="generating-title">Создаём шедевр</h2>
+                <p class="generating-subtitle">AI обрабатывает ваше фото...</p>
+                <div class="generating-progress">
+                    <div class="progress-bar" id="express-progress-bar"></div>
+                </div>
+                <div class="generating-tip" id="express-generating-tip">Обычно это занимает 30-60 секунд</div>
+            </div>
+        </div>
+
+        <!-- Screen: Express Result -->
+        <div id="screen-express-result" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('express-themes')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Результат</h2>
+                <div></div>
+            </div>
+            <div class="result-container">
+                <div class="result-image-wrapper">
+                    <img id="express-result-image" src="" alt="Result">
+                </div>
+                <div class="result-actions">
+                    <button class="action-btn primary" onclick="downloadExpressResult()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Скачать
+                    </button>
+                    <button class="action-btn secondary" onclick="goBack('express-themes')">&#127912; Ещё стиль</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== PHOTOSETS FLOW ========== -->
+
+        <!-- Screen: Photosets Catalog -->
+        <div id="screen-photosets" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Фотосеты</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#128142;</span>
+                    <span id="photosets-credits-count">0</span>
+                </div>
+            </div>
+            <div class="photosets-tabs" id="photosets-tabs">
+                <button class="category-tab active" data-kind="all" onclick="filterPhotosets('all')">Все</button>
+                <button class="category-tab" data-kind="pack" onclick="filterPhotosets('pack')">Фотопаки</button>
+                <button class="category-tab" data-kind="style" onclick="filterPhotosets('style')">Образы</button>
+            </div>
+            <div class="photosets-grid" id="photosets-grid">
+                <!-- Каталог загрузится динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Detail (Pack) -->
+        <div id="screen-photoset-pack-detail" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('photosets')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="photoset-pack-title">Фотопак</h2>
+                <div></div>
+            </div>
+            <div class="pack-detail-container">
+                <div class="pack-gallery" id="photoset-pack-gallery"></div>
+                <div class="pack-info">
+                    <div class="pack-info-row">
+                        <span class="pack-info-label">Количество фото</span>
+                        <span class="pack-info-value" id="photoset-pack-count">20</span>
+                    </div>
+                </div>
+                <button class="generate-btn" id="photoset-pack-buy-btn" onclick="buyPhotosetPack()">
+                    <span class="btn-text" id="photoset-pack-buy-text">Купить 990 &#8381;</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Detail (Style — 4 photos) -->
+        <div id="screen-photoset-style-detail" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('photosets')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="photoset-style-title">Образ</h2>
+                <div></div>
+            </div>
+            <div class="photoset-style-container">
+                <div class="photoset-style-preview" id="photoset-style-preview"></div>
+                <div class="photoset-style-info">
+                    <div class="photoset-style-desc" id="photoset-style-desc"></div>
+                    <div class="photoset-style-cost">
+                        <span class="cost-icon">&#128142;</span>
+                        <span id="photoset-style-cost-value">4</span> <span id="photoset-style-cost-word">кредита</span>
+                        <span class="cost-arrow">&#8594;</span>
+                        <span>4 фото</span>
+                    </div>
+                </div>
+                <div class="upload-zone" id="photoset-upload-zone" onclick="document.getElementById('photoset-file-input').click()">
+                    <div class="upload-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <div class="upload-text">Загрузите фото</div>
+                    <div class="upload-hint">JPG, PNG до 15 МБ</div>
+                </div>
+                <input type="file" id="photoset-file-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handlePhotosetFile(event)">
+                <div class="upload-preview" id="photoset-preview" style="display:none">
+                    <img id="photoset-preview-image" src="" alt="Preview">
+                    <button class="preview-change" onclick="resetPhotosetUpload()">Сменить фото</button>
+                </div>
+                <button class="generate-btn" id="photoset-generate-btn" style="display:none" onclick="startPhotosetGeneration()">
+                    <span class="btn-text">&#10024; Создать фотосет (4 фото)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Generating -->
+        <div id="screen-photoset-generating" class="screen">
+            <div class="generating-container">
+                <div class="generating-visual">
+                    <div class="generating-ring"></div>
+                    <div class="generating-ring ring-2"></div>
+                    <div class="generating-ring ring-3"></div>
+                    <div class="generating-center"><span>&#128247;</span></div>
+                </div>
+                <h2 class="generating-title">Создаём фотосет</h2>
+                <p class="generating-subtitle" id="photoset-gen-subtitle">Генерируем 4 фото...</p>
+                <div class="generating-progress">
+                    <div class="progress-bar" id="photoset-progress-bar"></div>
+                </div>
+                <div class="generating-tip" id="photoset-generating-tip">Это может занять 2-3 минуты</div>
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Result (4 photos) -->
+        <div id="screen-photoset-result" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('photosets')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Фотосет готов</h2>
+                <div></div>
+            </div>
+            <div class="photoset-result-container">
+                <div class="photoset-result-grid" id="photoset-result-grid">
+                    <!-- 4 фото загрузятся динамически -->
+                </div>
+                <div class="photoset-result-stats" id="photoset-result-stats"></div>
+                <div class="result-actions">
+                    <button class="action-btn primary" onclick="downloadAllPhotoset()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Скачать все
+                    </button>
+                    <button class="action-btn secondary" onclick="goBack('photosets')">&#128247; Ещё фотосет</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Pack Paid -->
+        <div id="screen-pack-paid" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon">&#9989;</div>
+                <h2 class="nocredits-title">Оплата прошла!</h2>
+                <p class="nocredits-text">Перейдите в бот — там всё продолжится.</p>
+                <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+            </div>
+        </div>
+
+        <!-- Screen: No Credits -->
+        <div id="screen-nocredits" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon">&#128142;</div>
+                <h2 class="nocredits-title">Нужны кредиты</h2>
+                <p class="nocredits-text" id="nocredits-text">Купите кредиты, чтобы продолжить.</p>
+                <button class="action-btn primary" onclick="buyCredits()">Купить кредиты</button>
+                <button class="action-btn secondary" onclick="goBack('main')">Назад</button>
+            </div>
+        </div>
+
+        <!-- Screen: Profile -->
+        <div id="screen-profile" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Профиль</h2>
+                <div></div>
+            </div>
+            <div class="profile-container">
+                <div class="profile-card">
+                    <div class="profile-row">
+                        <span class="profile-label">&#9889; Экспресс</span>
+                        <span class="profile-value" id="profile-express-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">&#128142; Фотосеты</span>
+                        <span class="profile-value" id="profile-photosets-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Пол</span>
+                        <span class="profile-value" id="profile-gender">&mdash;</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+        <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
+    </div>
+
+    <script src="/app/static/app_v2.js?v=1"></script>
+</body>
+</html>
