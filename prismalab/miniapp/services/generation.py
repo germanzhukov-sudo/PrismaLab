@@ -1,0 +1,201 @@
+"""Сервис генерации экспресс-фото.
+
+Единая точка выбора провайдера (seedream / nano-banana-pro) и параметров.
+Без Request/Response — чистая бизнес-логика.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import json
+import logging
+import secrets
+from dataclasses import dataclass
+from typing import Any
+
+logger = logging.getLogger("prismalab.miniapp.services.generation")
+
+
+# ── Результат генерации ──────────────────────────────────────────────
+
+@dataclass
+class GenerationResult:
+    """Результат генерации фото."""
+    data_url: str          # base64 data URL (data:image/{jpeg|png};base64,...)
+    provider: str          # seedream / nano-banana-pro
+    style_slug: str
+
+
+# ── Подготовка параметров для KIE API ────────────────────────────────
+
+# Дефолтные параметры по провайдерам
+_PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
+    "seedream": {
+        "model": "seedream/4.5-edit",
+        "aspect_ratio": "1:1",
+        "quality": "basic",
+        "resolution": None,
+        "output_format": "jpg",
+    },
+    "nano-banana-pro": {
+        "model": "nano-banana-pro",
+        "aspect_ratio": "1:1",
+        "quality": None,
+        "resolution": "2K",
+        "output_format": "png",
+    },
+}
+
+
+def build_generation_kwargs(
+    *,
+    provider: str,
+    prompt: str,
+    negative_prompt: str = "",
+    image_url: str | None = None,
+    model_params_json: str = "",
+    api_key: str,
+    max_seconds: int = 300,
+    poll_seconds: float = 3.0,
+) -> dict[str, Any]:
+    """Собирает kwargs для kie_client.run_task_and_wait().
+
+    Выбирает дефолты по провайдеру, применяет override из model_params_json.
+    Возвращает готовый dict — можно передать напрямую в run_task_and_wait(**kwargs).
+    """
+    defaults = _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS["seedream"]).copy()
+
+    # Override из model_params (JSON строка из БД)
+    overrides: dict[str, Any] = {}
+    if model_params_json:
+        try:
+            overrides = json.loads(model_params_json)
+            if not isinstance(overrides, dict):
+                overrides = {}
+        except (json.JSONDecodeError, TypeError):
+            overrides = {}
+
+    kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "model": overrides.get("model", defaults["model"]),
+        "prompt": prompt,
+        "image_input": [image_url] if image_url else None,
+        "aspect_ratio": overrides.get("aspect_ratio", defaults["aspect_ratio"]),
+        "output_format": overrides.get("output_format", defaults["output_format"]),
+        "max_seconds": max_seconds,
+        "poll_seconds": poll_seconds,
+    }
+
+    # quality — только для seedream
+    quality = overrides.get("quality", defaults.get("quality"))
+    if quality:
+        kwargs["quality"] = quality
+
+    # resolution — только для nano-banana-pro
+    resolution = overrides.get("resolution", defaults.get("resolution"))
+    if resolution:
+        kwargs["resolution"] = resolution
+
+    # negative_prompt
+    neg = overrides.get("negative_prompt", negative_prompt)
+    if neg:
+        kwargs["negative_prompt"] = neg
+
+    return kwargs
+
+
+# ── Подготовка фото ──────────────────────────────────────────────────
+
+def prepare_photo(photo_bytes: bytes, *, max_side: int = 1024, jpeg_quality: int = 92) -> bytes:
+    """Resize + конвертация фото в JPEG. Без I/O — чистая трансформация."""
+    from PIL import Image, ImageOps
+
+    img = Image.open(io.BytesIO(photo_bytes))
+    img = ImageOps.exif_transpose(img) or img
+
+    if img.mode == "RGBA":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    w, h = img.size
+    if max(w, h) > max_side:
+        scale = max_side / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=jpeg_quality)
+    return buf.getvalue()
+
+
+# ── Основной flow генерации ──────────────────────────────────────────
+
+async def run_generation(
+    *,
+    photo_bytes: bytes,
+    style_slug: str,
+    prompt: str,
+    negative_prompt: str = "",
+    provider: str = "seedream",
+    model_params_json: str = "",
+    api_key: str,
+    max_seconds: int = 300,
+) -> GenerationResult:
+    """Запускает генерацию фото через KIE.
+
+    1. Подготавливает фото (resize, JPEG)
+    2. Загружает в KIE
+    3. Генерирует через выбранного провайдера
+    4. Скачивает результат
+    5. Возвращает GenerationResult с base64 data URL
+
+    Raises:
+        RuntimeError: при ошибке генерации
+    """
+    from prismalab.kie_client import (
+        download_image_bytes as kie_download,
+        run_task_and_wait as kie_run,
+        upload_file_base64 as kie_upload,
+    )
+
+    # 1. Подготовка фото
+    prepared = await asyncio.to_thread(prepare_photo, photo_bytes)
+
+    # 2. Загрузка в KIE
+    random_id = secrets.token_hex(8)
+    uploaded_url = await asyncio.to_thread(
+        kie_upload,
+        api_key=api_key,
+        image_bytes=prepared,
+        file_name=f"miniapp_{random_id}.jpg",
+    )
+
+    # 3. Генерация
+    kwargs = build_generation_kwargs(
+        provider=provider,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        image_url=uploaded_url,
+        model_params_json=model_params_json,
+        api_key=api_key,
+        max_seconds=max_seconds,
+    )
+    kie_result = await kie_run(**kwargs)
+
+    if not kie_result.image_url:
+        raise RuntimeError(f"KIE returned no image URL (provider={provider})")
+
+    # 4. Скачивание результата
+    result_bytes = await asyncio.to_thread(kie_download, kie_result.image_url)
+
+    # 5. Base64 data URL (MIME по output_format)
+    out_fmt = str(kwargs.get("output_format", "jpg")).lower()
+    mime = "image/png" if out_fmt == "png" else "image/jpeg"
+    result_b64 = base64.b64encode(result_bytes).decode()
+    data_url = f"data:{mime};base64,{result_b64}"
+
+    logger.info("Generation done: provider=%s style=%s", provider, style_slug)
+    return GenerationResult(data_url=data_url, provider=provider, style_slug=style_slug)
