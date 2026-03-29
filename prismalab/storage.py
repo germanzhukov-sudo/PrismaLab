@@ -673,6 +673,64 @@ class PrismaLabStore:
                 conn.commit()
                 return int(row[0]) if row else 0
 
+    def reserve_persona_credits(self, user_id: int, amount: int) -> bool:
+        """Атомарно списывает amount кредитов. Возвращает True если успешно, False если недостаточно."""
+        if amount <= 0:
+            return True
+        uid = int(user_id)
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE {self._users_table}
+                        SET persona_credits_remaining = persona_credits_remaining - %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = %s AND persona_credits_remaining >= %s
+                        RETURNING persona_credits_remaining
+                        """,
+                        (amount, uid, amount),
+                    )
+                    row = cur.fetchone()
+                    conn.commit()
+                    return row is not None
+            else:
+                cur = conn.execute(
+                    f"UPDATE {self._users_table} SET persona_credits_remaining = persona_credits_remaining - ?, "
+                    f"updated_at = CURRENT_TIMESTAMP "
+                    f"WHERE user_id = ? AND persona_credits_remaining >= ?",
+                    (amount, uid, amount),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+
+    def refund_persona_credits(self, user_id: int, amount: int) -> None:
+        """Возвращает amount кредитов пользователю."""
+        if amount <= 0:
+            return
+        uid = int(user_id)
+        with self._connect() as conn:
+            if self._use_pg:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        UPDATE {self._users_table}
+                        SET persona_credits_remaining = persona_credits_remaining + %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = %s
+                        """,
+                        (amount, uid),
+                    )
+                    conn.commit()
+            else:
+                conn.execute(
+                    f"UPDATE {self._users_table} SET persona_credits_remaining = persona_credits_remaining + ?, "
+                    f"updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                    (amount, uid),
+                )
+                conn.commit()
+
     def set_pending_persona_batch(self, user_id: int, styles_json: str) -> None:
         """Сохраняет pending batch генерации персоны (JSON-строка со списком стилей)."""
         self._run(

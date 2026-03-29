@@ -854,6 +854,135 @@ async def api_v2_photosets(request: Request):
     return JSONResponse({"packs": packs})
 
 
+async def api_v2_photoset_generate(request: Request):
+    """V2: Генерация фотосета-стиля (4 фото с биллингом).
+
+    POST /app/api/v2/photosets/{kind}/{id}/generate
+    kind=style → persona_style, kind=pack → 501 (пока)
+    """
+    from .services.photosets import (
+        _photoset_requests,
+        check_photoset_idempotency,
+        get_user_lock,
+        run_style_photoset_generation,
+    )
+
+    kind = request.path_params.get("kind", "")
+    item_id_str = request.path_params.get("id", "")
+
+    if kind == "pack":
+        return JSONResponse({"error": "Pack generation via credits not yet implemented"}, status_code=501)
+    if kind != "style":
+        return JSONResponse({"error": "Invalid kind, expected 'style' or 'pack'"}, status_code=400)
+
+    # Читаем form (multipart: init_data, photo, request_id)
+    form = await request.form()
+    init_data = form.get("init_data", "")
+
+    user = validate_init_data(str(init_data), BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    user_id = user["user_id"]
+
+    try:
+        item_id = int(item_id_str)
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid style id"}, status_code=400)
+
+    request_id = str(form.get("request_id", "")).strip()
+    if not request_id:
+        return JSONResponse({"error": "request_id required"}, status_code=400)
+
+    # Идемпотентность: ключ = (user_id, request_id)
+    existing = check_photoset_idempotency(user_id, request_id)
+    if existing:
+        return JSONResponse(existing)
+
+    # User-level lock: asyncio.Lock per user — атомарная проверка
+    lock = get_user_lock(user_id)
+    if lock.locked():
+        return JSONResponse(
+            {"error": "Generation already in progress", "status": "processing"},
+            status_code=409,
+        )
+
+    # Валидируем стиль
+    store = get_store()
+    style_row = store.get_persona_style(item_id)
+    if not style_row:
+        return JSONResponse({"error": "Style not found"}, status_code=404)
+    if not style_row.get("is_active", 1):
+        return JSONResponse({"error": "Style is inactive"}, status_code=404)
+
+    # Читаем фото
+    photo = form.get("photo")
+    if not photo:
+        return JSONResponse({"error": "No photo uploaded"}, status_code=400)
+
+    photo_bytes = await photo.read()
+    if len(photo_bytes) > 15 * 1024 * 1024:
+        return JSONResponse({"error": "Photo too large (max 15MB)"}, status_code=413)
+
+    # Проверяем кредиты (предварительно, reserve будет в сервисе)
+    credit_cost = int(style_row.get("credit_cost", 4) or 4)
+    profile = store.get_user(user_id)
+    if profile.persona_credits_remaining < credit_cost:
+        return JSONResponse({
+            "error": "no_credits",
+            "message": f"Нужно {credit_cost} кредитов, есть {profile.persona_credits_remaining}",
+            "credits_balance": profile.persona_credits_remaining,
+            "credits_required": credit_cost,
+        }, status_code=402)
+
+    # Регистрируем request_id как processing
+    idem_key = (user_id, request_id)
+    _photoset_requests[idem_key] = {
+        "status": "processing",
+        "images": [],
+        "requested_count": 4,
+        "success_count": 0,
+        "credits_spent": 0,
+        "credits_refunded": 0,
+        "credits_balance": profile.persona_credits_remaining,
+        "request_id": request_id,
+        "ts": __import__("time").time(),
+    }
+
+    from prismalab.settings import load_settings
+    settings = load_settings()
+
+    async with lock:
+        try:
+            result = await run_style_photoset_generation(
+                user_id=user_id,
+                style_id=item_id,
+                style_row=style_row,
+                photo_bytes=photo_bytes,
+                request_id=request_id,
+                store=store,
+                api_key=settings.kie_api_key,
+                max_seconds=settings.kie_max_seconds,
+            )
+        except Exception as e:
+            logger.exception("Photoset generation error: user=%s request_id=%s: %s", user_id, request_id, e)
+            result = {
+                "status": "error",
+                "error": str(e),
+                "images": [],
+                "requested_count": 4,
+                "success_count": 0,
+                "credits_spent": 0,
+                "credits_refunded": 0,
+                "credits_balance": store.get_user(user_id).persona_credits_remaining,
+                "request_id": request_id,
+                "ts": __import__("time").time(),
+            }
+            _photoset_requests[idem_key] = result
+
+    return JSONResponse(result)
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -878,6 +1007,7 @@ routes = [
     Route("/app/api/v2/express-styles", api_v2_express_styles, methods=["GET"]),
     Route("/app/api/v2/express-generate", api_v2_express_generate, methods=["POST"]),
     Route("/app/api/v2/photosets", api_v2_photosets, methods=["GET"]),
+    Route("/app/api/v2/photosets/{kind}/{id:int}/generate", api_v2_photoset_generate, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 
