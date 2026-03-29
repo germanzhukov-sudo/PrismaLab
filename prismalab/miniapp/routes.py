@@ -859,7 +859,8 @@ async def api_v2_express_generate(request: Request):
 
 
 async def api_v2_photosets(request: Request):
-    """V2: Список фотосетов (паков)."""
+    """V2: Список фотосетов (паков). Включает packs_use_credits flag."""
+    from prismalab.config import packs_use_credits
     from .services.photosets import get_packs_list
 
     user = _get_user_from_request(request)
@@ -873,7 +874,94 @@ async def api_v2_photosets(request: Request):
     if category:
         packs = [p for p in packs if p.get("category") == category]
 
-    return JSONResponse({"packs": packs})
+    return JSONResponse({
+        "packs": packs,
+        "packs_use_credits": packs_use_credits(),
+    })
+
+
+async def api_v2_pack_buy_credits(request: Request):
+    """V2: Покупка пака за persona_credits (если PACKS_USE_CREDITS=1)."""
+    from prismalab.config import packs_use_credits
+    from .services.photosets import get_pack_buy_data
+
+    if not packs_use_credits():
+        return JSONResponse({"error": "Credit-based pack purchase is not enabled"}, status_code=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    pack_id_str = request.path_params.get("pack_id", "")
+    try:
+        pack_id = int(pack_id_str)
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid pack_id"}, status_code=400)
+
+    buy_data = get_pack_buy_data(pack_id)
+    if not buy_data:
+        return JSONResponse({"error": "Pack not found"}, status_code=404)
+    offer = buy_data["offer"]
+    credit_cost = int(offer.get("credit_cost", offer.get("expected_images", 20)))
+
+    user_id = user["user_id"]
+    store = get_store()
+    profile = store.get_user(user_id)
+
+    if profile.persona_credits_remaining < credit_cost:
+        return JSONResponse({
+            "error": "no_credits",
+            "message": f"Нужно {credit_cost} кредитов, есть {profile.persona_credits_remaining}",
+            "credits_balance": profile.persona_credits_remaining,
+            "credits_required": credit_cost,
+        }, status_code=402)
+
+    # Атомарное списание
+    reserved = store.reserve_persona_credits(user_id, credit_cost)
+    if not reserved:
+        return JSONResponse({"error": "no_credits", "message": "Не удалось списать кредиты"}, status_code=402)
+
+    # Логируем
+    store.log_event(user_id, "pack_buy_credits", {
+        "pack_id": pack_id,
+        "pack_title": offer.get("title", ""),
+        "credit_cost": credit_cost,
+        "source": "miniapp",
+    })
+
+    # Запускаем генерацию пака — через бот (как при обычной покупке)
+    bot = get_bot()
+    application = get_application()
+    if bot and application:
+        try:
+            from prismalab.handlers.packs import _run_persona_pack_generation
+            import asyncio
+            asyncio.get_event_loop().create_task(
+                _run_persona_pack_generation(
+                    bot=bot, store=store, application=application,
+                    user_id=user_id, chat_id=user_id,
+                    pack_id=str(pack_id),
+                    pack_title=str(offer.get("title", "")),
+                    pack_class=buy_data["class_key"],
+                    pack_num_images=str(offer.get("expected_images", 20)),
+                )
+            )
+        except Exception as e:
+            logger.warning("pack_buy_credits: failed to start generation: %s", e)
+
+    updated_profile = store.get_user(user_id)
+    return JSONResponse({
+        "ok": True,
+        "pack_id": pack_id,
+        "credits_spent": credit_cost,
+        "credits_balance": updated_profile.persona_credits_remaining,
+    })
 
 
 async def api_v2_photoset_generate(request: Request):
@@ -1030,6 +1118,7 @@ routes = [
     Route("/app/api/v2/express-generate", api_v2_express_generate, methods=["POST"]),
     Route("/app/api/v2/photosets", api_v2_photosets, methods=["GET"]),
     Route("/app/api/v2/photosets/{kind}/{id:int}/generate", api_v2_photoset_generate, methods=["POST"]),
+    Route("/app/api/v2/packs/{pack_id:int}/buy-credits", api_v2_pack_buy_credits, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 

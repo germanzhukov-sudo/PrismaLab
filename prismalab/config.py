@@ -76,6 +76,13 @@ def _is_dev_runtime() -> bool:
     return prefix.startswith("dev_")
 
 
+def packs_use_credits() -> bool:
+    """Feature flag: паки покупаются за persona_credits вместо ₽.
+    Default: off (0). Включается PACKS_USE_CREDITS=1."""
+    raw = (os.getenv("PACKS_USE_CREDITS") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
 def _dev_skip_pack_payment() -> bool:
     """Dev-флаг: тест паков без оплаты. В проде выключен."""
     raw = (os.getenv("PRISMALAB_DEV_SKIP_PACK_PAYMENT") or "").strip().lower()

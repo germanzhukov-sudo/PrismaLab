@@ -287,3 +287,92 @@ def test_old_packs_endpoint_still_works(mock_auth, client, store):
     assert resp.status_code == 200
     data = resp.json()
     assert "packs" in data
+
+
+# ── Phase 7: Packs via Credits ──────────────────────────────────────
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_photosets_includes_credits_flag(mock_auth, client, store):
+    """V2 photosets endpoint отдаёт packs_use_credits flag."""
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "packs_use_credits" in data
+    assert isinstance(data["packs_use_credits"], bool)
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_photosets_packs_have_credit_cost(mock_auth, client, store):
+    """Паки в ответе содержат credit_cost."""
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    for pack in data.get("packs", []):
+        assert "credit_cost" in pack
+
+
+@patch("prismalab.config.packs_use_credits", return_value=False)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_pack_buy_credits_disabled(mock_auth, mock_flag, client, store):
+    """Если PACKS_USE_CREDITS=0 → 403."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 100)
+    resp = client.post(
+        "/app/api/v2/packs/4345/buy-credits",
+        json={"init_data": "fake"},
+    )
+    assert resp.status_code == 403
+
+
+@patch("prismalab.config.packs_use_credits", return_value=True)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_pack_buy_credits_success(mock_auth, mock_flag, client, store):
+    """Покупка пака за кредиты: списание + ok."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 30)
+    resp = client.post(
+        "/app/api/v2/packs/4345/buy-credits",
+        json={"init_data": "fake"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["credits_spent"] == 20  # 4345 has credit_cost=20
+    assert data["credits_balance"] == 10  # 30 - 20
+
+    profile = store.get_user(12345)
+    assert profile.persona_credits_remaining == 10
+
+
+@patch("prismalab.config.packs_use_credits", return_value=True)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_pack_buy_credits_insufficient(mock_auth, mock_flag, client, store):
+    """Покупка пака за кредиты: недостаточно → 402."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 5)
+    resp = client.post(
+        "/app/api/v2/packs/4345/buy-credits",
+        json={"init_data": "fake"},
+    )
+    assert resp.status_code == 402
+    data = resp.json()
+    assert data["error"] == "no_credits"
+    assert data["credits_balance"] == 5
+    assert data["credits_required"] == 20
+
+    # Кредиты не списались
+    profile = store.get_user(12345)
+    assert profile.persona_credits_remaining == 5
+
+
+@patch("prismalab.config.packs_use_credits", return_value=True)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_pack_buy_credits_not_found(mock_auth, mock_flag, client, store):
+    """Покупка несуществующего пака → 404."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 100)
+    resp = client.post(
+        "/app/api/v2/packs/99999/buy-credits",
+        json={"init_data": "fake"},
+    )
+    assert resp.status_code == 404

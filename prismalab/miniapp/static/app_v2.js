@@ -466,6 +466,7 @@ async function loadPhotosets() {
         const stylesData = await stylesResp.json();
 
         state.packs = (packsData.packs || []).map(p => ({ ...p, kind: 'pack' }));
+        state.packsUseCredits = !!packsData.packs_use_credits;
         state.personaStyles = (stylesData.styles || []).map(s => ({ ...s, kind: 'style' }));
 
         renderPhotosets();
@@ -502,6 +503,9 @@ function renderPhotosets() {
 
     grid.innerHTML = items.map((item, i) => {
         if (item.kind === 'pack') {
+            const priceText = state.packsUseCredits
+                ? `${item.credit_cost || item.expected_images} кр`
+                : `${item.price_rub} ₽`;
             return `
             <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="openPackDetail(${item.id})">
                 ${item.cover_url
@@ -511,7 +515,7 @@ function renderPhotosets() {
                     <div class="photoset-card-title">${item.title}</div>
                     <div class="photoset-card-meta">
                         <span class="photoset-card-badge badge-pack">Пак</span>
-                        <span class="photoset-card-price">${item.expected_images} фото · ${item.price_rub} ₽</span>
+                        <span class="photoset-card-price">${item.expected_images} фото · ${priceText}</span>
                     </div>
                 </div>
             </div>`;
@@ -548,7 +552,13 @@ async function openPackDetail(packId) {
 
         document.getElementById('photoset-pack-title').textContent = pack.title;
         document.getElementById('photoset-pack-count').textContent = pack.expected_images;
-        document.getElementById('photoset-pack-buy-text').textContent = `Купить ${pack.price_rub} ₽`;
+
+        if (state.packsUseCredits) {
+            const cc = pack.credit_cost || pack.expected_images;
+            document.getElementById('photoset-pack-buy-text').textContent = `Купить за ${cc} ${pluralCredits(cc)}`;
+        } else {
+            document.getElementById('photoset-pack-buy-text').textContent = `Купить ${pack.price_rub} ₽`;
+        }
 
         const gallery = document.getElementById('photoset-pack-gallery');
         gallery.innerHTML = (pack.examples || []).slice(0, 10).map(url =>
@@ -561,24 +571,58 @@ async function openPackDetail(packId) {
 
 async function buyPhotosetPack() {
     if (!state.selectedPack) return;
-    trackEvent('v2_photoset_buy', { pack_id: state.selectedPack.id });
+    trackEvent('v2_photoset_buy', { pack_id: state.selectedPack.id, use_credits: state.packsUseCredits });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
-    try {
-        const resp = await fetch(`/app/api/packs/${state.selectedPack.id}/buy`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ init_data: state.initData }),
-        });
-        const data = await resp.json();
-
-        if (data.payment_url) {
-            if (tg) { tg.openLink(data.payment_url); }
-            else { window.open(data.payment_url, '_blank'); }
+    if (state.packsUseCredits) {
+        // Покупка за кредиты
+        const cc = state.selectedPack.credit_cost || state.selectedPack.expected_images;
+        if (state.photosetsCredits < cc) {
+            document.getElementById('nocredits-text').textContent =
+                `Нужно ${cc} ${pluralCredits(cc)}, у вас ${state.photosetsCredits}.`;
+            showScreen('nocredits');
+            return;
         }
-    } catch (e) {
-        console.error('Pack buy error:', e);
-        alert('Ошибка оплаты');
+        try {
+            const resp = await fetch(`/app/api/v2/packs/${state.selectedPack.id}/buy-credits`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ init_data: state.initData }),
+            });
+            const data = await resp.json();
+
+            if (resp.status === 402) {
+                document.getElementById('nocredits-text').textContent = data.message || 'Недостаточно кредитов';
+                showScreen('nocredits');
+                return;
+            }
+            if (!resp.ok) throw new Error(data.error || 'Purchase failed');
+
+            state.photosetsCredits = data.credits_balance ?? state.photosetsCredits;
+            updateBalanceDisplays();
+            showScreen('pack-paid');
+        } catch (e) {
+            console.error('Pack buy credits error:', e);
+            alert('Ошибка покупки: ' + e.message);
+        }
+    } else {
+        // Покупка за ₽ (старый flow)
+        try {
+            const resp = await fetch(`/app/api/packs/${state.selectedPack.id}/buy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ init_data: state.initData }),
+            });
+            const data = await resp.json();
+
+            if (data.payment_url) {
+                if (tg) { tg.openLink(data.payment_url); }
+                else { window.open(data.payment_url, '_blank'); }
+            }
+        } catch (e) {
+            console.error('Pack buy error:', e);
+            alert('Ошибка оплаты');
+        }
     }
 }
 

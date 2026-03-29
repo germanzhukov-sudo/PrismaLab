@@ -20,8 +20,8 @@ logger = logging.getLogger("prismalab.miniapp.services.photosets")
 # ── Константы ──────────────────────────────────────────────────────────
 
 DEFAULT_PACKS: list[dict] = [
-    {"id": 4345, "title": "8 марта", "price_rub": 319, "expected_images": 20, "class_name": "woman", "category": "female"},
-    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 319, "expected_images": 16, "class_name": "woman", "category": "female"},
+    {"id": 4345, "title": "8 марта", "price_rub": 319, "expected_images": 20, "credit_cost": 20, "class_name": "woman", "category": "female"},
+    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 319, "expected_images": 16, "credit_cost": 16, "class_name": "woman", "category": "female"},
 ]
 
 PACK_ID_CATEGORIES: dict[int, str] = {
@@ -127,11 +127,13 @@ def load_pack_offers() -> list[dict]:
                         category = str(o.get("category") or "").strip().lower()
                     if category not in ("female", "child", "animals"):
                         category = "female"
+                    expected = int(o.get("expected_images") or 20)
                     result.append({
                         "id": pack_id,
                         "title": str(o.get("title") or f"Pack #{pack_id}"),
                         "price_rub": int(o.get("price_rub") or 0),
-                        "expected_images": int(o.get("expected_images") or 20),
+                        "expected_images": expected,
+                        "credit_cost": int(o.get("credit_cost") or expected),
                         "class_name": str(o.get("class_name") or "woman"),
                         "category": category,
                     })
@@ -532,6 +534,7 @@ async def get_packs_list(*, astria_api_key: str) -> list[dict]:
             "title": offer["title"],
             "price_rub": offer["price_rub"],
             "expected_images": expected_images,
+            "credit_cost": offer.get("credit_cost", expected_images),
             "cover_url": pack_data.get("cover_url", ""),
             "category": offer.get("category", "female"),
         })
@@ -554,6 +557,7 @@ async def get_pack_detail(pack_id: int, *, astria_api_key: str) -> dict | None:
         "title": offer["title"],
         "price_rub": offer["price_rub"],
         "expected_images": expected_images,
+        "credit_cost": offer.get("credit_cost", expected_images),
         "cover_url": pack_data["cover_url"],
         "examples": pack_data["examples"],
     }
