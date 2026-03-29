@@ -974,12 +974,13 @@ class PrismaLabStore:
                             conn.commit()
                         except Exception:
                             conn.rollback()
-                    # Миграция: model → provider (one-time)
+                    # Миграция: model → provider (one-time, для строк где model отличается от provider)
                     try:
                         cur.execute(f"""
                             UPDATE {self._express_styles_table}
                             SET provider = model
-                            WHERE (provider IS NULL OR provider = '') AND model IS NOT NULL AND model != ''
+                            WHERE (provider IS NULL OR provider = '' OR provider = 'seedream')
+                              AND model IS NOT NULL AND model != '' AND model != provider
                         """)
                         conn.commit()
                     except Exception:
@@ -1148,12 +1149,13 @@ class PrismaLabStore:
                         conn.execute(f"ALTER TABLE {self._express_styles_table} ADD COLUMN {col} {col_def}")
                     except Exception:
                         pass
-                # Миграция: model → provider (one-time)
+                # Миграция: model → provider (one-time, для строк где model отличается от provider)
                 try:
                     conn.execute(f"""
                         UPDATE {self._express_styles_table}
                         SET provider = model
-                        WHERE (provider IS NULL OR provider = '') AND model IS NOT NULL AND model != ''
+                        WHERE (provider IS NULL OR provider = '' OR provider = 'seedream')
+                          AND model IS NOT NULL AND model != '' AND model != provider
                     """)
                 except Exception:
                     pass
