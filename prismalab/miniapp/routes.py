@@ -80,6 +80,10 @@ _generation_tasks: dict[str, dict] = {}
 
 # Ссылка на store (устанавливается при создании приложения)
 _store = None
+# Ссылки на bot/application (нужны для payment polling после оплаты)
+_bot = None
+_application = None
+_bot_username: str = ""
 
 
 def get_store():
@@ -93,6 +97,33 @@ def get_store():
 def set_store(store):
     global _store
     _store = store
+
+
+def get_bot():
+    return _bot
+
+
+def set_bot(bot):
+    global _bot
+    _bot = bot
+
+
+def get_application():
+    return _application
+
+
+def set_application(application):
+    global _application
+    _application = application
+
+
+def get_bot_username() -> str:
+    return _bot_username
+
+
+def set_bot_username(username: str):
+    global _bot_username
+    _bot_username = username
 
 
 def _get_user_from_request(request: Request) -> dict | None:
@@ -995,10 +1026,23 @@ async def api_pack_buy(request: Request):
         return JSONResponse({"error": "Payment creation failed"}, status_code=500)
 
     # Запускаем поллинг платежа
-    store = get_store()
-    # Нужен bot для отправки сообщения после оплаты — получаем из контекста
-    # В Mini App нет прямого доступа к bot; поллинг запустится в payment.py через webhook
-    # Поэтому просто возвращаем ссылку, webhook обработает оплату
+    bot = get_bot()
+    application = get_application()
+    if bot and application:
+        from prismalab.payment import poll_payment_status
+        asyncio.get_event_loop().create_task(poll_payment_status(
+            payment_id=payment_id_or_err,
+            bot=bot,
+            store=get_store(),
+            user_id=user_id,
+            chat_id=user_id,
+            credits=expected_images,
+            product_type="persona_pack",
+            amount_rub=amount,
+            application=application,
+        ))
+    else:
+        logger.warning("pack_buy: bot/application not set — payment polling skipped, webhook will handle")
 
     return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
 
@@ -1038,6 +1082,213 @@ async def api_persona_style_detail(request: Request):
         "gender": s["gender"],
         "image_url": s.get("image_url") or "",
     })
+
+
+# ========== Персона: покупка, докуп, генерация ==========
+
+
+async def api_persona_buy(request: Request):
+    """Покупка персоны из Mini App: создаёт платёж ЮKassa и возвращает URL для оплаты."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        credits = int(body.get("credits", 0))
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid credits"}, status_code=400)
+
+    from prismalab.payment import (
+        PRICES_PERSONA_CREATE,
+        apply_test_amount,
+        create_payment,
+        poll_payment_status,
+    )
+
+    if credits not in PRICES_PERSONA_CREATE:
+        return JSONResponse(
+            {"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_CREATE.keys())}"},
+            status_code=400,
+        )
+
+    user_id = user["user_id"]
+    price_rub = PRICES_PERSONA_CREATE[credits]
+    amount = apply_test_amount(float(price_rub))
+
+    from prismalab.payment import YOOKASSA_RETURN_URL
+
+    url, payment_id_or_err = create_payment(
+        amount_rub=amount,
+        description=f"PrismaLab — Создание персоны ({credits} фото)",
+        metadata={
+            "user_id": str(user_id),
+            "chat_id": str(user_id),
+            "product_type": "persona_create",
+            "credits": str(credits),
+        },
+        return_url=YOOKASSA_RETURN_URL,
+    )
+
+    if not url:
+        logger.error("Ошибка создания платежа persona_create: user=%s err=%s", user_id, payment_id_or_err)
+        try:
+            from prismalab.alerts import alert_payment_error
+            asyncio.get_event_loop().create_task(
+                alert_payment_error(user_id, "persona_create", str(payment_id_or_err or "payment creation failed"))
+            )
+        except Exception:
+            pass
+        return JSONResponse({"error": "Payment creation failed"}, status_code=500)
+
+    # Запускаем поллинг платежа (нужны bot и application)
+    bot = get_bot()
+    application = get_application()
+    if bot and application:
+        asyncio.get_event_loop().create_task(poll_payment_status(
+            payment_id=payment_id_or_err,
+            bot=bot,
+            store=get_store(),
+            user_id=user_id,
+            chat_id=user_id,
+            credits=credits,
+            product_type="persona_create",
+            amount_rub=amount,
+            application=application,
+        ))
+    else:
+        logger.warning("persona_buy: bot/application not set — payment polling skipped, webhook will handle")
+
+    return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
+
+
+async def api_persona_topup(request: Request):
+    """Докуп кредитов персоны из Mini App."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        credits = int(body.get("credits", 0))
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid credits"}, status_code=400)
+
+    from prismalab.payment import (
+        PRICES_PERSONA_TOPUP,
+        apply_test_amount,
+        create_payment,
+        poll_payment_status,
+    )
+
+    if credits not in PRICES_PERSONA_TOPUP:
+        return JSONResponse(
+            {"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_TOPUP.keys())}"},
+            status_code=400,
+        )
+
+    user_id = user["user_id"]
+    price_rub = PRICES_PERSONA_TOPUP[credits]
+    amount = apply_test_amount(float(price_rub))
+
+    from prismalab.payment import YOOKASSA_RETURN_URL
+
+    url, payment_id_or_err = create_payment(
+        amount_rub=amount,
+        description=f"PrismaLab — Докуп кредитов персоны ({credits} фото)",
+        metadata={
+            "user_id": str(user_id),
+            "chat_id": str(user_id),
+            "product_type": "persona_topup",
+            "credits": str(credits),
+        },
+        return_url=YOOKASSA_RETURN_URL,
+    )
+
+    if not url:
+        logger.error("Ошибка создания платежа persona_topup: user=%s err=%s", user_id, payment_id_or_err)
+        try:
+            from prismalab.alerts import alert_payment_error
+            asyncio.get_event_loop().create_task(
+                alert_payment_error(user_id, "persona_topup", str(payment_id_or_err or "payment creation failed"))
+            )
+        except Exception:
+            pass
+        return JSONResponse({"error": "Payment creation failed"}, status_code=500)
+
+    bot = get_bot()
+    application = get_application()
+    if bot and application:
+        asyncio.get_event_loop().create_task(poll_payment_status(
+            payment_id=payment_id_or_err,
+            bot=bot,
+            store=get_store(),
+            user_id=user_id,
+            chat_id=user_id,
+            credits=credits,
+            product_type="persona_topup",
+            amount_rub=amount,
+            application=application,
+        ))
+    else:
+        logger.warning("persona_topup: bot/application not set — payment polling skipped, webhook will handle")
+
+    return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
+
+
+async def api_persona_generate(request: Request):
+    """Сохраняет батч стилей для генерации и возвращает deeplink в бот."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(init_data, BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    user_id = user["user_id"]
+    styles = body.get("styles", [])
+    if not styles or not isinstance(styles, list):
+        return JSONResponse({"error": "No styles selected"}, status_code=400)
+
+    store = get_store()
+    profile = store.get_user(user_id)
+    has_persona = bool(getattr(profile, "astria_lora_tune_id", None))
+    if not has_persona:
+        return JSONResponse({"error": "No persona"}, status_code=400)
+
+    credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    if credits <= 0:
+        return JSONResponse({"error": "No credits"}, status_code=402)
+
+    # Ограничиваем батч кредитами и обогащаем промптами из БД
+    batch = styles[:credits]
+    all_db_styles = store.get_persona_styles(active_only=False)
+    db_by_slug = {s["slug"]: s for s in all_db_styles}
+    for item in batch:
+        db_style = db_by_slug.get(item.get("slug", ""))
+        if db_style and db_style.get("prompt"):
+            item["prompt"] = db_style["prompt"]
+
+    store.set_pending_persona_batch(user_id, json.dumps(batch))
+    logger.info("Persona batch saved for user %s: %d styles", user_id, len(batch))
+
+    # Deeplink в бот
+    bot_username = get_bot_username()
+    bot_link = f"https://t.me/{bot_username}?start=persona_batch" if bot_username else ""
+    return JSONResponse({"ok": True, "count": len(batch), "bot_link": bot_link})
 
 
 # ========== Аналитика ==========
@@ -1115,6 +1366,9 @@ routes = [
     Route("/app/api/packs/{pack_id:int}/buy", api_pack_buy, methods=["POST"]),
     Route("/app/api/persona-styles", api_persona_styles, methods=["GET"]),
     Route("/app/api/persona-styles/{style_id:int}", api_persona_style_detail, methods=["GET"]),
+    Route("/app/api/persona/buy", api_persona_buy, methods=["POST"]),
+    Route("/app/api/persona/topup", api_persona_topup, methods=["POST"]),
+    Route("/app/api/persona/generate", api_persona_generate, methods=["POST"]),
     Route("/app/api/track", api_track, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
