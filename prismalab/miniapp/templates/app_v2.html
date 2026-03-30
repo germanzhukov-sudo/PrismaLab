@@ -76,6 +76,7 @@
         <!-- ========== EXPRESS FLOW ========== -->
 
         <!-- Screen: Express Themes -->
+        <!-- V2: Express Themes (legacy, hidden when V3 active) -->
         <div id="screen-express-themes" class="screen">
             <div class="screen-header">
                 <button class="back-btn" onclick="goBack('main')">
@@ -87,12 +88,10 @@
                     <span id="express-credits-count">0</span>
                 </div>
             </div>
-            <div class="themes-grid" id="themes-grid">
-                <!-- Темы загрузятся динамически -->
-            </div>
+            <div class="themes-grid" id="themes-grid"></div>
         </div>
 
-        <!-- Screen: Express Styles (inside theme) -->
+        <!-- V2: Express Styles (legacy) -->
         <div id="screen-express-styles" class="screen">
             <div class="screen-header">
                 <button class="back-btn" onclick="goBack('express-themes')">
@@ -104,7 +103,28 @@
                     <span id="express-styles-credits">0</span>
                 </div>
             </div>
-            <div class="styles-grid" id="express-styles-grid">
+            <div class="styles-grid" id="express-styles-grid"></div>
+        </div>
+
+        <!-- V3: Express Catalog (categories + tags + styles) -->
+        <div id="screen-express-catalog" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Экспресс</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="v3-credits-count">0</span>
+                </div>
+            </div>
+            <div class="category-pills" id="v3-category-pills">
+                <!-- Категории загрузятся динамически -->
+            </div>
+            <div class="tag-pills" id="v3-tag-pills" style="display:none">
+                <!-- Теги загрузятся динамически -->
+            </div>
+            <div class="styles-grid" id="v3-styles-grid">
                 <!-- Стили загрузятся динамически -->
             </div>
         </div>
@@ -112,7 +132,7 @@
         <!-- Screen: Express Upload -->
         <div id="screen-express-upload" class="screen">
             <div class="screen-header">
-                <button class="back-btn" onclick="goBack('express-styles')">
+                <button class="back-btn" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-styles')">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title" id="express-selected-style">Стиль</h2>
@@ -135,6 +155,26 @@
                 <button class="generate-btn" id="express-generate-btn" style="display:none" onclick="startExpressGeneration()">
                     <span class="btn-text">&#10024; Создать</span>
                 </button>
+                <div class="provider-choice" id="provider-choice" style="display:none">
+                    <div class="provider-options">
+                        <button class="provider-option selected" data-provider="seedream" onclick="selectProvider('seedream')">
+                            <span class="provider-name">Seedream</span>
+                            <span class="provider-desc">Быстрый</span>
+                        </button>
+                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectProvider('nano-banana-pro')">
+                            <span class="provider-name">Nano Banana</span>
+                            <span class="provider-desc">Детальный</span>
+                        </button>
+                    </div>
+                    <button class="provider-info-btn" onclick="showProviderInfo()">?</button>
+                </div>
+                <div class="provider-tooltip" id="provider-tooltip" style="display:none">
+                    <div class="tooltip-content">
+                        <b>Seedream</b> — быстрая генерация, хорошее качество.<br>
+                        <b>Nano Banana</b> — более детальная и качественная генерация, занимает чуть больше времени.
+                        <button class="tooltip-close" onclick="hideProviderInfo()">Понятно</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -159,7 +199,7 @@
         <!-- Screen: Express Result -->
         <div id="screen-express-result" class="screen">
             <div class="screen-header">
-                <button class="back-btn" onclick="goBack('express-themes')">
+                <button class="back-btn" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-themes')">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title">Результат</h2>
@@ -361,6 +401,7 @@
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
     </div>
 
-    <script src="/app/static/app_v2.js?v=1"></script>
+    <script>window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};</script>
+    <script src="/app/static/app_v2.js?v=2"></script>
 </body>
 </html>

@@ -171,6 +171,57 @@ def get_themes(store: Any, *, gender: str | None = None) -> list[str]:
     return themes
 
 
+# ── V3: Категории/теги ───────────────────────────────────────────────
+
+@dataclass
+class CategoryInfo:
+    """Категория для API."""
+    id: int
+    slug: str
+    title: str
+
+    def to_api_dict(self) -> dict:
+        return {"id": self.id, "slug": self.slug, "title": self.title}
+
+
+@dataclass
+class TagInfo:
+    """Тег для API."""
+    id: int
+    slug: str
+    title: str
+
+    def to_api_dict(self) -> dict:
+        return {"id": self.id, "slug": self.slug, "title": self.title}
+
+
+def get_categories(store: Any) -> list[CategoryInfo]:
+    """Активные категории для фильтрации в Mini App."""
+    rows = store.get_express_categories(active_only=True)
+    return [CategoryInfo(id=r["id"], slug=r["slug"], title=r["title"]) for r in rows]
+
+
+def get_tags_for_category(store: Any, category_id: int) -> list[TagInfo]:
+    """Разрешённые активные теги для категории."""
+    rows = store.get_category_tags(category_id)
+    return [TagInfo(id=r["id"], slug=r["slug"], title=r["title"])
+            for r in rows if r.get("is_active", True)]
+
+
+def get_styles_filtered(
+    store: Any,
+    category_slugs: list[str] | None = None,
+    tag_slugs: list[str] | None = None,
+) -> list[StyleInfo]:
+    """Стили с фильтрацией по категориям и тегам (V3 API)."""
+    rows = store.get_styles_filtered(
+        category_slugs=category_slugs,
+        tag_slugs=tag_slugs,
+        active_only=True,
+    )
+    return [_db_row_to_style_info(row) for row in rows]
+
+
 def resolve_style(store: Any, slug: str) -> ResolvedStyle | None:
     """Резолвит стиль по slug: БД → fallback на PERSONA_STYLE_PROMPTS.
 

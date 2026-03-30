@@ -94,8 +94,12 @@ MINIAPP_V2 = os.getenv("MINIAPP_V2", "") == "1"
 
 async def app_page(request: Request):
     """Главная страница Mini App. MINIAPP_V2=1 → V2 UI."""
+    from prismalab.config import express_filters_v3
     template = "app_v2.html" if MINIAPP_V2 else "app.html"
-    return templates.TemplateResponse(template, {"request": request})
+    return templates.TemplateResponse(template, {
+        "request": request,
+        "express_v3": express_filters_v3(),
+    })
 
 
 # ========== API ==========
@@ -220,7 +224,7 @@ async def api_generate(request: Request):
     return JSONResponse({"task_id": task_id, "status": "processing"})
 
 
-async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes: bytes, use_free: bool, profile):
+async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes: bytes, use_free: bool, profile, provider_override: str | None = None):
     """Фоновая генерация через KIE — тонкий слой над services."""
     from prismalab.settings import load_settings
 
@@ -246,6 +250,13 @@ async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes
             provider = resolved.provider if resolved else "seedream"
             negative_prompt = resolved.negative_prompt if resolved else ""
             model_params_json = resolved.model_params_json if resolved else ""
+
+        # V3: пользователь может выбрать провайдер
+        if provider_override and provider_override in ("seedream", "nano-banana-pro"):
+            provider = provider_override
+            # Сбрасываем model_params при смене провайдера (дефолты провайдера)
+            if resolved and provider != resolved.provider:
+                model_params_json = ""
 
         # Вызываем сервис генерации
         result = await run_generation(
@@ -1093,6 +1104,134 @@ async def api_v2_photoset_generate(request: Request):
     return JSONResponse(result)
 
 
+# ========== V3: Express Catalog + Generate ==========
+
+async def api_v3_express_catalog(request: Request):
+    """V3: Единый каталог — категории, теги, стили с фильтрацией.
+
+    GET /app/api/v3/express/catalog
+    Params:
+      - category (slug, опционально): фильтр по категории
+      - tags (comma-separated slugs, опционально): фильтр по тегам
+    Response: {categories, tags, styles, last_provider}
+    """
+    from .services.express import get_categories, get_styles_filtered, get_tags_for_category
+
+    user = _get_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    store = get_store()
+    user_id = user["user_id"]
+
+    # Категории (всегда все активные)
+    categories = get_categories(store)
+
+    # Текущий выбранный фильтр
+    cat_slug = request.query_params.get("category", "").strip()
+    tag_slugs_raw = request.query_params.get("tags", "").strip()
+    tag_slugs = [t.strip() for t in tag_slugs_raw.split(",") if t.strip()] if tag_slugs_raw else []
+
+    # Теги для выбранной категории
+    tags = []
+    if cat_slug and cat_slug != "all":
+        cat_row = store.get_express_category_by_slug(cat_slug)
+        if cat_row:
+            tags = get_tags_for_category(store, cat_row["id"])
+
+    # Стили
+    cat_filter = [cat_slug] if cat_slug and cat_slug != "all" else None
+    styles = get_styles_filtered(store, category_slugs=cat_filter, tag_slugs=tag_slugs or None)
+
+    # Кредиты + последний провайдер
+    profile = store.get_user(user_id)
+    has_free = not profile.free_generation_used
+    fast_credits = profile.paid_generations_remaining
+    last_provider = store.get_user_last_express_provider(user_id)
+
+    return JSONResponse({
+        "categories": [c.to_api_dict() for c in categories],
+        "tags": [t.to_api_dict() for t in tags],
+        "styles": [s.to_api_dict() for s in styles],
+        "credits": {
+            "fast": fast_credits,
+            "free_used": profile.free_generation_used,
+            "balance": fast_credits if has_free is False else fast_credits + 1,
+        },
+        "last_provider": last_provider,
+    })
+
+
+async def api_v3_express_generate(request: Request):
+    """V3: Генерация с выбором провайдера пользователем.
+
+    POST /app/api/v3/express/generate
+    FormData: init_data, style_id, photo, provider (seedream|nano-banana-pro)
+    """
+    from .services.express import resolve_style
+
+    form = await request.form()
+    init_data = form.get("init_data", "")
+
+    user = validate_init_data(str(init_data), BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    user_id = user["user_id"]
+    style_slug = str(form.get("style_id", "") or form.get("style_slug", "")).strip()
+    photo = form.get("photo")
+    provider_choice = str(form.get("provider", "")).strip()
+
+    if not style_slug:
+        return JSONResponse({"error": "No style selected"}, status_code=400)
+    if not photo:
+        return JSONResponse({"error": "No photo uploaded"}, status_code=400)
+
+    store = get_store()
+    resolved = resolve_style(store, style_slug)
+    if not resolved:
+        return JSONResponse({"error": "Style not found or inactive"}, status_code=404)
+
+    # Кредиты
+    profile = store.get_user(user_id)
+    has_free = not profile.free_generation_used
+    has_paid = profile.paid_generations_remaining > 0
+    if not has_free and not has_paid:
+        return JSONResponse({"error": "no_credits", "message": "Нет кредитов"}, status_code=402)
+
+    # Фото
+    photo_bytes = await photo.read()
+    if len(photo_bytes) > 15 * 1024 * 1024:
+        return JSONResponse({"error": "Photo too large (max 15MB)"}, status_code=413)
+
+    # Провайдер: выбор пользователя → запомнить
+    provider_override = provider_choice if provider_choice in ("seedream", "nano-banana-pro") else None
+    actual_provider = provider_override or resolved.provider
+    if provider_override:
+        store.set_user_last_express_provider(user_id, provider_override)
+
+    # Задача
+    task_id = str(uuid.uuid4())[:8]
+    _generation_tasks[task_id] = {
+        "status": "processing",
+        "user_id": user_id,
+        "style_id": style_slug,
+        "result_url": None,
+        "error": None,
+    }
+
+    asyncio.get_event_loop().create_task(
+        _run_generation(task_id, user_id, style_slug, photo_bytes, has_free, profile,
+                        provider_override=provider_override)
+    )
+
+    return JSONResponse({
+        "task_id": task_id,
+        "status": "processing",
+        "provider": actual_provider,
+    })
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -1119,6 +1258,9 @@ routes = [
     Route("/app/api/v2/photosets", api_v2_photosets, methods=["GET"]),
     Route("/app/api/v2/photosets/{kind}/{id:int}/generate", api_v2_photoset_generate, methods=["POST"]),
     Route("/app/api/v2/packs/{pack_id:int}/buy-credits", api_v2_pack_buy_credits, methods=["POST"]),
+    # V3 endpoints
+    Route("/app/api/v3/express/catalog", api_v3_express_catalog, methods=["GET"]),
+    Route("/app/api/v3/express/generate", api_v3_express_generate, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 

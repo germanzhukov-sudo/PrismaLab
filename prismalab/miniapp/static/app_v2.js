@@ -44,6 +44,12 @@ const state = {
     selectedExpressStyle: null,
     expressFile: null,
     expressTaskId: null,
+    // V3 Express
+    v3Categories: [],
+    v3Tags: [],
+    v3SelectedCategory: 'all',
+    v3SelectedTags: [],
+    selectedProvider: 'seedream',
     // Photosets flow
     packs: [],
     personaStyles: [],
@@ -199,7 +205,11 @@ async function selectGender(gender) {
 
 function goToExpress() {
     trackEvent('v2_nav_express');
-    loadExpressThemes();
+    if (window.EXPRESS_V3) {
+        loadExpressCatalog();
+    } else {
+        loadExpressThemes();
+    }
 }
 
 function goToPhotosets() {
@@ -327,6 +337,9 @@ function selectExpressStyle(style) {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
     document.getElementById('express-selected-style').textContent = style.label;
+    // Hide provider choice in V2
+    const providerChoice = document.getElementById('provider-choice');
+    if (providerChoice) providerChoice.style.display = 'none';
     resetExpressUpload();
     showScreen('express-upload');
 }
@@ -377,9 +390,13 @@ async function startExpressGeneration() {
     formData.append('init_data', state.initData);
     formData.append('style_id', state.selectedExpressStyle.id);
     formData.append('photo', state.expressFile);
+    if (window.EXPRESS_V3 && state.selectedProvider) {
+        formData.append('provider', state.selectedProvider);
+    }
 
+    const generateUrl = window.EXPRESS_V3 ? '/app/api/v3/express/generate' : '/app/api/v2/express-generate';
     try {
-        const resp = await fetch('/app/api/v2/express-generate', {
+        const resp = await fetch(generateUrl, {
             method: 'POST',
             body: formData,
         });
@@ -447,6 +464,181 @@ function downloadExpressResult() {
     link.download = `prismalab_express_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
     link.click();
     if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+}
+
+// === EXPRESS V3 FLOW ===
+
+async function loadExpressCatalog(keepFilters) {
+    showScreen('express-catalog');
+    const grid = document.getElementById('v3-styles-grid');
+    if (!keepFilters) {
+        state.v3SelectedCategory = 'all';
+        state.v3SelectedTags = [];
+    }
+    grid.innerHTML = Array(6).fill('<div class="style-card skeleton"><div style="height:100%"></div></div>').join('');
+
+    try {
+        let url = '/app/api/v3/express/catalog';
+        const params = [];
+        if (state.v3SelectedCategory && state.v3SelectedCategory !== 'all') {
+            params.push(`category=${encodeURIComponent(state.v3SelectedCategory)}`);
+        }
+        if (state.v3SelectedTags.length > 0) {
+            params.push(`tags=${state.v3SelectedTags.map(encodeURIComponent).join(',')}`);
+        }
+        if (params.length) url += '?' + params.join('&');
+
+        const resp = await fetch(url, {
+            headers: { 'X-Telegram-Init-Data': state.initData },
+        });
+        const data = await resp.json();
+
+        state.v3Categories = data.categories || [];
+        state.v3Tags = data.tags || [];
+        state.expressCredits = data.credits || { fast: 0, free_used: false };
+        state.selectedProvider = data.last_provider || 'seedream';
+
+        renderV3Categories();
+        renderV3Tags();
+        renderV3Styles(data.styles || []);
+        updateBalanceDisplays();
+
+        // Update V3 credits display
+        const bal = data.credits?.balance ?? 0;
+        const el = document.getElementById('v3-credits-count');
+        if (el) el.textContent = bal;
+    } catch (e) {
+        console.error('Load catalog error:', e);
+        grid.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
+    }
+}
+
+function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderV3Categories() {
+    const container = document.getElementById('v3-category-pills');
+    let html = `<button class="cat-pill ${state.v3SelectedCategory === 'all' ? 'active' : ''}" onclick="selectV3Category('all')">Все</button>`;
+    for (const cat of state.v3Categories) {
+        const active = state.v3SelectedCategory === cat.slug ? 'active' : '';
+        html += `<button class="cat-pill ${active}" onclick="selectV3Category('${escAttr(cat.slug)}')">${escHtml(cat.title)}</button>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderV3Tags() {
+    const container = document.getElementById('v3-tag-pills');
+    if (state.v3Tags.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = '';
+    let html = '';
+    for (const tag of state.v3Tags) {
+        const active = state.v3SelectedTags.includes(tag.slug) ? 'active' : '';
+        html += `<button class="tag-pill ${active}" onclick="toggleV3Tag('${escAttr(tag.slug)}')">${escHtml(tag.title)}</button>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderV3Styles(styles) {
+    const grid = document.getElementById('v3-styles-grid');
+    if (!styles.length) {
+        grid.innerHTML = '<div class="empty-state">Нет стилей для выбранных фильтров</div>';
+        return;
+    }
+    const GRADIENTS = [
+        'linear-gradient(135deg, #667eea, #764ba2)',
+        'linear-gradient(135deg, #f093fb, #f5576c)',
+        'linear-gradient(135deg, #4facfe, #00f2fe)',
+        'linear-gradient(135deg, #43e97b, #38f9d7)',
+        'linear-gradient(135deg, #fa709a, #fee140)',
+        'linear-gradient(135deg, #a18cd1, #fbc2eb)',
+    ];
+    grid.innerHTML = '';
+    styles.forEach((s, i) => {
+        const card = document.createElement('div');
+        card.className = 'style-card';
+        card.addEventListener('click', () => selectV3Style(s));
+
+        const hasImg = s.image_url && s.image_url.startsWith('http');
+        if (hasImg) {
+            card.style.backgroundImage = `url(${CSS.escape(s.image_url)})`;
+            card.style.backgroundSize = 'cover';
+            card.style.backgroundPosition = 'center';
+        } else {
+            card.style.background = GRADIENTS[i % GRADIENTS.length];
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'style-emoji';
+            emojiDiv.textContent = s.emoji || '🎨';
+            card.appendChild(emojiDiv);
+        }
+
+        const info = document.createElement('div');
+        info.className = 'style-card-info';
+        const label = document.createElement('span');
+        label.className = 'style-label';
+        label.textContent = (s.emoji || '') + ' ' + s.label;
+        info.appendChild(label);
+        card.appendChild(info);
+        grid.appendChild(card);
+    });
+}
+
+function selectV3Category(slug) {
+    state.v3SelectedCategory = slug;
+    state.v3SelectedTags = [];
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    loadExpressCatalog(true);
+}
+
+function toggleV3Tag(slug) {
+    const idx = state.v3SelectedTags.indexOf(slug);
+    if (idx >= 0) {
+        state.v3SelectedTags.splice(idx, 1);
+    } else {
+        state.v3SelectedTags.push(slug);
+    }
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    loadExpressCatalog(true);
+}
+
+function selectV3Style(style) {
+    state.selectedExpressStyle = style;
+    state.expressFile = null;
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    document.getElementById('express-selected-style').textContent = `${style.emoji || ''} ${style.label}`;
+    document.getElementById('express-upload-zone').style.display = '';
+    document.getElementById('express-preview').style.display = 'none';
+    document.getElementById('express-generate-btn').style.display = 'none';
+    // Show provider choice in V3
+    const providerChoice = document.getElementById('provider-choice');
+    if (providerChoice) {
+        providerChoice.style.display = '';
+        updateProviderUI();
+    }
+    showScreen('express-upload');
+}
+
+// Provider choice
+function selectProvider(provider) {
+    state.selectedProvider = provider;
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    updateProviderUI();
+}
+
+function updateProviderUI() {
+    document.querySelectorAll('.provider-option').forEach(el => {
+        el.classList.toggle('selected', el.dataset.provider === state.selectedProvider);
+    });
+}
+
+function showProviderInfo() {
+    document.getElementById('provider-tooltip').style.display = '';
+}
+
+function hideProviderInfo() {
+    document.getElementById('provider-tooltip').style.display = 'none';
 }
 
 // === PHOTOSETS FLOW ===

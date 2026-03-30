@@ -89,6 +89,13 @@ def express_via_miniapp() -> bool:
     return miniapp_v2_enabled() and bool(MINIAPP_URL)
 
 
+def express_filters_v3() -> bool:
+    """Feature flag: V3 фильтры экспресс (категории/теги/выбор провайдера).
+    Default: off (0). Включается EXPRESS_FILTERS_V3=1."""
+    raw = (os.getenv("EXPRESS_FILTERS_V3") or "").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
 def packs_use_credits() -> bool:
     """Feature flag: паки покупаются за persona_credits вместо ₽.
     Default: off (0). Включается PACKS_USE_CREDITS=1."""
