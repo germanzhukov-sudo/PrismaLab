@@ -117,7 +117,11 @@ async def api_auth(request: Request):
         return JSONResponse({"error": "Invalid init data"}, status_code=401)
 
     store = get_store()
-    profile = store.get_user(user["user_id"])
+    try:
+        profile = store.get_user(user["user_id"])
+    except Exception as e:
+        logger.warning("Mini App auth DB error user=%s: %s", user.get("user_id"), e)
+        return JSONResponse({"error": "Temporary backend error"}, status_code=503)
 
     user_id = user["user_id"]
     return JSONResponse({

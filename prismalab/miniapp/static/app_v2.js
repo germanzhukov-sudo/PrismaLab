@@ -85,46 +85,63 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // === Auth ===
 async function authenticate() {
-    try {
-        const resp = await fetch('/app/api/auth', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ init_data: state.initData }),
-        });
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const resp = await fetch('/app/api/auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ init_data: state.initData }),
+            });
 
-        if (resp.ok) {
-            const data = await resp.json();
-            state.userId = data.user_id;
-            state.gender = data.gender;
-            state.expressCredits = data.credits || { fast: 0, free_used: false };
-            state.hasPersona = !!data.has_persona;
-            state.photosetsCredits = data.persona_credits || 0;
-            updateBalanceDisplays();
+            if (resp.ok) {
+                const data = await resp.json();
+                state.userId = data.user_id;
+                state.gender = data.gender;
+                state.expressCredits = data.credits || { fast: 0, free_used: false };
+                state.hasPersona = !!data.has_persona;
+                state.photosetsCredits = data.persona_credits || 0;
+                updateBalanceDisplays();
 
-            // Check pack payment return
-            const params = new URLSearchParams(window.location.search);
-            if (params.get('pack_paid')) {
-                showScreen('pack-paid');
+                // Check pack payment return
+                const params = new URLSearchParams(window.location.search);
+                if (params.get('pack_paid')) {
+                    showScreen('pack-paid');
+                    return;
+                }
+
+                trackEvent('miniapp_open');
+
+                if (!data.gender) {
+                    showScreen('gender');
+                    return;
+                }
+                showScreen('main');
                 return;
             }
 
-            trackEvent('miniapp_open');
-
-            if (!data.gender) {
-                showScreen('gender');
-                return;
-            }
-            showScreen('main');
-        } else {
             if (resp.status === 403) {
                 showBlocked('Mini App сейчас доступна только тестовому аккаунту.');
                 return;
             }
+
+            // Для временных backend-сбоев пробуем повторно.
+            if ((resp.status >= 500 || resp.status === 503) && attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+                continue;
+            }
+
             showBlocked('Не удалось авторизовать Mini App.');
+            return;
+        } catch (e) {
+            console.error('Auth error:', e);
+            if (attempt < maxAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+                continue;
+            }
+            showBlocked('Ошибка подключения. Попробуйте позже.');
+            return;
         }
-    } catch (e) {
-        console.error('Auth error:', e);
-        showBlocked('Ошибка подключения. Попробуйте позже.');
     }
 }
 
