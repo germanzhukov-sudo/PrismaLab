@@ -113,6 +113,28 @@
                 <div class="stat-label"><i class="bi bi-calendar-check"></i> Дней до покупки</div>
             </div>
         </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Разбивка fast-генераций по провайдерам за всё время</div>
+                <div class="stat-value" style="font-size: 1rem; line-height: 1.6;">
+                    <div>Seedream: <strong>{{ all_time.fast_generations_by_provider.seedream }}</strong></div>
+                    <div>Nano Banana: <strong>{{ all_time.fast_generations_by_provider.nano_banana }}</strong></div>
+                </div>
+                <div class="stat-label"><i class="bi bi-lightning-charge"></i> Экспресс по провайдерам</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card all-time">
+                <i class="bi bi-question-circle help-icon" onclick="toggleTooltip(this)"></i>
+                <div class="help-tooltip">Себестоимость fast-генераций по провайдерам за всё время</div>
+                <div class="stat-value" style="font-size: 1rem; line-height: 1.6;">
+                    <div>Seedream: <strong>₽{{ "%.0f"|format(all_time.fast_costs_by_provider.seedream) }}</strong></div>
+                    <div>Nano Banana: <strong>₽{{ "%.0f"|format(all_time.fast_costs_by_provider.nano_banana) }}</strong></div>
+                </div>
+                <div class="stat-label"><i class="bi bi-calculator"></i> Себест. Экспресс (детально)</div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -218,6 +240,18 @@
         </div>
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.fast_seedream }}</div>
+                <div class="stat-label"><i class="bi bi-droplet"></i> Экспресс Seedream</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.fast_nano }}</div>
+                <div class="stat-label"><i class="bi bi-gem"></i> Экспресс Nano Banana</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
                 <div class="stat-value">{{ stats.generations.persona }}</div>
                 <div class="stat-label"><i class="bi bi-person-badge"></i> Фото Персона</div>
             </div>
@@ -236,6 +270,18 @@
             <div class="stat-card warning">
                 <div class="stat-value">₽{{ "%.0f"|format(stats.costs.total) }}</div>
                 <div class="stat-label"><i class="bi bi-calculator"></i> Себестоимость</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.fast_seedream) }}</div>
+                <div class="stat-label"><i class="bi bi-droplet"></i> Себест. Seedream</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.fast_nano) }}</div>
+                <div class="stat-label"><i class="bi bi-gem"></i> Себест. Nano Banana</div>
             </div>
         </div>
         {% if stats.costs.packs > 0 %}
