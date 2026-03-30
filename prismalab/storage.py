@@ -85,6 +85,11 @@ class PrismaLabStore:
         self._pending_pack_runs_table = f"public.{self._prefix}pending_pack_runs" if self._use_pg else f"{self._prefix}pending_pack_runs"
         self._persona_styles_table = f"public.{self._prefix}persona_styles" if self._use_pg else f"{self._prefix}persona_styles"
         self._express_styles_table = f"public.{self._prefix}express_styles" if self._use_pg else f"{self._prefix}express_styles"
+        self._express_categories_table = f"public.{self._prefix}express_categories" if self._use_pg else f"{self._prefix}express_categories"
+        self._express_tags_table = f"public.{self._prefix}express_tags" if self._use_pg else f"{self._prefix}express_tags"
+        self._express_style_categories_table = f"public.{self._prefix}express_style_categories" if self._use_pg else f"{self._prefix}express_style_categories"
+        self._express_style_tags_table = f"public.{self._prefix}express_style_tags" if self._use_pg else f"{self._prefix}express_style_tags"
+        self._express_category_tags_table = f"public.{self._prefix}express_category_tags" if self._use_pg else f"{self._prefix}express_category_tags"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -100,6 +105,7 @@ class PrismaLabStore:
     def _connect_sqlite(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _connect_pg(self):
@@ -130,8 +136,8 @@ class PrismaLabStore:
         with self._connect() as conn:
             self._execute(
                 conn,
-                """
-                CREATE TABLE IF NOT EXISTS users (
+                f"""
+                CREATE TABLE IF NOT EXISTS {self._users_table} (
                     user_id INTEGER PRIMARY KEY,
                     personal_model_version TEXT,
                     personal_trigger_word TEXT,
@@ -161,7 +167,7 @@ class PrismaLabStore:
                 ("pending_pack_id", "INTEGER"),
             ]:
                 try:
-                    self._execute(conn, f"ALTER TABLE users ADD COLUMN {col} {col_type}")
+                    self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN {col} {col_type}")
                 except (sqlite3.OperationalError, Exception):
                     pass
             # Таблица для восстановления прерванных pack runs
@@ -265,7 +271,7 @@ class PrismaLabStore:
                     row = cur.fetchone()
             else:
                 row = conn.execute(
-                    "SELECT * FROM users WHERE user_id = ?", (int(user_id),)
+                    f"SELECT * FROM {self._users_table} WHERE user_id = ?", (int(user_id),)
                 ).fetchone()
             if not row:
                 return UserProfile(
@@ -665,8 +671,8 @@ class PrismaLabStore:
                 return int(row["persona_credits_remaining"]) if row else 0
             else:
                 cur = conn.execute(
-                    "UPDATE users SET persona_credits_remaining = persona_credits_remaining - 1, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE user_id = ? AND persona_credits_remaining > 0 RETURNING persona_credits_remaining",
+                    f"UPDATE {self._users_table} SET persona_credits_remaining = persona_credits_remaining - 1, updated_at = CURRENT_TIMESTAMP "
+                    f"WHERE user_id = ? AND persona_credits_remaining > 0 RETURNING persona_credits_remaining",
                     (uid,),
                 )
                 row = cur.fetchone()
@@ -755,7 +761,7 @@ class PrismaLabStore:
                     row = cur.fetchone()
             else:
                 row = conn.execute(
-                    "SELECT pending_persona_batch FROM users WHERE user_id = ?",
+                    f"SELECT pending_persona_batch FROM {self._users_table} WHERE user_id = ?",
                     (int(user_id),),
                 ).fetchone()
             if not row:
@@ -930,7 +936,7 @@ class PrismaLabStore:
                     deleted = cur.rowcount > 0
             else:
                 cur = conn.execute(
-                    "DELETE FROM users WHERE user_id = ?", (int(user_id),)
+                    f"DELETE FROM {self._users_table} WHERE user_id = ?", (int(user_id),)
                 )
                 deleted = cur.rowcount > 0
             conn.commit()
@@ -1043,6 +1049,71 @@ class PrismaLabStore:
                         conn.commit()
                     except Exception:
                         conn.rollback()
+                    # --- V3: Категории, теги и junction-таблицы для экспресс-стилей ---
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_categories_table} (
+                            id SERIAL PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            title TEXT NOT NULL,
+                            sort_order INTEGER DEFAULT 0,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        )
+                    """)
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_tags_table} (
+                            id SERIAL PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            title TEXT NOT NULL,
+                            sort_order INTEGER DEFAULT 0,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        )
+                    """)
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_style_categories_table} (
+                            style_id INTEGER REFERENCES {self._express_styles_table}(id) ON DELETE CASCADE,
+                            category_id INTEGER REFERENCES {self._express_categories_table}(id) ON DELETE CASCADE,
+                            PRIMARY KEY(style_id, category_id),
+                            UNIQUE(style_id, category_id)
+                        )
+                    """)
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_style_tags_table} (
+                            style_id INTEGER REFERENCES {self._express_styles_table}(id) ON DELETE CASCADE,
+                            tag_id INTEGER REFERENCES {self._express_tags_table}(id) ON DELETE CASCADE,
+                            PRIMARY KEY(style_id, tag_id),
+                            UNIQUE(style_id, tag_id)
+                        )
+                    """)
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._express_category_tags_table} (
+                            category_id INTEGER REFERENCES {self._express_categories_table}(id) ON DELETE CASCADE,
+                            tag_id INTEGER REFERENCES {self._express_tags_table}(id) ON DELETE CASCADE,
+                            PRIMARY KEY(category_id, tag_id),
+                            UNIQUE(category_id, tag_id)
+                        )
+                    """)
+                    conn.commit()
+                    # Индексы на junction-таблицы
+                    try:
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}esc_style ON {self._express_style_categories_table}(style_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}esc_cat ON {self._express_style_categories_table}(category_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}est_style ON {self._express_style_tags_table}(style_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}est_tag ON {self._express_style_tags_table}(tag_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}ect_cat ON {self._express_category_tags_table}(category_id)")
+                        cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}ect_tag ON {self._express_category_tags_table}(tag_id)")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                    # Миграция users: last_express_provider
+                    try:
+                        cur.execute(f"ALTER TABLE {self._users_table} ADD COLUMN last_express_provider TEXT DEFAULT 'seedream'")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
                     # Добавить prompt в persona_styles если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN prompt TEXT")
@@ -1098,8 +1169,8 @@ class PrismaLabStore:
                 logger.info("Таблицы админки созданы/проверены")
             else:
                 # SQLite версия
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS payments (
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._payments_table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
                         payment_id TEXT,
@@ -1112,25 +1183,23 @@ class PrismaLabStore:
                 """)
                 # Дедуп и уникальность payment_id для идемпотентности
                 try:
-                    conn.execute(
-                        """
-                        DELETE FROM payments
+                    conn.execute(f"""
+                        DELETE FROM {self._payments_table}
                         WHERE rowid NOT IN (
                             SELECT MAX(rowid)
-                            FROM payments
+                            FROM {self._payments_table}
                             WHERE payment_id IS NOT NULL
                             GROUP BY payment_id
                         )
                         AND payment_id IS NOT NULL
-                        """
-                    )
+                    """)
                     conn.execute(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id_uniq ON payments(payment_id)"
+                        f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{self._prefix}payments_payment_id_uniq ON {self._payments_table}(payment_id)"
                     )
                 except Exception as e:
                     logger.warning("SQLite: не удалось обеспечить уникальность payment_id: %s", e)
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS user_events (
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._user_events_table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
                         event_type TEXT NOT NULL,
@@ -1138,8 +1207,8 @@ class PrismaLabStore:
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS admins (
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._admins_table} (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         username TEXT UNIQUE NOT NULL,
                         password_hash TEXT NOT NULL,
@@ -1149,7 +1218,7 @@ class PrismaLabStore:
                     )
                 """)
                 try:
-                    conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
+                    conn.execute(f"ALTER TABLE {self._users_table} ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
                 except Exception:
                     pass
                 # Таблица стилей персоны (SQLite)
@@ -1217,6 +1286,65 @@ class PrismaLabStore:
                     """)
                 except Exception:
                     pass
+                # --- V3: Категории, теги и junction-таблицы для экспресс-стилей (SQLite) ---
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_categories_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        slug TEXT UNIQUE NOT NULL,
+                        title TEXT NOT NULL,
+                        sort_order INTEGER DEFAULT 0,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_tags_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        slug TEXT UNIQUE NOT NULL,
+                        title TEXT NOT NULL,
+                        sort_order INTEGER DEFAULT 0,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_style_categories_table} (
+                        style_id INTEGER REFERENCES {self._express_styles_table}(id) ON DELETE CASCADE,
+                        category_id INTEGER REFERENCES {self._express_categories_table}(id) ON DELETE CASCADE,
+                        PRIMARY KEY(style_id, category_id),
+                        UNIQUE(style_id, category_id)
+                    )
+                """)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_style_tags_table} (
+                        style_id INTEGER REFERENCES {self._express_styles_table}(id) ON DELETE CASCADE,
+                        tag_id INTEGER REFERENCES {self._express_tags_table}(id) ON DELETE CASCADE,
+                        PRIMARY KEY(style_id, tag_id),
+                        UNIQUE(style_id, tag_id)
+                    )
+                """)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._express_category_tags_table} (
+                        category_id INTEGER REFERENCES {self._express_categories_table}(id) ON DELETE CASCADE,
+                        tag_id INTEGER REFERENCES {self._express_tags_table}(id) ON DELETE CASCADE,
+                        PRIMARY KEY(category_id, tag_id),
+                        UNIQUE(category_id, tag_id)
+                    )
+                """)
+                # Индексы на junction-таблицы (SQLite)
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_esc_style ON {self._express_style_categories_table}(style_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_esc_cat ON {self._express_style_categories_table}(category_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_est_style ON {self._express_style_tags_table}(style_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_est_tag ON {self._express_style_tags_table}(tag_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_ect_cat ON {self._express_category_tags_table}(category_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_ect_tag ON {self._express_category_tags_table}(tag_id)")
+                # Миграция users: last_express_provider (SQLite)
+                try:
+                    conn.execute(f"ALTER TABLE {self._users_table} ADD COLUMN last_express_provider TEXT DEFAULT 'seedream'")
+                except Exception:
+                    pass
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -1240,7 +1368,7 @@ class PrismaLabStore:
                     return cur.fetchone() is not None
             else:
                 cur = conn.execute(
-                    "SELECT 1 FROM payments WHERE payment_id = ? LIMIT 1",
+                    f"SELECT 1 FROM {self._payments_table} WHERE payment_id = ? LIMIT 1",
                     (payment_id,),
                 )
                 return cur.fetchone() is not None
@@ -1279,8 +1407,8 @@ class PrismaLabStore:
             else:
                 try:
                     cur = conn.execute(
-                        """
-                        INSERT INTO payments (user_id, payment_id, payment_method, product_type, credits, amount_rub)
+                        f"""
+                        INSERT INTO {self._payments_table} (user_id, payment_id, payment_method, product_type, credits, amount_rub)
                         VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (int(user_id), payment_id, payment_method, product_type, int(credits), float(amount_rub)),
@@ -1313,8 +1441,8 @@ class PrismaLabStore:
                     return row["id"] if row else None
             else:
                 cur = conn.execute(
-                    """
-                    INSERT INTO user_events (user_id, event_type, event_data)
+                    f"""
+                    INSERT INTO {self._user_events_table} (user_id, event_type, event_data)
                     VALUES (?, ?, ?)
                     """,
                     (int(user_id), event_type, json.dumps(event_data) if event_data else None),
@@ -1454,7 +1582,7 @@ class PrismaLabStore:
                     row = cur.fetchone()
                     return dict(row) if row else None
             else:
-                row = conn.execute("SELECT * FROM admins WHERE username = ? AND is_active = 1", (username,)).fetchone()
+                row = conn.execute(f"SELECT * FROM {self._admins_table} WHERE username = ? AND is_active = 1", (username,)).fetchone()
                 return dict(row) if row else None
 
     def create_admin(self, username: str, password_hash: str, display_name: str | None = None) -> int | None:
@@ -1480,7 +1608,7 @@ class PrismaLabStore:
             else:
                 try:
                     cur = conn.execute(
-                        "INSERT INTO admins (username, password_hash, display_name) VALUES (?, ?, ?)",
+                        f"INSERT INTO {self._admins_table} (username, password_hash, display_name) VALUES (?, ?, ?)",
                         (username, password_hash, display_name),
                     )
                     conn.commit()
@@ -1507,11 +1635,11 @@ class PrismaLabStore:
             else:
                 if search:
                     rows = conn.execute(
-                        "SELECT * FROM users WHERE CAST(user_id AS TEXT) LIKE ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                        f"SELECT * FROM {self._users_table} WHERE CAST(user_id AS TEXT) LIKE ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                         (f"%{search}%", limit, offset),
                     ).fetchall()
                 else:
-                    rows = conn.execute("SELECT * FROM users ORDER BY updated_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+                    rows = conn.execute(f"SELECT * FROM {self._users_table} ORDER BY updated_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
                 return [dict(row) for row in rows]
 
     def get_users_count(self, search: str | None = None) -> int:
@@ -1528,9 +1656,9 @@ class PrismaLabStore:
                     return int(row["cnt"]) if row else 0
             else:
                 if search:
-                    row = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE CAST(user_id AS TEXT) LIKE ?", (f"%{search}%",)).fetchone()
+                    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {self._users_table} WHERE CAST(user_id AS TEXT) LIKE ?", (f"%{search}%",)).fetchone()
                 else:
-                    row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+                    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {self._users_table}").fetchone()
                 return int(row["cnt"]) if row else 0
 
     # ========== Рассылка ==========
@@ -1555,14 +1683,14 @@ class PrismaLabStore:
                     return [int(r["user_id"]) for r in cur.fetchall()]
             else:
                 if filter_type == "has_persona":
-                    rows = conn.execute("SELECT user_id FROM users WHERE astria_lora_tune_id IS NOT NULL").fetchall()
+                    rows = conn.execute(f"SELECT user_id FROM {self._users_table} WHERE astria_lora_tune_id IS NOT NULL").fetchall()
                 elif filter_type == "no_persona":
-                    rows = conn.execute("SELECT user_id FROM users WHERE astria_lora_tune_id IS NULL").fetchall()
+                    rows = conn.execute(f"SELECT user_id FROM {self._users_table} WHERE astria_lora_tune_id IS NULL").fetchall()
                 elif filter_type == "specific" and user_ids:
                     placeholders = ",".join("?" * len(user_ids))
-                    rows = conn.execute(f"SELECT user_id FROM users WHERE user_id IN ({placeholders})", user_ids).fetchall()
+                    rows = conn.execute(f"SELECT user_id FROM {self._users_table} WHERE user_id IN ({placeholders})", user_ids).fetchall()
                 else:
-                    rows = conn.execute("SELECT user_id FROM users").fetchall()
+                    rows = conn.execute(f"SELECT user_id FROM {self._users_table}").fetchall()
                 return [int(r["user_id"]) for r in rows]
 
     def get_broadcast_counts(self) -> dict:
@@ -1581,12 +1709,12 @@ class PrismaLabStore:
                     row = cur.fetchone()
                     return dict(row) if row else {"total": 0, "has_persona": 0, "no_persona": 0}
             else:
-                row = conn.execute("""
+                row = conn.execute(f"""
                     SELECT
                         COUNT(*) as total,
                         COUNT(astria_lora_tune_id) as has_persona,
                         COUNT(*) - COUNT(astria_lora_tune_id) as no_persona
-                    FROM users
+                    FROM {self._users_table}
                 """).fetchone()
                 return dict(row) if row else {"total": 0, "has_persona": 0, "no_persona": 0}
 
@@ -1692,9 +1820,9 @@ class PrismaLabStore:
 
         with self._connect() as conn:
             if not self._use_pg:
-                row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
+                row = conn.execute(f"SELECT COUNT(*) as cnt FROM {self._users_table}").fetchone()
                 stats["users_total"] = int(row["cnt"]) if row else 0
-                row = conn.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM payments").fetchone()
+                row = conn.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table}").fetchone()
                 if row:
                     stats["total_revenue"] = float(row["total"])
                     if int(row["cnt"]) > 0:
@@ -1896,7 +2024,7 @@ class PrismaLabStore:
         with self._connect() as conn:
             if not self._use_pg:
                 # SQLite: упрощённая версия
-                row = conn.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM payments").fetchone()
+                row = conn.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table}").fetchone()
                 if row:
                     stats["payments"]["total_count"] = int(row["cnt"])
                     stats["payments"]["total_revenue"] = float(row["total"])
@@ -2159,13 +2287,13 @@ class PrismaLabStore:
                     day = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
                     result["dates"].append(day)
 
-                    row = conn.execute("SELECT COALESCE(SUM(amount_rub), 0) as total FROM payments WHERE DATE(created_at) = ?", (day,)).fetchone()
+                    row = conn.execute(f"SELECT COALESCE(SUM(amount_rub), 0) as total FROM {self._payments_table} WHERE DATE(created_at) = ?", (day,)).fetchone()
                     result["revenue"].append(float(row["total"]) if row else 0)
 
-                    row = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE DATE(created_at) = ?", (day,)).fetchone()
+                    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {self._users_table} WHERE DATE(created_at) = ?", (day,)).fetchone()
                     result["users"].append(int(row["cnt"]) if row else 0)
 
-                    row = conn.execute("SELECT COUNT(*) as cnt FROM user_events WHERE event_type = 'generation' AND DATE(created_at) = ?", (day,)).fetchone()
+                    row = conn.execute(f"SELECT COUNT(*) as cnt FROM {self._user_events_table} WHERE event_type = 'generation' AND DATE(created_at) = ?", (day,)).fetchone()
                     result["generations"].append(int(row["cnt"]) if row else 0)
 
             return result
@@ -2190,10 +2318,10 @@ class PrismaLabStore:
                     )
                     result["events"] = [dict(row) for row in cur.fetchall()]
             else:
-                rows = conn.execute("SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", (int(user_id),)).fetchall()
+                rows = conn.execute(f"SELECT * FROM {self._payments_table} WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", (int(user_id),)).fetchall()
                 result["payments"] = [dict(row) for row in rows]
 
-                rows = conn.execute("SELECT * FROM user_events WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", (int(user_id),)).fetchall()
+                rows = conn.execute(f"SELECT * FROM {self._user_events_table} WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", (int(user_id),)).fetchall()
                 result["events"] = [dict(row) for row in rows]
 
             return result
@@ -2754,3 +2882,372 @@ class PrismaLabStore:
                 )
                 conn.commit()
         self._renumber_express_styles()
+
+    # ========== Helper query methods ==========
+
+    def _fetch_all(self, sql: str, params: tuple | list = ()) -> list[dict]:
+        """Выполнить SELECT, вернуть list[dict]. PG/SQLite-совместимый."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, tuple(params))
+                    return [dict(row) for row in cur.fetchall()]
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql.replace("%s", "?"), tuple(params)).fetchall()
+                return [dict(row) for row in rows]
+
+    def _fetch_one(self, sql: str, params: tuple | list = ()) -> dict | None:
+        """Выполнить SELECT, вернуть первую строку или None."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, tuple(params))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+        else:
+            with self._connect() as conn:
+                row = conn.execute(sql.replace("%s", "?"), tuple(params)).fetchone()
+                return dict(row) if row else None
+
+    def _insert_returning_id(self, sql: str, params: tuple | list = ()) -> int | None:
+        """INSERT ... RETURNING id (PG) или lastrowid (SQLite)."""
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql + " RETURNING id", tuple(params))
+                    row = cur.fetchone()
+                    conn.commit()
+                    return int(row["id"]) if row else None
+        else:
+            with self._connect() as conn:
+                cur = conn.execute(sql.replace("%s", "?"), tuple(params))
+                conn.commit()
+                return cur.lastrowid
+
+    # ========== Express Categories CRUD ==========
+
+    def get_express_categories(self, active_only: bool = True) -> list[dict]:
+        """Список категорий, отсортированных по sort_order."""
+        conditions = []
+        if active_only:
+            conditions.append("is_active = " + ("TRUE" if self._use_pg else "1"))
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        return self._fetch_all(
+            f"SELECT * FROM {self._express_categories_table}{where} ORDER BY sort_order, id"
+        )
+
+    def get_express_category(self, category_id: int) -> dict | None:
+        return self._fetch_one(
+            f"SELECT * FROM {self._express_categories_table} WHERE id = %s",
+            (int(category_id),),
+        )
+
+    def get_express_category_by_slug(self, slug: str) -> dict | None:
+        return self._fetch_one(
+            f"SELECT * FROM {self._express_categories_table} WHERE slug = %s",
+            (slug,),
+        )
+
+    def create_express_category(self, slug: str, title: str,
+                                 sort_order: int = 0, is_active: bool = True) -> int | None:
+        return self._insert_returning_id(
+            f"INSERT INTO {self._express_categories_table} (slug, title, sort_order, is_active) "
+            f"VALUES (%s, %s, %s, %s)",
+            (slug, title, int(sort_order), is_active),
+        )
+
+    def update_express_category(self, category_id: int, **kwargs) -> bool:
+        allowed = {"slug", "title", "sort_order", "is_active"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return False
+        set_parts = [f"{k} = %s" for k in updates]
+        if self._use_pg:
+            set_parts.append("updated_at = NOW()")
+        params = list(updates.values()) + [int(category_id)]
+        sql = f"UPDATE {self._express_categories_table} SET {', '.join(set_parts)} WHERE id = %s"
+        self._run(sql, tuple(params))
+        return True
+
+    def delete_express_category(self, category_id: int) -> bool:
+        self._run(
+            f"DELETE FROM {self._express_categories_table} WHERE id = %s",
+            (int(category_id),),
+        )
+        return True
+
+    # ========== Express Tags CRUD ==========
+
+    def get_express_tags(self, active_only: bool = True) -> list[dict]:
+        """Список тегов, отсортированных по sort_order."""
+        conditions = []
+        if active_only:
+            conditions.append("is_active = " + ("TRUE" if self._use_pg else "1"))
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        return self._fetch_all(
+            f"SELECT * FROM {self._express_tags_table}{where} ORDER BY sort_order, id"
+        )
+
+    def get_express_tag(self, tag_id: int) -> dict | None:
+        return self._fetch_one(
+            f"SELECT * FROM {self._express_tags_table} WHERE id = %s",
+            (int(tag_id),),
+        )
+
+    def get_express_tag_by_slug(self, slug: str) -> dict | None:
+        return self._fetch_one(
+            f"SELECT * FROM {self._express_tags_table} WHERE slug = %s",
+            (slug,),
+        )
+
+    def create_express_tag(self, slug: str, title: str,
+                            sort_order: int = 0, is_active: bool = True) -> int | None:
+        return self._insert_returning_id(
+            f"INSERT INTO {self._express_tags_table} (slug, title, sort_order, is_active) "
+            f"VALUES (%s, %s, %s, %s)",
+            (slug, title, int(sort_order), is_active),
+        )
+
+    def update_express_tag(self, tag_id: int, **kwargs) -> bool:
+        allowed = {"slug", "title", "sort_order", "is_active"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return False
+        set_parts = [f"{k} = %s" for k in updates]
+        if self._use_pg:
+            set_parts.append("updated_at = NOW()")
+        params = list(updates.values()) + [int(tag_id)]
+        sql = f"UPDATE {self._express_tags_table} SET {', '.join(set_parts)} WHERE id = %s"
+        self._run(sql, tuple(params))
+        return True
+
+    def delete_express_tag(self, tag_id: int) -> bool:
+        self._run(
+            f"DELETE FROM {self._express_tags_table} WHERE id = %s",
+            (int(tag_id),),
+        )
+        return True
+
+    # ========== Junction: style ↔ categories ==========
+
+    def set_style_categories(self, style_id: int, category_ids: list[int]) -> None:
+        """Заменить все категории стиля. DELETE + INSERT."""
+        sid = int(style_id)
+        if self._use_pg:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"DELETE FROM {self._express_style_categories_table} WHERE style_id = %s",
+                        (sid,),
+                    )
+                    for cid in category_ids:
+                        cur.execute(
+                            f"INSERT INTO {self._express_style_categories_table} (style_id, category_id) VALUES (%s, %s)",
+                            (sid, int(cid)),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                conn.execute(
+                    f"DELETE FROM {self._express_style_categories_table} WHERE style_id = ?",
+                    (sid,),
+                )
+                for cid in category_ids:
+                    conn.execute(
+                        f"INSERT INTO {self._express_style_categories_table} (style_id, category_id) VALUES (?, ?)",
+                        (sid, int(cid)),
+                    )
+                conn.commit()
+
+    def get_style_categories(self, style_id: int) -> list[dict]:
+        """Категории конкретного стиля."""
+        return self._fetch_all(
+            f"SELECT c.* FROM {self._express_categories_table} c "
+            f"JOIN {self._express_style_categories_table} sc ON sc.category_id = c.id "
+            f"WHERE sc.style_id = %s ORDER BY c.sort_order, c.id",
+            (int(style_id),),
+        )
+
+    # ========== Junction: style ↔ tags ==========
+
+    def set_style_tags(self, style_id: int, tag_ids: list[int]) -> None:
+        """Заменить все теги стиля. DELETE + INSERT."""
+        sid = int(style_id)
+        if self._use_pg:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"DELETE FROM {self._express_style_tags_table} WHERE style_id = %s",
+                        (sid,),
+                    )
+                    for tid in tag_ids:
+                        cur.execute(
+                            f"INSERT INTO {self._express_style_tags_table} (style_id, tag_id) VALUES (%s, %s)",
+                            (sid, int(tid)),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                conn.execute(
+                    f"DELETE FROM {self._express_style_tags_table} WHERE style_id = ?",
+                    (sid,),
+                )
+                for tid in tag_ids:
+                    conn.execute(
+                        f"INSERT INTO {self._express_style_tags_table} (style_id, tag_id) VALUES (?, ?)",
+                        (sid, int(tid)),
+                    )
+                conn.commit()
+
+    def get_style_tags(self, style_id: int) -> list[dict]:
+        """Теги конкретного стиля."""
+        return self._fetch_all(
+            f"SELECT t.* FROM {self._express_tags_table} t "
+            f"JOIN {self._express_style_tags_table} st ON st.tag_id = t.id "
+            f"WHERE st.style_id = %s ORDER BY t.sort_order, t.id",
+            (int(style_id),),
+        )
+
+    # ========== Junction: category ↔ tags ==========
+
+    def set_category_tags(self, category_id: int, tag_ids: list[int]) -> None:
+        """Заменить разрешённые теги категории. DELETE + INSERT."""
+        cid = int(category_id)
+        if self._use_pg:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"DELETE FROM {self._express_category_tags_table} WHERE category_id = %s",
+                        (cid,),
+                    )
+                    for tid in tag_ids:
+                        cur.execute(
+                            f"INSERT INTO {self._express_category_tags_table} (category_id, tag_id) VALUES (%s, %s)",
+                            (cid, int(tid)),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                conn.execute(
+                    f"DELETE FROM {self._express_category_tags_table} WHERE category_id = ?",
+                    (cid,),
+                )
+                for tid in tag_ids:
+                    conn.execute(
+                        f"INSERT INTO {self._express_category_tags_table} (category_id, tag_id) VALUES (?, ?)",
+                        (cid, int(tid)),
+                    )
+                conn.commit()
+
+    def get_category_tags(self, category_id: int) -> list[dict]:
+        """Разрешённые теги для категории."""
+        return self._fetch_all(
+            f"SELECT t.* FROM {self._express_tags_table} t "
+            f"JOIN {self._express_category_tags_table} ct ON ct.tag_id = t.id "
+            f"WHERE ct.category_id = %s ORDER BY t.sort_order, t.id",
+            (int(category_id),),
+        )
+
+    # ========== Filtered styles query ==========
+
+    def get_styles_filtered(
+        self,
+        category_slugs: list[str] | None = None,
+        tag_slugs: list[str] | None = None,
+        active_only: bool = True,
+    ) -> list[dict]:
+        """Получить стили с фильтрацией по категориям и тегам.
+
+        - Без category_slugs → все стили (виртуальная категория "Все")
+        - category_slugs=["all"] → то же что без фильтра
+        - Категории: стиль принадлежит хотя бы одной из указанных категорий
+        - Теги: OR-логика (хотя бы один из указанных тегов)
+        - Теги валидируются: учитываются только те, которые разрешены для указанных
+          категорий через express_category_tags. Невалидные тихо игнорируются.
+        - is_active проверяется на стилях, категориях и тегах.
+        - Несуществующие slug'и → пустой результат (не ошибка, не сброс фильтра).
+        """
+        sql = f"SELECT DISTINCT s.* FROM {self._express_styles_table} s"
+        joins = []
+        conditions = []
+        params: list = []
+
+        # Фильтр по категориям
+        cat_slugs = [slug for slug in (category_slugs or []) if slug and slug != "all"]
+        if cat_slugs:
+            joins.append(
+                f" JOIN {self._express_style_categories_table} sc ON sc.style_id = s.id"
+                f" JOIN {self._express_categories_table} c ON c.id = sc.category_id"
+            )
+            placeholders = ", ".join(["%s"] * len(cat_slugs))
+            conditions.append(f"c.slug IN ({placeholders})")
+            params.extend(cat_slugs)
+            if active_only:
+                conditions.append("c.is_active = " + ("TRUE" if self._use_pg else "1"))
+
+        # Фильтр по тегам (валидация через category_tags)
+        t_slugs = [slug for slug in (tag_slugs or []) if slug]
+        if t_slugs:
+            joins.append(
+                f" JOIN {self._express_style_tags_table} st ON st.style_id = s.id"
+                f" JOIN {self._express_tags_table} t ON t.id = st.tag_id"
+            )
+            tag_placeholders = ", ".join(["%s"] * len(t_slugs))
+            tag_condition = f"t.slug IN ({tag_placeholders})"
+            params.extend(t_slugs)
+            if active_only:
+                tag_condition += " AND t.is_active = " + ("TRUE" if self._use_pg else "1")
+            # Валидация: теги должны быть разрешены для выбранных категорий
+            if cat_slugs:
+                tag_condition += (
+                    f" AND t.id IN ("
+                    f"SELECT ct.tag_id FROM {self._express_category_tags_table} ct "
+                    f"JOIN {self._express_categories_table} cv ON cv.id = ct.category_id "
+                    f"WHERE cv.slug IN ({placeholders})"
+                    f")"
+                )
+                params.extend(cat_slugs)
+            conditions.append(tag_condition)
+
+        # Активность стилей
+        if active_only:
+            conditions.append("s.is_active = " + ("TRUE" if self._use_pg else "1"))
+
+        sql += "".join(joins)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY s.sort_order, s.id"
+
+        return self._fetch_all(sql, params)
+
+    # ========== Provider memory ==========
+
+    _VALID_PROVIDERS = {"seedream", "nano-banana-pro"}
+
+    def set_user_last_express_provider(self, user_id: int, provider: str) -> None:
+        """Запомнить последний выбранный провайдер. Невалидный → seedream."""
+        safe_provider = provider if provider in self._VALID_PROVIDERS else "seedream"
+        self._run(
+            f"""
+            INSERT INTO {self._users_table} (user_id, last_express_provider)
+            VALUES (%s, %s)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_express_provider = EXCLUDED.last_express_provider
+            """,
+            (int(user_id), safe_provider),
+        )
+
+    def get_user_last_express_provider(self, user_id: int) -> str:
+        """Последний провайдер юзера. Default/fallback: seedream."""
+        row = self._fetch_one(
+            f"SELECT last_express_provider FROM {self._users_table} WHERE user_id = %s",
+            (int(user_id),),
+        )
+        if not row:
+            return "seedream"
+        val = row.get("last_express_provider") or ""
+        return val if val in self._VALID_PROVIDERS else "seedream"
