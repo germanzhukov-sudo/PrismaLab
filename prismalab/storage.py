@@ -365,6 +365,23 @@ class PrismaLabStore:
                         """, (key, str(value)))
                 conn.commit()
 
+    @staticmethod
+    def _calculate_fast_costs(
+        fast_seedream: int,
+        fast_nano: int,
+        cost_fast_photo: float,
+        cost_nano_banana: float,
+        usd_rub: float,
+    ) -> dict:
+        """Расчёт себестоимости fast-генераций с разбивкой по провайдерам."""
+        cost_seedream_rub = float(fast_seedream) * float(cost_fast_photo) * float(usd_rub)
+        cost_nano_rub = float(fast_nano) * float(cost_nano_banana) * float(usd_rub)
+        return {
+            "fast_seedream": round(cost_seedream_rub, 2),
+            "fast_nano": round(cost_nano_rub, 2),
+            "fast_total": round(cost_seedream_rub + cost_nano_rub, 2),
+        }
+
     # --- Себестоимость паков ---
 
     def get_pack_costs(self) -> list[dict]:
@@ -1828,6 +1845,7 @@ class PrismaLabStore:
         cost_settings = _cost_settings or self.get_cost_settings()
         COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
         COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
+        COST_NANO_BANANA = cost_settings.get("cost_nano_banana", COST_FAST_PHOTO)
         COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
         USD_RUB = cost_settings["usd_rub"]
 
@@ -1847,6 +1865,8 @@ class PrismaLabStore:
             "pack_purchases": 0,
             "gender": {"male": 0.0, "female": 0.0, "unknown": 0.0},
             "days_to_first_purchase": 0.0,
+            "fast_generations_by_provider": {"seedream": 0, "nano_banana": 0},
+            "fast_costs_by_provider": {"seedream": 0.0, "nano_banana": 0.0},
         }
 
         with self._connect() as conn:
@@ -1903,12 +1923,24 @@ class PrismaLabStore:
 
                 # Для маржи: генерации по типам и создания персон
                 cur.execute(f"""SELECT
-                    COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'fast'
+                          AND event_data->>'provider' = 'nano-banana-pro'
+                    ) as fast_nano,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'fast'
+                          AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
+                    ) as fast_seedream,
                     COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
                 FROM {self._user_events_table} WHERE event_type = 'generation'""")
                 row = cur.fetchone()
-                fast_gens = int(row["fast"] or 0) if row else 0
+                fast_nano = int(row["fast_nano"] or 0) if row else 0
+                fast_seedream = int(row["fast_seedream"] or 0) if row else 0
                 persona_gens = int(row["persona"] or 0) if row else 0
+                stats["fast_generations_by_provider"]["seedream"] = fast_seedream
+                stats["fast_generations_by_provider"]["nano_banana"] = fast_nano
 
                 cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'persona_create'")
                 row = cur.fetchone()
@@ -1933,7 +1965,21 @@ class PrismaLabStore:
                     pass
 
                 # Расчёт себестоимости и маржи
-                total_cost = (persona_creates * COST_PERSONA_CREATE + fast_gens * COST_FAST_PHOTO + persona_gens * COST_PERSONA_PHOTO + pack_cost_total_usd) * USD_RUB
+                fast_costs = self._calculate_fast_costs(
+                    fast_seedream=fast_seedream,
+                    fast_nano=fast_nano,
+                    cost_fast_photo=COST_FAST_PHOTO,
+                    cost_nano_banana=COST_NANO_BANANA,
+                    usd_rub=USD_RUB,
+                )
+                stats["fast_costs_by_provider"]["seedream"] = fast_costs["fast_seedream"]
+                stats["fast_costs_by_provider"]["nano_banana"] = fast_costs["fast_nano"]
+                total_cost = (
+                    persona_creates * COST_PERSONA_CREATE * USD_RUB
+                    + fast_costs["fast_total"]
+                    + persona_gens * COST_PERSONA_PHOTO * USD_RUB
+                    + pack_cost_total_usd * USD_RUB
+                )
                 stats["total_cost"] = round(total_cost, 2)
                 margin = stats["total_revenue"] - total_cost
                 stats["margin"]["amount"] = round(margin, 2)
@@ -2026,6 +2072,7 @@ class PrismaLabStore:
         cost_settings = _cost_settings or self.get_cost_settings()
         COST_PERSONA_CREATE = cost_settings["cost_persona_create"]
         COST_FAST_PHOTO = cost_settings["cost_fast_photo"]
+        COST_NANO_BANANA = cost_settings.get("cost_nano_banana", COST_FAST_PHOTO)
         COST_PERSONA_PHOTO = cost_settings["cost_persona_photo"]
         USD_RUB = cost_settings["usd_rub"]
 
@@ -2039,8 +2086,16 @@ class PrismaLabStore:
                 "persona_topup": {"count": 0, "revenue": 0.0},
                 "pack": {"count": 0, "revenue": 0.0},
             },
-            "generations": {"total": 0, "free": 0, "fast": 0, "persona": 0},
-            "costs": {"total": 0.0, "persona_create": 0.0, "fast_photos": 0.0, "persona_photos": 0.0, "packs": 0.0},
+            "generations": {"total": 0, "free": 0, "fast": 0, "fast_seedream": 0, "fast_nano": 0, "persona": 0},
+            "costs": {
+                "total": 0.0,
+                "persona_create": 0.0,
+                "fast_photos": 0.0,
+                "fast_seedream": 0.0,
+                "fast_nano": 0.0,
+                "persona_photos": 0.0,
+                "packs": 0.0,
+            },
             "margin": {"amount": 0.0, "percent": 0.0},
             "conversion": {"paid_users": 0, "percent": 0.0},
         }
@@ -2140,6 +2195,14 @@ class PrismaLabStore:
                         f"""SELECT
                             COUNT(*) as total,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
+                            COUNT(*) FILTER (
+                                WHERE event_data->>'mode' = 'fast'
+                                  AND event_data->>'provider' = 'nano-banana-pro'
+                            ) as fast_nano,
+                            COUNT(*) FILTER (
+                                WHERE event_data->>'mode' = 'fast'
+                                  AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
+                            ) as fast_seedream,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
                         FROM {self._user_events_table}
                         WHERE event_type = 'generation' AND created_at >= %s AND created_at <= %s""",
@@ -2150,6 +2213,14 @@ class PrismaLabStore:
                         f"""SELECT
                             COUNT(*) as total,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
+                            COUNT(*) FILTER (
+                                WHERE event_data->>'mode' = 'fast'
+                                  AND event_data->>'provider' = 'nano-banana-pro'
+                            ) as fast_nano,
+                            COUNT(*) FILTER (
+                                WHERE event_data->>'mode' = 'fast'
+                                  AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
+                            ) as fast_seedream,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
                         FROM {self._user_events_table}
                         WHERE event_type = 'generation'"""
@@ -2158,6 +2229,8 @@ class PrismaLabStore:
                 if row:
                     stats["generations"]["total"] = int(row["total"] or 0)
                     stats["generations"]["fast"] = int(row["fast"] or 0)
+                    stats["generations"]["fast_nano"] = int(row["fast_nano"] or 0)
+                    stats["generations"]["fast_seedream"] = int(row["fast_seedream"] or 0)
                     stats["generations"]["persona"] = int(row["persona"] or 0)
 
                 # Бесплатные генерации (юзеры без платежей) — LEFT JOIN вместо NOT EXISTS
@@ -2220,13 +2293,22 @@ class PrismaLabStore:
 
                 # Расчёт себестоимости
                 cost_persona_create = persona_creates * COST_PERSONA_CREATE * USD_RUB
-                cost_fast_photos = stats["generations"]["fast"] * COST_FAST_PHOTO * USD_RUB
+                fast_costs = self._calculate_fast_costs(
+                    fast_seedream=stats["generations"]["fast_seedream"],
+                    fast_nano=stats["generations"]["fast_nano"],
+                    cost_fast_photo=COST_FAST_PHOTO,
+                    cost_nano_banana=COST_NANO_BANANA,
+                    usd_rub=USD_RUB,
+                )
+                cost_fast_photos = fast_costs["fast_total"]
                 cost_persona_photos = stats["generations"]["persona"] * COST_PERSONA_PHOTO * USD_RUB
                 cost_packs = pack_cost_usd * USD_RUB
                 total_cost = cost_persona_create + cost_fast_photos + cost_persona_photos + cost_packs
 
                 stats["costs"]["persona_create"] = round(cost_persona_create, 2)
                 stats["costs"]["fast_photos"] = round(cost_fast_photos, 2)
+                stats["costs"]["fast_seedream"] = fast_costs["fast_seedream"]
+                stats["costs"]["fast_nano"] = fast_costs["fast_nano"]
                 stats["costs"]["persona_photos"] = round(cost_persona_photos, 2)
                 stats["costs"]["packs"] = round(cost_packs, 2)
                 stats["costs"]["total"] = round(total_cost, 2)
