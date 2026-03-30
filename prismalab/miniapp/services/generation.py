@@ -25,6 +25,9 @@ class GenerationResult:
     data_url: str          # base64 data URL (data:image/{jpeg|png};base64,...)
     provider: str          # seedream / nano-banana-pro
     style_slug: str
+    raw_bytes: bytes = b""  # исходные байты для upload/send
+    mime_type: str = "image/jpeg"
+    file_ext: str = "jpg"
 
 
 # ── Подготовка параметров для KIE API ────────────────────────────────
@@ -194,8 +197,16 @@ async def run_generation(
     # 5. Base64 data URL (MIME по output_format)
     out_fmt = str(kwargs.get("output_format", "jpg")).lower()
     mime = "image/png" if out_fmt == "png" else "image/jpeg"
+    file_ext = "png" if out_fmt == "png" else "jpg"
     result_b64 = base64.b64encode(result_bytes).decode()
     data_url = f"data:{mime};base64,{result_b64}"
 
     logger.info("Generation done: provider=%s style=%s", provider, style_slug)
-    return GenerationResult(data_url=data_url, provider=provider, style_slug=style_slug)
+    return GenerationResult(
+        data_url=data_url,
+        provider=provider,
+        style_slug=style_slug,
+        raw_bytes=result_bytes,
+        mime_type=mime,
+        file_ext=file_ext,
+    )

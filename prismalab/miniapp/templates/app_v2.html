@@ -214,8 +214,9 @@
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         Скачать
                     </button>
-                    <button class="action-btn secondary" onclick="goBack('express-themes')">&#127912; Ещё стиль</button>
+                    <button class="action-btn secondary" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-themes')">&#127912; Ещё стиль</button>
                 </div>
+                <p class="result-note" id="express-result-note"></p>
             </div>
         </div>
 
@@ -391,6 +392,17 @@
                         <span class="profile-value" id="profile-gender">&mdash;</span>
                     </div>
                 </div>
+                <div class="profile-history">
+                    <div class="profile-history-header">
+                        <h3>Мои фото</h3>
+                    </div>
+                    <div class="profile-history-grid" id="profile-history-grid">
+                        <div class="empty-state">История пока пустая</div>
+                    </div>
+                    <button class="action-btn secondary profile-history-more" id="profile-history-more" style="display:none" onclick="loadProfileHistory(false)">
+                        Показать ещё
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -402,6 +414,6 @@
     </div>
 
     <script>window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};</script>
-    <script src="/app/static/app_v2.js?v=2"></script>
+    <script src="/app/static/app_v2.js?v=3"></script>
 </body>
 </html>

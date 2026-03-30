@@ -224,7 +224,15 @@ async def api_generate(request: Request):
     return JSONResponse({"task_id": task_id, "status": "processing"})
 
 
-async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes: bytes, use_free: bool, profile, provider_override: str | None = None):
+async def _run_generation(
+    task_id: str,
+    user_id: int,
+    style_id: str,
+    photo_bytes: bytes,
+    use_free: bool,
+    profile,
+    provider_override: str | None = None,
+):
     """Фоновая генерация через KIE — тонкий слой над services."""
     from prismalab.settings import load_settings
 
@@ -284,11 +292,65 @@ async def _run_generation(task_id: str, user_id: int, style_id: str, photo_bytes
             "source": "miniapp",
         })
 
+        # Phase 4: upload → save history → TG send (best-effort)
+        style_title = resolved.title if resolved else style_id
+        image_url = None
+        tg_sent = False
+        mime_type = result.mime_type or "image/jpeg"
+        file_ext = result.file_ext or "jpg"
+
+        # 1. Upload в Supabase Storage
+        if result.raw_bytes:
+            try:
+                from prismalab.supabase_storage import upload_generation
+                image_url = await asyncio.to_thread(
+                    upload_generation,
+                    result.raw_bytes,
+                    user_id,
+                    file_ext,
+                    mime_type,
+                )
+            except Exception as upload_err:
+                logger.warning("Upload to storage failed (task=%s): %s", task_id, upload_err)
+
+        # 2. Save в generation_history
+        try:
+            store.save_generation_history(
+                user_id=user_id,
+                mode="express",
+                style_slug=style_id,
+                style_title=style_title,
+                provider=provider,
+                image_url=image_url,
+            )
+        except Exception as hist_err:
+            logger.warning("Save generation history failed (task=%s): %s", task_id, hist_err)
+
+        # 3. TG send_document (best-effort)
+        if result.raw_bytes and _bot:
+            try:
+                import io
+                doc = io.BytesIO(result.raw_bytes)
+                doc.name = f"{style_title}_{task_id}.{file_ext}"
+                await _bot.send_document(
+                    chat_id=user_id,
+                    document=doc,
+                    caption=f"✨ {style_title}",
+                    read_timeout=60,
+                    write_timeout=60,
+                    connect_timeout=30,
+                )
+                tg_sent = True
+            except Exception as tg_err:
+                logger.warning("TG send_document failed (task=%s, user=%s): %s", task_id, user_id, tg_err)
+
         _generation_tasks[task_id] = {
             "status": "done",
             "user_id": user_id,
             "style_id": style_id,
             "result_url": result.data_url,
+            "image_url": image_url,
+            "tg_sent": tg_sent,
             "error": None,
         }
         logger.info("Mini App generation done: user=%s style=%s provider=%s task=%s",
@@ -315,6 +377,8 @@ async def api_status(request: Request):
     response = {"task_id": task_id, "status": task["status"]}
     if task["status"] == "done":
         response["result_url"] = task["result_url"]
+        response["image_url"] = task.get("image_url")
+        response["tg_sent"] = bool(task.get("tg_sent"))
     elif task["status"] == "error":
         response["error"] = task["error"]
 
@@ -1232,6 +1296,49 @@ async def api_v3_express_generate(request: Request):
     })
 
 
+async def api_v3_history(request: Request):
+    """V3: История генераций пользователя.
+
+    GET /app/api/v3/history?mode=express&limit=20&offset=0
+    """
+    user = _get_user_from_request(request)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    store = get_store()
+    user_id = user["user_id"]
+
+    mode = request.query_params.get("mode", "").strip() or None
+    if mode and mode not in ("express", "photoset"):
+        mode = None
+
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except (ValueError, TypeError):
+        limit = 20
+    try:
+        offset = int(request.query_params.get("offset", "0"))
+    except (ValueError, TypeError):
+        offset = 0
+
+    rows = store.get_generation_history(user_id, mode=mode, limit=limit, offset=offset)
+    total = store.get_generation_history_total(user_id, mode=mode)
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": r.get("id"),
+            "mode": r.get("mode", "express"),
+            "style_slug": r.get("style_slug"),
+            "style_title": r.get("style_title"),
+            "provider": r.get("provider"),
+            "image_url": r.get("image_url"),
+            "created_at": str(r.get("created_at", "")),
+        })
+
+    return JSONResponse({"items": items, "total": total, "limit": limit, "offset": offset})
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -1261,6 +1368,7 @@ routes = [
     # V3 endpoints
     Route("/app/api/v3/express/catalog", api_v3_express_catalog, methods=["GET"]),
     Route("/app/api/v3/express/generate", api_v3_express_generate, methods=["POST"]),
+    Route("/app/api/v3/history", api_v3_history, methods=["GET"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 

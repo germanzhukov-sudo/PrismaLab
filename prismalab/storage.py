@@ -90,6 +90,7 @@ class PrismaLabStore:
         self._express_style_categories_table = f"public.{self._prefix}express_style_categories" if self._use_pg else f"{self._prefix}express_style_categories"
         self._express_style_tags_table = f"public.{self._prefix}express_style_tags" if self._use_pg else f"{self._prefix}express_style_tags"
         self._express_category_tags_table = f"public.{self._prefix}express_category_tags" if self._use_pg else f"{self._prefix}express_category_tags"
+        self._generation_history_table = f"public.{self._prefix}generation_history" if self._use_pg else f"{self._prefix}generation_history"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -1167,6 +1168,21 @@ class PrismaLabStore:
                         conn.commit()
                     except Exception:
                         conn.rollback()
+                    # --- Phase 4: generation_history ---
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._generation_history_table} (
+                            id SERIAL PRIMARY KEY,
+                            user_id BIGINT NOT NULL,
+                            mode TEXT NOT NULL DEFAULT 'express',
+                            style_slug TEXT,
+                            style_title TEXT,
+                            provider TEXT,
+                            image_url TEXT,
+                            created_at TIMESTAMPTZ DEFAULT NOW()
+                        )
+                    """)
+                    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}gh_user_created ON {self._generation_history_table}(user_id, created_at DESC)")
+                    conn.commit()
                 logger.info("Таблицы админки созданы/проверены")
             else:
                 # SQLite версия
@@ -1346,6 +1362,20 @@ class PrismaLabStore:
                     conn.execute(f"ALTER TABLE {self._users_table} ADD COLUMN last_express_provider TEXT DEFAULT 'seedream'")
                 except Exception:
                     pass
+                # --- Phase 4: generation_history (SQLite) ---
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._generation_history_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        mode TEXT NOT NULL DEFAULT 'express',
+                        style_slug TEXT,
+                        style_title TEXT,
+                        provider TEXT,
+                        image_url TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gh_user_created ON {self._generation_history_table}(user_id, created_at DESC)")
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -1910,7 +1940,6 @@ class PrismaLabStore:
                 stats["margin"]["percent"] = round((margin / stats["total_revenue"]) * 100, 2) if stats["total_revenue"] > 0 else 0.0
 
                 # Генераций на платящего юзера — INNER JOIN вместо EXISTS
-                total_gens = fast_gens + persona_gens
                 if stats["paid_users"] > 0:
                     cur.execute(f"""SELECT COUNT(*) as cnt
                                    FROM {self._user_events_table} ue
@@ -3278,3 +3307,93 @@ class PrismaLabStore:
             return "seedream"
         val = row.get("last_express_provider") or ""
         return val if val in self._VALID_PROVIDERS else "seedream"
+
+    # --- Generation History (Phase 4) ---
+
+    _VALID_MODES = {"express", "photoset"}
+
+    def save_generation_history(
+        self,
+        user_id: int,
+        mode: str,
+        style_slug: str,
+        style_title: str,
+        provider: str,
+        image_url: str | None = None,
+    ) -> int:
+        """Сохраняет запись в generation_history. Возвращает id."""
+        if mode not in self._VALID_MODES:
+            mode = "express"
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"""INSERT INTO {self._generation_history_table}
+                            (user_id, mode, style_slug, style_title, provider, image_url)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id""",
+                        (int(user_id), mode, style_slug, style_title, provider, image_url),
+                    )
+                    row = cur.fetchone()
+                    conn.commit()
+                    return row["id"]
+            else:
+                cur = conn.execute(
+                    f"""INSERT INTO {self._generation_history_table}
+                        (user_id, mode, style_slug, style_title, provider, image_url)
+                        VALUES (?, ?, ?, ?, ?, ?)""",
+                    (int(user_id), mode, style_slug, style_title, provider, image_url),
+                )
+                conn.commit()
+                return cur.lastrowid
+
+    def update_generation_history_url(self, history_id: int, image_url: str) -> None:
+        """Обновляет image_url после upload в storage."""
+        with self._connect() as conn:
+            self._execute(conn, f"UPDATE {self._generation_history_table} SET image_url = %s WHERE id = %s", (image_url, int(history_id)))
+            conn.commit()
+
+    def get_generation_history(
+        self,
+        user_id: int,
+        mode: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Возвращает историю генераций. mode=None → все."""
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        if mode and mode not in self._VALID_MODES:
+            mode = None
+        if mode:
+            rows = self._fetch_all(
+                f"SELECT * FROM {self._generation_history_table} "
+                f"WHERE user_id = %s AND mode = %s "
+                f"ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+                (int(user_id), mode, limit, offset),
+            )
+        else:
+            rows = self._fetch_all(
+                f"SELECT * FROM {self._generation_history_table} "
+                f"WHERE user_id = %s "
+                f"ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+                (int(user_id), limit, offset),
+            )
+        return [dict(r) for r in rows]
+
+    def get_generation_history_total(self, user_id: int, mode: str | None = None) -> int:
+        """Общее количество записей истории пользователя (для пагинации)."""
+        if mode and mode not in self._VALID_MODES:
+            mode = None
+        if mode:
+            row = self._fetch_one(
+                f"SELECT COUNT(*) AS cnt FROM {self._generation_history_table} WHERE user_id = %s AND mode = %s",
+                (int(user_id), mode),
+            )
+        else:
+            row = self._fetch_one(
+                f"SELECT COUNT(*) AS cnt FROM {self._generation_history_table} WHERE user_id = %s",
+                (int(user_id),),
+            )
+        return int((row or {}).get("cnt", 0) or 0)

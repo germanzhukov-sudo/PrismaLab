@@ -61,6 +61,10 @@ const state = {
     // General
     hasPersona: false,
     packsUseCredits: false,
+    // Profile history
+    historyItems: [],
+    historyTotal: 0,
+    historyOffset: 0,
 };
 
 // === Telegram SDK ===
@@ -217,10 +221,11 @@ function goToPhotosets() {
     loadPhotosets();
 }
 
-function goToProfile() {
+async function goToProfile() {
     trackEvent('v2_nav_profile');
     updateBalanceDisplays();
     showScreen('profile');
+    await loadProfileHistory(true);
 }
 
 function closeMiniApp() {
@@ -439,6 +444,12 @@ async function pollExpressStatus() {
             updateBalanceDisplays();
 
             document.getElementById('express-result-image').src = data.result_url;
+            const note = document.getElementById('express-result-note');
+            if (note) {
+                note.textContent = data.tg_sent
+                    ? 'Фото отправлено в Telegram и сохранено в профиле.'
+                    : 'Фото сохранено в профиле. В Telegram отправить не удалось.';
+            }
             showScreen('express-result');
             if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         } else if (data.status === 'error') {
@@ -464,6 +475,78 @@ function downloadExpressResult() {
     link.download = `prismalab_express_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
     link.click();
     if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+}
+
+// === PROFILE HISTORY ===
+
+async function loadProfileHistory(reset = true) {
+    if (reset) {
+        state.historyItems = [];
+        state.historyOffset = 0;
+        state.historyTotal = 0;
+    }
+    const grid = document.getElementById('profile-history-grid');
+    const moreBtn = document.getElementById('profile-history-more');
+    if (!grid || !moreBtn) return;
+
+    if (reset) {
+        grid.innerHTML = Array(6)
+            .fill('<div class="style-card skeleton"><div style="height:100%"></div></div>')
+            .join('');
+    }
+
+    try {
+        const limit = 18;
+        const url = `/app/api/v3/history?mode=express&limit=${limit}&offset=${state.historyOffset}`;
+        const resp = await fetch(url, {
+            headers: { 'X-Telegram-Init-Data': state.initData },
+        });
+        if (!resp.ok) {
+            throw new Error(`History HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        const items = data.items || [];
+        state.historyItems = reset ? items : state.historyItems.concat(items);
+        state.historyOffset = state.historyItems.length;
+        state.historyTotal = data.total || state.historyItems.length;
+        renderProfileHistory();
+        moreBtn.style.display = state.historyOffset < state.historyTotal ? '' : 'none';
+    } catch (e) {
+        console.error('Load profile history error:', e);
+        if (reset) grid.innerHTML = '<div class="empty-state">Не удалось загрузить историю</div>';
+        moreBtn.style.display = 'none';
+    }
+}
+
+function renderProfileHistory() {
+    const grid = document.getElementById('profile-history-grid');
+    if (!grid) return;
+    if (!state.historyItems.length) {
+        grid.innerHTML = '<div class="empty-state">История пока пустая</div>';
+        return;
+    }
+    grid.innerHTML = '';
+    state.historyItems.forEach((item) => {
+        if (!item.image_url) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'profile-history-item';
+
+        const img = document.createElement('img');
+        img.src = item.image_url;
+        img.alt = item.style_title || 'Generation';
+        img.loading = 'lazy';
+        img.addEventListener('click', () => openLightbox(item.image_url));
+        wrapper.appendChild(img);
+
+        const provider = document.createElement('div');
+        provider.className = 'profile-history-provider';
+        provider.textContent = item.provider === 'nano-banana-pro' ? 'Nano' : 'Seedream';
+        wrapper.appendChild(provider);
+        grid.appendChild(wrapper);
+    });
+    if (!grid.children.length) {
+        grid.innerHTML = '<div class="empty-state">История пока пустая</div>';
+    }
 }
 
 // === EXPRESS V3 FLOW ===
