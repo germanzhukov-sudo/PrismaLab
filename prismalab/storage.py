@@ -327,6 +327,7 @@ class PrismaLabStore:
         defaults = {
             "cost_persona_create": 1.5,
             "cost_fast_photo": 0.035,
+            "cost_nano_banana": 0.035,
             "cost_persona_photo": 0.03,
             "usd_rub": 90.0,
         }
@@ -355,7 +356,7 @@ class PrismaLabStore:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 for key, value in settings.items():
-                    if key in ("cost_persona_create", "cost_fast_photo", "cost_persona_photo", "usd_rub"):
+                    if key in ("cost_persona_create", "cost_fast_photo", "cost_nano_banana", "cost_persona_photo", "usd_rub"):
                         cur.execute(f"""
                             INSERT INTO {self._admin_settings_table} (key, value, updated_at)
                             VALUES (%s, %s, NOW())
@@ -3151,6 +3152,32 @@ class PrismaLabStore:
             f"WHERE ct.category_id = %s ORDER BY t.sort_order, t.id",
             (int(category_id),),
         )
+
+    def get_allowed_tag_ids_for_categories(self, category_ids: list[int]) -> set[int]:
+        """Разрешённые tag_id для набора категорий (union)."""
+        if not category_ids:
+            return set()
+        placeholders = ", ".join(["%s"] * len(category_ids))
+        rows = self._fetch_all(
+            f"SELECT DISTINCT tag_id FROM {self._express_category_tags_table} "
+            f"WHERE category_id IN ({placeholders})",
+            category_ids,
+        )
+        return {r["tag_id"] for r in rows}
+
+    def get_tag_style_counts(self) -> dict[int, int]:
+        """Количество стилей для каждого тега. {tag_id: count}."""
+        rows = self._fetch_all(
+            f"SELECT tag_id, COUNT(*) as cnt FROM {self._express_style_tags_table} GROUP BY tag_id"
+        )
+        return {r["tag_id"]: r["cnt"] for r in rows}
+
+    def get_category_style_counts(self) -> dict[int, int]:
+        """Количество стилей для каждой категории. {category_id: count}."""
+        rows = self._fetch_all(
+            f"SELECT category_id, COUNT(*) as cnt FROM {self._express_style_categories_table} GROUP BY category_id"
+        )
+        return {r["category_id"]: r["cnt"] for r in rows}
 
     # ========== Filtered styles query ==========
 

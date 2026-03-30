@@ -52,14 +52,14 @@
 
                     <div class="row">
                         <div class="col-md-3 mb-3">
-                            <label class="form-label">Пол</label>
+                            <label class="form-label">Пол (legacy)</label>
                             <select class="form-select" name="gender">
                                 <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
                                 <option value="male" {% if style and style.gender == 'male' %}selected{% endif %}>Male</option>
                             </select>
                         </div>
                         <div class="col-md-3 mb-3">
-                            <label class="form-label">Тема</label>
+                            <label class="form-label">Тема (legacy)</label>
                             <input type="text" class="form-control" name="theme"
                                    value="{{ style.theme if style else 'lifestyle' }}"
                                    placeholder="lifestyle" list="theme-list">
@@ -84,6 +84,43 @@
                             <label class="form-label">Порядок</label>
                             <input type="number" class="form-control" name="sort_order"
                                    value="{{ style.sort_order if style else 1 }}" min="1">
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Категории</label>
+                            <div id="category-checkboxes">
+                                {% for c in all_categories %}
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input cat-checkbox" type="checkbox" name="category_ids"
+                                           value="{{ c.id }}" id="cat_{{ c.id }}"
+                                           data-cat-id="{{ c.id }}"
+                                           {% if c.id in selected_cat_ids %}checked{% endif %}
+                                           onchange="filterTagsByCategories()">
+                                    <label class="form-check-label" for="cat_{{ c.id }}">{{ c.title }}</label>
+                                </div>
+                                {% endfor %}
+                                {% if not all_categories %}
+                                <span class="text-muted">Нет категорий. <a href="{{ admin_base }}/express-categories/new">Создать</a></span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Теги <small class="text-muted">(фильтруются по категориям)</small></label>
+                            <div id="tag-checkboxes">
+                                {% for t in all_tags %}
+                                <div class="form-check form-check-inline tag-item" data-tag-id="{{ t.id }}">
+                                    <input class="form-check-input" type="checkbox" name="tag_ids"
+                                           value="{{ t.id }}" id="tag_{{ t.id }}"
+                                           {% if t.id in selected_tag_ids %}checked{% endif %}>
+                                    <label class="form-check-label" for="tag_{{ t.id }}">{{ t.title }}</label>
+                                </div>
+                                {% endfor %}
+                                {% if not all_tags %}
+                                <span class="text-muted">Нет тегов. <a href="{{ admin_base }}/express-tags/new">Создать</a></span>
+                                {% endif %}
+                            </div>
                         </div>
                     </div>
 
@@ -140,4 +177,39 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const catTagsMap = {{ cat_tags_map_json|safe }};
+
+function filterTagsByCategories() {
+    const checkedCats = Array.from(document.querySelectorAll('.cat-checkbox:checked'))
+        .map(cb => parseInt(cb.dataset.catId));
+    const tagItems = document.querySelectorAll('.tag-item');
+
+    if (checkedCats.length === 0) {
+        tagItems.forEach(el => el.style.display = '');
+        return;
+    }
+
+    const allowedTags = new Set();
+    checkedCats.forEach(catId => {
+        (catTagsMap[catId] || []).forEach(tagId => allowedTags.add(tagId));
+    });
+
+    tagItems.forEach(el => {
+        const tagId = parseInt(el.dataset.tagId);
+        if (allowedTags.has(tagId)) {
+            el.style.display = '';
+        } else {
+            el.style.display = 'none';
+            const cb = el.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = false;
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', filterTagsByCategories);
+</script>
 {% endblock %}

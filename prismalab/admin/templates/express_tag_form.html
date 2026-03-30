@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}{% if tag %}Редактировать{% else %}Новый{% endif %} тег — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>
+        <i class="bi bi-tags me-2"></i>
+        {% if tag %}Редактировать тег{% else %}Новый тег{% endif %}
+    </h2>
+    <a href="{{ admin_base }}/express-tags" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Назад
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="POST" action="{{ admin_base }}/express-tags/save">
+                    {% if tag %}
+                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                    {% endif %}
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Название</label>
+                            <input type="text" class="form-control" name="title"
+                                   value="{{ tag.title if tag else '' }}"
+                                   placeholder="ч/б" required>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Slug</label>
+                            <input type="text" class="form-control font-monospace" name="slug"
+                                   value="{{ tag.slug if tag else '' }}"
+                                   placeholder="bw">
+                            <small class="text-muted">Авто из названия если пусто</small>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Порядок</label>
+                            <input type="number" class="form-control" name="sort_order"
+                                   value="{{ tag.sort_order if tag else 0 }}" min="0">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                                   {% if not tag or tag.is_active %}checked{% endif %}>
+                            <label class="form-check-label">Активен (виден в Mini App)</label>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>
+                        {% if tag %}Сохранить{% else %}Создать{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Подсказка
+            </div>
+            <div class="card-body">
+                <p><strong>Тег</strong> — подфильтр в Mini App (ч/б, спорт, вечеринка).</p>
+                <p><strong>Привязка к категориям</strong> делается на странице категории (какие теги показывать).</p>
+                <p class="mb-0"><strong>Привязка к стилям</strong> делается на странице стиля.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

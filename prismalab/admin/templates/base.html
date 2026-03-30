@@ -268,6 +268,12 @@
                     <a class="nav-link {% if '/express-styles' in request.url.path %}active{% endif %}" href="{{ admin_base }}/express-styles">
                         <i class="bi bi-lightning"></i> Экспресс-стили
                     </a>
+                    <a class="nav-link {% if '/express-categories' in request.url.path %}active{% endif %}" href="{{ admin_base }}/express-categories">
+                        <i class="bi bi-collection"></i> Категории
+                    </a>
+                    <a class="nav-link {% if '/express-tags' in request.url.path %}active{% endif %}" href="{{ admin_base }}/express-tags">
+                        <i class="bi bi-tags"></i> Теги
+                    </a>
                     <a class="nav-link {% if '/broadcast' in request.url.path %}active{% endif %}" href="{{ admin_base }}/broadcast">
                         <i class="bi bi-megaphone"></i> Рассылка
                     </a>

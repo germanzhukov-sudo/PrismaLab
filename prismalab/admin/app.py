@@ -3,10 +3,21 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import time as _time
 
 logger = logging.getLogger("prismalab.admin")
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+_TRANSLIT = {"а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"}
+
+
+def _slugify(title: str, fallback_prefix: str = "item") -> str:
+    """Транслитерация кириллицы + slug. 'Вечерний гламур' → 'vecherniy_glamur'."""
+    slug = "".join(_TRANSLIT.get(c, c) for c in title.lower())
+    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
+    return slug or f"{fallback_prefix}_{int(_time.time())}"
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -454,6 +465,7 @@ async def settings_post(request: Request):
     settings = {
         "cost_persona_create": float(form.get("cost_persona_create", 1.5)),
         "cost_fast_photo": float(form.get("cost_fast_photo", 0.035)),
+        "cost_nano_banana": float(form.get("cost_nano_banana", 0.035)),
         "cost_persona_photo": float(form.get("cost_persona_photo", 0.03)),
         "usd_rub": float(form.get("usd_rub", 90.0)),
     }
@@ -958,15 +970,32 @@ async def express_style_form(request: Request):
     style_id = request.path_params.get("style_id")
     store = get_store()
     style = None
+    selected_cat_ids: set[int] = set()
+    selected_tag_ids: set[int] = set()
     if style_id:
         style = store.get_express_style(int(style_id))
         if not style:
             return RedirectResponse(url=f"{ADMIN_BASE}/express-styles", status_code=302)
+        selected_cat_ids = {c["id"] for c in store.get_style_categories(int(style_id))}
+        selected_tag_ids = {t["id"] for t in store.get_style_tags(int(style_id))}
+
+    all_categories = store.get_express_categories(active_only=False)
+    all_tags = store.get_express_tags(active_only=False)
+    # Маппинг category_id → [tag_id, ...] для JS-фильтрации
+    import json
+    cat_tags_map = {}
+    for cat in all_categories:
+        cat_tags_map[cat["id"]] = [t["id"] for t in store.get_category_tags(cat["id"])]
 
     return templates.TemplateResponse("express_style_form.html", {
         "request": request,
         "admin": request.state.admin,
         "style": style,
+        "all_categories": all_categories,
+        "all_tags": all_tags,
+        "selected_cat_ids": selected_cat_ids,
+        "selected_tag_ids": selected_tag_ids,
+        "cat_tags_map_json": json.dumps(cat_tags_map),
     })
 
 
@@ -987,13 +1016,10 @@ async def express_style_save(request: Request):
     model_params = form.get("model_params", "").strip()
     sort_order = int(form.get("sort_order", 0) or 0)
     is_active = form.get("is_active") == "1"
+    category_ids = [int(x) for x in form.getlist("category_ids")]
+    tag_ids = [int(x) for x in form.getlist("tag_ids")]
 
-    # Auto-generate slug from title
-    import re
-    import time as _time
-    _translit = {"а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"yo","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"kh","ц":"ts","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya"}
-    slug = "".join(_translit.get(c, c) for c in title.lower())
-    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_") or f"express_{int(_time.time())}"
+    slug = _slugify(title, "express")
 
     # Обработка загрузки картинки
     image_url = form.get("existing_image_url", "").strip()
@@ -1038,6 +1064,12 @@ async def express_style_save(request: Request):
             sort_order=sort_order, is_active=is_active,
         )
         store._renumber_express_styles()
+        store.set_style_categories(int(style_id), category_ids)
+        # Серверная валидация: только теги, разрешённые выбранными категориями
+        if category_ids:
+            allowed = store.get_allowed_tag_ids_for_categories(category_ids)
+            tag_ids = [t for t in tag_ids if t in allowed]
+        store.set_style_tags(int(style_id), tag_ids)
     else:
         if not title:
             return RedirectResponse(url=f"{ADMIN_BASE}/express-styles/new", status_code=302)
@@ -1048,7 +1080,7 @@ async def express_style_save(request: Request):
             slug = f"{base_slug}_{counter}"
             counter += 1
         store._shift_express_style_sort_order(sort_order)
-        store.create_express_style(
+        new_id = store.create_express_style(
             slug=slug, title=title, emoji=emoji,
             prompt=prompt, negative_prompt=negative_prompt,
             gender=gender, theme=theme, provider=provider,
@@ -1056,6 +1088,12 @@ async def express_style_save(request: Request):
             sort_order=sort_order,
         )
         store._renumber_express_styles()
+        if new_id:
+            store.set_style_categories(new_id, category_ids)
+            if category_ids:
+                allowed = store.get_allowed_tag_ids_for_categories(category_ids)
+                tag_ids = [t for t in tag_ids if t in allowed]
+            store.set_style_tags(new_id, tag_ids)
 
     return RedirectResponse(url=f"{ADMIN_BASE}/express-styles?saved=1", status_code=303)
 
@@ -1093,6 +1131,188 @@ async def express_style_delete(request: Request):
     return RedirectResponse(url=f"{ADMIN_BASE}/express-styles?deleted=1", status_code=303)
 
 
+# ========== Express Categories CRUD ==========
+
+@require_auth
+async def express_categories_page(request: Request):
+    """Список категорий."""
+    store = get_store()
+    saved = request.query_params.get("saved") == "1"
+    deleted = request.query_params.get("deleted") == "1"
+    categories = store.get_express_categories(active_only=False)
+    # Обогащаем: теги и кол-во стилей (batch, без N+1)
+    cat_style_counts = store.get_category_style_counts()
+    for cat in categories:
+        cat["_tags"] = store.get_category_tags(cat["id"])
+        cat["_style_count"] = cat_style_counts.get(cat["id"], 0)
+    return templates.TemplateResponse("express_categories.html", {
+        "request": request, "admin": request.state.admin,
+        "categories": categories, "saved": saved, "deleted": deleted,
+        "admin_base": ADMIN_BASE,
+    })
+
+
+@require_auth
+async def express_category_form(request: Request):
+    """Форма создания/редактирования категории."""
+    store = get_store()
+    category_id = request.path_params.get("category_id")
+    category = store.get_express_category(category_id) if category_id else None
+    if category_id and not category:
+        return RedirectResponse(url=f"{ADMIN_BASE}/express-categories", status_code=303)
+
+    all_tags = store.get_express_tags(active_only=False)
+    selected_tag_ids = set()
+    if category:
+        selected_tag_ids = {t["id"] for t in store.get_category_tags(category["id"])}
+
+    return templates.TemplateResponse("express_category_form.html", {
+        "request": request, "admin": request.state.admin,
+        "category": category, "all_tags": all_tags,
+        "selected_tag_ids": selected_tag_ids,
+        "admin_base": ADMIN_BASE,
+    })
+
+
+@require_auth
+async def express_category_save(request: Request):
+    """Сохранение категории."""
+    store = get_store()
+    form = await request.form()
+    category_id = form.get("category_id")
+    title = form.get("title", "").strip()
+    slug = form.get("slug", "").strip() or _slugify(title, "cat")
+    sort_order = int(form.get("sort_order", 0) or 0)
+    is_active = form.get("is_active") == "1"
+    tag_ids = [int(x) for x in form.getlist("tag_ids")]
+
+    if category_id:
+        cid = int(category_id)
+        existing = store.get_express_category(cid)
+        # Сохраняем slug если title не менялся
+        if existing and existing.get("title") == title:
+            slug = existing["slug"]
+        else:
+            base_slug = slug
+            counter = 1
+            conflict = store.get_express_category_by_slug(slug)
+            while conflict and conflict.get("id") != cid:
+                slug = f"{base_slug}_{counter}"
+                counter += 1
+                conflict = store.get_express_category_by_slug(slug)
+        store.update_express_category(cid, slug=slug, title=title,
+                                       sort_order=sort_order, is_active=is_active)
+        store.set_category_tags(cid, tag_ids)
+    else:
+        # Уникальный slug
+        base_slug = slug
+        counter = 1
+        while store.get_express_category_by_slug(slug):
+            slug = f"{base_slug}_{counter}"
+            counter += 1
+        new_id = store.create_express_category(slug, title, sort_order, is_active)
+        if new_id and tag_ids:
+            store.set_category_tags(new_id, tag_ids)
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-categories?saved=1", status_code=303)
+
+
+@require_auth
+async def express_category_delete(request: Request):
+    """Удаление категории."""
+    category_id = int(request.path_params["category_id"])
+    store = get_store()
+    store.delete_express_category(category_id)
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-categories?deleted=1", status_code=303)
+
+
+# ========== Express Tags CRUD ==========
+
+@require_auth
+async def express_tags_page(request: Request):
+    """Список тегов."""
+    store = get_store()
+    saved = request.query_params.get("saved") == "1"
+    deleted = request.query_params.get("deleted") == "1"
+    tags = store.get_express_tags(active_only=False)
+    # Обогащаем: категории и кол-во стилей (batch, без N+1)
+    all_categories = store.get_express_categories(active_only=False)
+    tag_style_counts = store.get_tag_style_counts()
+    # Собираем category→tags маппинг за один проход
+    cat_tag_sets: dict[int, set[int]] = {}
+    for cat in all_categories:
+        cat_tag_sets[cat["id"]] = {t["id"] for t in store.get_category_tags(cat["id"])}
+    for tag in tags:
+        tag["_categories"] = [c for c in all_categories if tag["id"] in cat_tag_sets.get(c["id"], set())]
+        tag["_style_count"] = tag_style_counts.get(tag["id"], 0)
+    return templates.TemplateResponse("express_tags.html", {
+        "request": request, "admin": request.state.admin,
+        "tags": tags, "saved": saved, "deleted": deleted,
+        "admin_base": ADMIN_BASE,
+    })
+
+
+@require_auth
+async def express_tag_form(request: Request):
+    """Форма создания/редактирования тега."""
+    store = get_store()
+    tag_id = request.path_params.get("tag_id")
+    tag = store.get_express_tag(tag_id) if tag_id else None
+    if tag_id and not tag:
+        return RedirectResponse(url=f"{ADMIN_BASE}/express-tags", status_code=303)
+
+    return templates.TemplateResponse("express_tag_form.html", {
+        "request": request, "admin": request.state.admin,
+        "tag": tag, "admin_base": ADMIN_BASE,
+    })
+
+
+@require_auth
+async def express_tag_save(request: Request):
+    """Сохранение тега."""
+    store = get_store()
+    form = await request.form()
+    tag_id = form.get("tag_id")
+    title = form.get("title", "").strip()
+    slug = form.get("slug", "").strip() or _slugify(title, "tag")
+    sort_order = int(form.get("sort_order", 0) or 0)
+    is_active = form.get("is_active") == "1"
+
+    if tag_id:
+        tid = int(tag_id)
+        existing = store.get_express_tag(tid)
+        if existing and existing.get("title") == title:
+            slug = existing["slug"]
+        else:
+            base_slug = slug
+            counter = 1
+            conflict = store.get_express_tag_by_slug(slug)
+            while conflict and conflict.get("id") != tid:
+                slug = f"{base_slug}_{counter}"
+                counter += 1
+                conflict = store.get_express_tag_by_slug(slug)
+        store.update_express_tag(tid, slug=slug, title=title,
+                                  sort_order=sort_order, is_active=is_active)
+    else:
+        base_slug = slug
+        counter = 1
+        while store.get_express_tag_by_slug(slug):
+            slug = f"{base_slug}_{counter}"
+            counter += 1
+        store.create_express_tag(slug, title, sort_order, is_active)
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-tags?saved=1", status_code=303)
+
+
+@require_auth
+async def express_tag_delete(request: Request):
+    """Удаление тега."""
+    tag_id = int(request.path_params["tag_id"])
+    store = get_store()
+    store.delete_express_tag(tag_id)
+    return RedirectResponse(url=f"{ADMIN_BASE}/express-tags?deleted=1", status_code=303)
+
+
 routes = [
     Route("/admin", dashboard, methods=["GET"]),  # без слэша — тот же дашборд
     Route("/admin/", dashboard, methods=["GET"]),
@@ -1124,6 +1344,16 @@ routes = [
     Route("/admin/express-styles/save", express_style_save, methods=["POST"]),
     Route("/admin/express-styles/{style_id:int}/move/{direction}", express_style_move, methods=["POST"]),
     Route("/admin/express-styles/{style_id:int}/delete", express_style_delete, methods=["POST"]),
+    Route("/admin/express-categories", express_categories_page, methods=["GET"]),
+    Route("/admin/express-categories/new", express_category_form, methods=["GET"]),
+    Route("/admin/express-categories/{category_id:int}/edit", express_category_form, methods=["GET"]),
+    Route("/admin/express-categories/save", express_category_save, methods=["POST"]),
+    Route("/admin/express-categories/{category_id:int}/delete", express_category_delete, methods=["POST"]),
+    Route("/admin/express-tags", express_tags_page, methods=["GET"]),
+    Route("/admin/express-tags/new", express_tag_form, methods=["GET"]),
+    Route("/admin/express-tags/{tag_id:int}/edit", express_tag_form, methods=["GET"]),
+    Route("/admin/express-tags/save", express_tag_save, methods=["POST"]),
+    Route("/admin/express-tags/{tag_id:int}/delete", express_tag_delete, methods=["POST"]),
     Route("/admin/api/stats", api_stats, methods=["GET"]),
     Route("/admin/api/chart", api_chart_data, methods=["GET"]),
     Mount("/admin/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static"),
