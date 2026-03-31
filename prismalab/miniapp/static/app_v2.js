@@ -187,6 +187,10 @@ function updateBalanceDisplays() {
 // === Navigation ===
 
 function showScreen(name) {
+    const target = document.getElementById(`screen-${name}`);
+    if (!target) return;
+    // Уже на этом экране — ничего не делаем
+    if (target.classList.contains('active')) return;
     const screens = document.querySelectorAll('.screen');
     screens.forEach(s => {
         if (s.classList.contains('active')) {
@@ -195,8 +199,7 @@ function showScreen(name) {
         }
     });
     setTimeout(() => {
-        const target = document.getElementById(`screen-${name}`);
-        if (target) target.classList.add('active');
+        target.classList.add('active');
     }, 50);
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 }
@@ -569,7 +572,7 @@ function renderProfileHistory() {
 // === EXPRESS V3 FLOW ===
 
 async function loadExpressCatalog(keepFilters) {
-    showScreen('express-catalog');
+    if (!keepFilters) showScreen('express-catalog');
     const grid = document.getElementById('v3-styles-grid');
     if (!keepFilters) {
         state.v3SelectedCategory = 'all';
