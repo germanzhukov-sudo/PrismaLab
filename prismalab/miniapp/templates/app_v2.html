@@ -58,6 +58,20 @@
                         <div class="section-card-cta">Выбрать стиль</div>
                     </button>
 
+                    {% if custom_request_v1 %}
+                    <button class="section-card custom-card" onclick="goToCustomPrompt()">
+                        <div class="section-card-glow custom-glow"></div>
+                        <div class="section-card-icon">&#9997;</div>
+                        <div class="section-card-title">Свой запрос</div>
+                        <div class="section-card-desc">Опишите что хотите, добавьте референсы</div>
+                        <div class="section-card-balance">
+                            <span class="balance-icon">&#9889;</span>
+                            <span id="main-custom-balance">0</span>
+                        </div>
+                        <div class="section-card-cta">Создать</div>
+                    </button>
+                    {% endif %}
+
                     <button class="section-card photosets-card" onclick="goToPhotosets()">
                         <div class="section-card-glow photosets-glow"></div>
                         <div class="section-card-icon">&#128247;</div>
@@ -126,6 +140,59 @@
             </div>
             <div class="styles-grid" id="v3-styles-grid">
                 <!-- Стили загрузятся динамически -->
+            </div>
+        </div>
+
+        <!-- Screen: Custom Prompt -->
+        <div id="screen-custom-prompt" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Свой запрос</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="custom-credits-count">0</span>
+                </div>
+            </div>
+            <div class="custom-prompt-body">
+                <div class="custom-section">
+                    <label class="custom-label">Опишите, что хотите увидеть</label>
+                    <textarea id="custom-prompt-input" class="custom-textarea" rows="4"
+                              placeholder="Например: Портрет девушки в осеннем парке, мягкий свет, кинематографичный стиль"
+                              maxlength="2000"></textarea>
+                    <div class="custom-prompt-counter"><span id="custom-prompt-length">0</span>/2000</div>
+                </div>
+
+                <div class="custom-section">
+                    <label class="custom-label">Фото-референсы <span class="custom-label-hint">(необязательно)</span></label>
+                    <div class="custom-photos-grid" id="custom-photos-grid">
+                        <button class="custom-photo-add" id="custom-photo-add-btn" onclick="document.getElementById('custom-file-input').click()">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            <span id="custom-photo-add-text">Добавить</span>
+                        </button>
+                    </div>
+                    <input type="file" id="custom-file-input" accept="image/jpeg,image/png,image/webp" multiple style="display:none" onchange="handleCustomFiles(event)">
+                    <div class="custom-photos-hint" id="custom-photos-hint">До <span id="custom-max-photos">8</span> фото, JPG/PNG до 15 МБ</div>
+                </div>
+
+                <div class="custom-section">
+                    <label class="custom-label">Провайдер</label>
+                    <div class="provider-options" id="custom-provider-options">
+                        <button class="provider-option selected" data-provider="seedream" onclick="selectCustomProvider('seedream')">
+                            <span class="provider-name">Seedream</span>
+                            <span class="provider-desc">Быстрый</span>
+                        </button>
+                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectCustomProvider('nano-banana-pro')">
+                            <span class="provider-name">Nano Banana</span>
+                            <span class="provider-desc">Качество</span>
+                        </button>
+                    </div>
+                </div>
+
+                <button class="generate-btn" id="custom-generate-btn" onclick="startCustomGeneration()">
+                    <span class="btn-text">&#10024; Создать</span>
+                </button>
             </div>
         </div>
 
@@ -413,7 +480,10 @@
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
     </div>
 
-    <script>window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};</script>
-    <script src="/app/static/app_v2.js?v=7"></script>
+    <script>
+        window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};
+        window.CUSTOM_REQUEST_V1 = {{ 'true' if custom_request_v1 else 'false' }};
+    </script>
+    <script src="/app/static/app_v2.js?v=8"></script>
 </body>
 </html>

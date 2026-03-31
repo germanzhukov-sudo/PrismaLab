@@ -51,12 +51,33 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# ── Custom generation capabilities ──────────────────────────────────
+
+CUSTOM_CAPABILITIES: dict[str, Any] = {
+    "providers": {
+        "seedream": {
+            "max_photos": 14,
+            "models": {"text_only": "seedream/4.5", "with_refs": "seedream/4.5-edit"},
+        },
+        "nano-banana-pro": {
+            "max_photos": 8,
+            "models": {"text_only": "nano-banana-pro", "with_refs": "nano-banana-pro"},
+        },
+    },
+    "max_prompt_length": 2000,
+    "allowed_mime": ["image/jpeg", "image/png", "image/webp"],
+    "max_file_size_mb": 15,
+}
+
+
 def build_generation_kwargs(
     *,
     provider: str,
     prompt: str,
     negative_prompt: str = "",
     image_url: str | None = None,
+    image_urls: list[str] | None = None,
+    model_override: str | None = None,
     model_params_json: str = "",
     api_key: str,
     max_seconds: int = 300,
@@ -64,8 +85,9 @@ def build_generation_kwargs(
 ) -> dict[str, Any]:
     """Собирает kwargs для kie_client.run_task_and_wait().
 
-    Выбирает дефолты по провайдеру, применяет override из model_params_json.
-    Возвращает готовый dict — можно передать напрямую в run_task_and_wait(**kwargs).
+    image_url — single image (express backward compat).
+    image_urls — multi-image (custom generation).
+    model_override — explicit model (custom: text-only vs with-refs).
     """
     defaults = _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS["seedream"]).copy()
 
@@ -79,11 +101,22 @@ def build_generation_kwargs(
         except (json.JSONDecodeError, TypeError):
             overrides = {}
 
+    # image_input: multi-image > single image > None
+    if image_urls:
+        img_input = image_urls
+    elif image_url:
+        img_input = [image_url]
+    else:
+        img_input = None
+
+    # model: explicit override > model_params > provider default
+    model = model_override or overrides.get("model", defaults["model"])
+
     kwargs: dict[str, Any] = {
         "api_key": api_key,
-        "model": overrides.get("model", defaults["model"]),
+        "model": model,
         "prompt": prompt,
-        "image_input": [image_url] if image_url else None,
+        "image_input": img_input,
         "aspect_ratio": overrides.get("aspect_ratio", defaults["aspect_ratio"]),
         "output_format": overrides.get("output_format", defaults["output_format"]),
         "max_seconds": max_seconds,
@@ -206,6 +239,82 @@ async def run_generation(
         data_url=data_url,
         provider=provider,
         style_slug=style_slug,
+        raw_bytes=result_bytes,
+        mime_type=mime,
+        file_ext=file_ext,
+    )
+
+
+# ── Custom prompt generation ────────────────────────────────────────
+
+async def run_custom_generation(
+    *,
+    prompt: str,
+    photo_bytes_list: list[bytes],
+    provider: str = "seedream",
+    api_key: str,
+    max_seconds: int = 300,
+) -> GenerationResult:
+    """Генерация по свободному промпту с 0..N фото-референсами.
+
+    Model selection:
+    - text-only (no photos) → seedream/4.5 или nano-banana-pro
+    - with-refs (photos) → seedream/4.5-edit или nano-banana-pro
+    """
+    from prismalab.kie_client import (
+        download_image_bytes as kie_download,
+        run_task_and_wait as kie_run,
+        upload_file_base64 as kie_upload,
+    )
+
+    has_photos = len(photo_bytes_list) > 0
+
+    # Model selection by mode
+    caps = CUSTOM_CAPABILITIES["providers"].get(provider, CUSTOM_CAPABILITIES["providers"]["seedream"])
+    model = caps["models"]["with_refs"] if has_photos else caps["models"]["text_only"]
+
+    # Upload photos if any
+    uploaded_urls: list[str] = []
+    if has_photos:
+        for i, photo_bytes in enumerate(photo_bytes_list):
+            prepared = await asyncio.to_thread(prepare_photo, photo_bytes)
+            random_id = secrets.token_hex(8)
+            url = await asyncio.to_thread(
+                kie_upload,
+                api_key=api_key,
+                image_bytes=prepared,
+                file_name=f"custom_{random_id}_{i}.jpg",
+            )
+            uploaded_urls.append(url)
+
+    # Build kwargs
+    kwargs = build_generation_kwargs(
+        provider=provider,
+        prompt=prompt,
+        image_urls=uploaded_urls or None,
+        model_override=model,
+        api_key=api_key,
+        max_seconds=max_seconds,
+    )
+    kie_result = await kie_run(**kwargs)
+
+    if not kie_result.image_url:
+        raise RuntimeError(f"KIE returned no image URL (provider={provider}, custom)")
+
+    # Download result
+    result_bytes = await asyncio.to_thread(kie_download, kie_result.image_url)
+
+    out_fmt = str(kwargs.get("output_format", "jpg")).lower()
+    mime = "image/png" if out_fmt == "png" else "image/jpeg"
+    file_ext = "png" if out_fmt == "png" else "jpg"
+    result_b64 = base64.b64encode(result_bytes).decode()
+    data_url = f"data:{mime};base64,{result_b64}"
+
+    logger.info("Custom generation done: provider=%s photos=%d", provider, len(photo_bytes_list))
+    return GenerationResult(
+        data_url=data_url,
+        provider=provider,
+        style_slug="__custom__",
         raw_bytes=result_bytes,
         mime_type=mime,
         file_ext=file_ext,

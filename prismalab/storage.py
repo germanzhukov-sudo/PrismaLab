@@ -91,6 +91,7 @@ class PrismaLabStore:
         self._express_style_tags_table = f"public.{self._prefix}express_style_tags" if self._use_pg else f"{self._prefix}express_style_tags"
         self._express_category_tags_table = f"public.{self._prefix}express_category_tags" if self._use_pg else f"{self._prefix}express_category_tags"
         self._generation_history_table = f"public.{self._prefix}generation_history" if self._use_pg else f"{self._prefix}generation_history"
+        self._generation_requests_table = f"public.{self._prefix}generation_requests" if self._use_pg else f"{self._prefix}generation_requests"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -1199,6 +1200,30 @@ class PrismaLabStore:
                         )
                     """)
                     cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}gh_user_created ON {self._generation_history_table}(user_id, created_at DESC)")
+                    # Миграция generation_history: prompt_preview, refs_count, request_id
+                    for col, col_def in [
+                        ("prompt_preview", "TEXT"),
+                        ("refs_count", "INTEGER DEFAULT 0"),
+                        ("request_id", "TEXT"),
+                    ]:
+                        try:
+                            cur.execute(f"ALTER TABLE {self._generation_history_table} ADD COLUMN {col} {col_def}")
+                            conn.commit()
+                        except Exception:
+                            conn.rollback()
+                    # --- Custom generation: generation_requests (idempotency) ---
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._generation_requests_table} (
+                            id SERIAL PRIMARY KEY,
+                            request_id TEXT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            task_id TEXT NOT NULL,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            UNIQUE (user_id, request_id)
+                        )
+                    """)
+                    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}gr_user ON {self._generation_requests_table}(user_id)")
+                    cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{self._prefix}gr_created ON {self._generation_requests_table}(created_at)")
                     conn.commit()
                 logger.info("Таблицы админки созданы/проверены")
             else:
@@ -1393,6 +1418,29 @@ class PrismaLabStore:
                     )
                 """)
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gh_user_created ON {self._generation_history_table}(user_id, created_at DESC)")
+                # Миграция generation_history: prompt_preview, refs_count, request_id (SQLite)
+                for col, col_def in [
+                    ("prompt_preview", "TEXT"),
+                    ("refs_count", "INTEGER DEFAULT 0"),
+                    ("request_id", "TEXT"),
+                ]:
+                    try:
+                        conn.execute(f"ALTER TABLE {self._generation_history_table} ADD COLUMN {col} {col_def}")
+                    except Exception:
+                        pass
+                # --- Custom generation: generation_requests (SQLite) ---
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._generation_requests_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        request_id TEXT NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        task_id TEXT NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (user_id, request_id)
+                    )
+                """)
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gr_user ON {self._generation_requests_table}(user_id)")
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gr_created ON {self._generation_requests_table}(created_at)")
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -3290,6 +3338,38 @@ class PrismaLabStore:
         )
         return {r["category_id"]: r["cnt"] for r in rows}
 
+    def get_all_style_categories_map(self) -> dict[int, list[dict]]:
+        """Batch: style_id → list[{id, slug, title}]. Один запрос вместо N+1."""
+        rows = self._fetch_all(
+            f"SELECT sc.style_id, c.id, c.slug, c.title "
+            f"FROM {self._express_style_categories_table} sc "
+            f"JOIN {self._express_categories_table} c ON c.id = sc.category_id "
+            f"ORDER BY c.sort_order, c.id"
+        )
+        result: dict[int, list[dict]] = {}
+        for r in rows:
+            sid = r["style_id"]
+            if sid not in result:
+                result[sid] = []
+            result[sid].append({"id": r["id"], "slug": r["slug"], "title": r["title"]})
+        return result
+
+    def get_all_style_tags_map(self) -> dict[int, list[dict]]:
+        """Batch: style_id → list[{id, slug, title}]. Один запрос вместо N+1."""
+        rows = self._fetch_all(
+            f"SELECT st.style_id, t.id, t.slug, t.title "
+            f"FROM {self._express_style_tags_table} st "
+            f"JOIN {self._express_tags_table} t ON t.id = st.tag_id "
+            f"ORDER BY t.sort_order, t.id"
+        )
+        result: dict[int, list[dict]] = {}
+        for r in rows:
+            sid = r["style_id"]
+            if sid not in result:
+                result[sid] = []
+            result[sid].append({"id": r["id"], "slug": r["slug"], "title": r["title"]})
+        return result
+
     # ========== Filtered styles query ==========
 
     def get_styles_filtered(
@@ -3392,7 +3472,7 @@ class PrismaLabStore:
 
     # --- Generation History (Phase 4) ---
 
-    _VALID_MODES = {"express", "photoset"}
+    _VALID_MODES = {"express", "photoset", "custom"}
 
     def save_generation_history(
         self,
@@ -3402,20 +3482,26 @@ class PrismaLabStore:
         style_title: str,
         provider: str,
         image_url: str | None = None,
+        prompt_preview: str | None = None,
+        refs_count: int = 0,
+        request_id: str | None = None,
     ) -> int:
         """Сохраняет запись в generation_history. Возвращает id."""
         if mode not in self._VALID_MODES:
             mode = "express"
+        # Sanitize prompt_preview: trim, max 100 chars, no HTML
+        if prompt_preview:
+            prompt_preview = prompt_preview.strip().replace("<", "&lt;").replace(">", "&gt;")[:100]
         with self._connect() as conn:
             if self._use_pg:
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
                         f"""INSERT INTO {self._generation_history_table}
-                            (user_id, mode, style_slug, style_title, provider, image_url)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            (user_id, mode, style_slug, style_title, provider, image_url, prompt_preview, refs_count, request_id)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING id""",
-                        (int(user_id), mode, style_slug, style_title, provider, image_url),
+                        (int(user_id), mode, style_slug, style_title, provider, image_url, prompt_preview, refs_count, request_id),
                     )
                     row = cur.fetchone()
                     conn.commit()
@@ -3423,9 +3509,9 @@ class PrismaLabStore:
             else:
                 cur = conn.execute(
                     f"""INSERT INTO {self._generation_history_table}
-                        (user_id, mode, style_slug, style_title, provider, image_url)
-                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (int(user_id), mode, style_slug, style_title, provider, image_url),
+                        (user_id, mode, style_slug, style_title, provider, image_url, prompt_preview, refs_count, request_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (int(user_id), mode, style_slug, style_title, provider, image_url, prompt_preview, refs_count, request_id),
                 )
                 conn.commit()
                 return cur.lastrowid
@@ -3479,3 +3565,64 @@ class PrismaLabStore:
                 (int(user_id),),
             )
         return int((row or {}).get("cnt", 0) or 0)
+
+    # --- Generation Requests (idempotency) ---
+
+    def check_request_id(self, user_id: int, request_id: str) -> str | None:
+        """Проверяет (user_id, request_id). Возвращает task_id если есть."""
+        row = self._fetch_one(
+            f"SELECT task_id FROM {self._generation_requests_table} WHERE user_id = %s AND request_id = %s",
+            (int(user_id), request_id),
+        )
+        return row["task_id"] if row else None
+
+    def save_request_id(self, request_id: str, user_id: int, task_id: str) -> str:
+        """Атомарно сохраняет request_id. Возвращает task_id (свой или существующий при гонке)."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"""INSERT INTO {self._generation_requests_table} (request_id, user_id, task_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (user_id, request_id) DO NOTHING
+                            RETURNING task_id""",
+                        (request_id, int(user_id), task_id),
+                    )
+                    row = cur.fetchone()
+                    conn.commit()
+                    if row:
+                        return row["task_id"]
+                    # Conflict — read existing
+                    existing = self.check_request_id(user_id, request_id)
+                    return existing or task_id
+            else:
+                try:
+                    conn.execute(
+                        f"INSERT INTO {self._generation_requests_table} (request_id, user_id, task_id) VALUES (?, ?, ?)",
+                        (request_id, int(user_id), task_id),
+                    )
+                    conn.commit()
+                    return task_id
+                except Exception:
+                    conn.rollback()
+                    existing = self.check_request_id(user_id, request_id)
+                    return existing or task_id
+
+    def cleanup_old_requests(self, max_age_hours: int = 1) -> None:
+        """Удаляет записи старше max_age_hours."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"DELETE FROM {self._generation_requests_table} WHERE created_at < NOW() - INTERVAL '1 hour' * %s",
+                        (max_age_hours,),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    f"DELETE FROM {self._generation_requests_table} WHERE created_at < datetime('now', ?)",
+                    (f"-{max_age_hours} hours",),
+                )
+                conn.commit()

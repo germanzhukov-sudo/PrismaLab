@@ -65,6 +65,12 @@ const state = {
     historyItems: [],
     historyTotal: 0,
     historyOffset: 0,
+    // Custom prompt
+    customCapabilities: null,
+    customProvider: 'seedream',
+    customFiles: [],
+    customTaskId: null,
+    customRequestId: null,
 };
 
 // === Telegram SDK ===
@@ -166,6 +172,12 @@ function updateBalanceDisplays() {
     if (mainPhotosets) mainPhotosets.textContent = state.photosetsCredits;
     const mainPhotosetsWord = document.getElementById('main-photosets-balance-word');
     if (mainPhotosetsWord) mainPhotosetsWord.textContent = pluralCredits(state.photosetsCredits);
+
+    // Custom balance (same as express)
+    const mainCustom = document.getElementById('main-custom-balance');
+    if (mainCustom) mainCustom.textContent = expressBalance;
+    const customCredits = document.getElementById('custom-credits-count');
+    if (customCredits) customCredits.textContent = expressBalance;
 
     // Headers
     ['express-credits-count', 'express-styles-credits'].forEach(id => {
@@ -1165,5 +1177,179 @@ function setupDragDrop() {
             const file = e.dataTransfer?.files?.[0];
             if (file) processPhotosetFile(file);
         });
+    }
+
+    // Custom prompt character counter
+    const promptInput = document.getElementById('custom-prompt-input');
+    if (promptInput) {
+        promptInput.addEventListener('input', () => {
+            const el = document.getElementById('custom-prompt-length');
+            if (el) el.textContent = promptInput.value.length;
+        });
+    }
+}
+
+
+// === CUSTOM PROMPT FLOW ===
+
+async function loadCustomCapabilities() {
+    if (state.customCapabilities) return;
+    try {
+        const resp = await fetch('/app/api/v3/custom/capabilities');
+        state.customCapabilities = await resp.json();
+    } catch (e) {
+        console.error('Load capabilities error:', e);
+        state.customCapabilities = {
+            providers: { seedream: { max_photos: 14 }, 'nano-banana-pro': { max_photos: 8 } },
+            max_prompt_length: 2000, allowed_mime: ['image/jpeg','image/png','image/webp'], max_file_size_mb: 15,
+        };
+    }
+}
+
+function goToCustomPrompt() {
+    showScreen('custom-prompt');
+    loadCustomCapabilities().then(() => {
+        updateCustomMaxPhotos();
+        updateBalanceDisplays();
+    });
+    state.customFiles = [];
+    state.customProvider = 'seedream';
+    state.customRequestId = null;
+    renderCustomPhotos();
+    const textarea = document.getElementById('custom-prompt-input');
+    if (textarea) { textarea.value = ''; }
+    const counter = document.getElementById('custom-prompt-length');
+    if (counter) counter.textContent = '0';
+    // Reset provider buttons
+    document.querySelectorAll('#custom-provider-options .provider-option').forEach(btn => {
+        btn.classList.toggle('selected', btn.dataset.provider === 'seedream');
+    });
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+}
+
+function selectCustomProvider(provider) {
+    state.customProvider = provider;
+    document.querySelectorAll('#custom-provider-options .provider-option').forEach(btn => {
+        btn.classList.toggle('selected', btn.dataset.provider === provider);
+    });
+    updateCustomMaxPhotos();
+    // Trim photos if exceeds new limit
+    const caps = state.customCapabilities?.providers?.[provider];
+    const max = caps?.max_photos || 8;
+    if (state.customFiles.length > max) {
+        state.customFiles = state.customFiles.slice(0, max);
+        renderCustomPhotos();
+    }
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+}
+
+function updateCustomMaxPhotos() {
+    const caps = state.customCapabilities?.providers?.[state.customProvider];
+    const max = caps?.max_photos || 8;
+    const el = document.getElementById('custom-max-photos');
+    if (el) el.textContent = max;
+    // Hide add button if at limit
+    const addBtn = document.getElementById('custom-photo-add-btn');
+    if (addBtn) addBtn.style.display = state.customFiles.length >= max ? 'none' : '';
+}
+
+function handleCustomFiles(event) {
+    const files = Array.from(event.target.files || []);
+    const caps = state.customCapabilities?.providers?.[state.customProvider];
+    const max = caps?.max_photos || 8;
+    const maxSize = (state.customCapabilities?.max_file_size_mb || 15) * 1024 * 1024;
+
+    for (const file of files) {
+        if (state.customFiles.length >= max) break;
+        if (file.size > maxSize) {
+            alert(`Файл ${file.name} слишком большой (макс ${state.customCapabilities?.max_file_size_mb || 15} МБ)`);
+            continue;
+        }
+        state.customFiles.push(file);
+    }
+    renderCustomPhotos();
+    updateCustomMaxPhotos();
+    event.target.value = '';
+}
+
+function removeCustomPhoto(index) {
+    state.customFiles.splice(index, 1);
+    renderCustomPhotos();
+    updateCustomMaxPhotos();
+}
+
+function renderCustomPhotos() {
+    const grid = document.getElementById('custom-photos-grid');
+    if (!grid) return;
+    // Keep add button, remove previews
+    grid.querySelectorAll('.custom-photo-preview').forEach(el => el.remove());
+    const addBtn = document.getElementById('custom-photo-add-btn');
+
+    state.customFiles.forEach((file, i) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'custom-photo-preview';
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(file);
+        img.onload = () => URL.revokeObjectURL(img.src);
+        wrapper.appendChild(img);
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'custom-photo-remove';
+        removeBtn.textContent = '\u00d7';
+        removeBtn.onclick = () => removeCustomPhoto(i);
+        wrapper.appendChild(removeBtn);
+        grid.insertBefore(wrapper, addBtn);
+    });
+}
+
+function _generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+async function startCustomGeneration() {
+    const prompt = (document.getElementById('custom-prompt-input')?.value || '').trim();
+    if (!prompt) {
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+        document.getElementById('custom-prompt-input')?.focus();
+        return;
+    }
+
+    const btn = document.getElementById('custom-generate-btn');
+    if (btn) { btn.disabled = true; btn.querySelector('.btn-text').textContent = 'Генерация...'; }
+
+    const requestId = _generateUUID();
+    state.customRequestId = requestId;
+
+    const formData = new FormData();
+    formData.append('init_data', state.initData);
+    formData.append('prompt', prompt);
+    formData.append('provider', state.customProvider);
+    formData.append('request_id', requestId);
+    state.customFiles.forEach(file => formData.append('photos', file));
+
+    try {
+        const resp = await fetch('/app/api/v3/custom/generate', { method: 'POST', body: formData });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            if (data.error === 'no_credits') {
+                document.getElementById('nocredits-text').textContent = 'Для генерации нужны кредиты Экспресс';
+                showScreen('nocredits');
+                return;
+            }
+            throw new Error(data.error || data.message || 'Generation failed');
+        }
+
+        state.customTaskId = data.task_id;
+        showScreen('express-generating');
+        pollGenerationStatus(data.task_id);
+
+    } catch (e) {
+        console.error('Custom generation error:', e);
+        alert('Ошибка: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.querySelector('.btn-text').textContent = '✨ Создать'; }
     }
 }

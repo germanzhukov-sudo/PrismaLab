@@ -121,6 +121,11 @@ def _use_unified_pack_persona_flow() -> bool:
     return raw not in {"0", "false", "no", "n", "off"}
 
 
+def custom_request_v1() -> bool:
+    """Feature flag: CUSTOM_REQUEST_V1=1 включает 'Свой запрос' в Mini App."""
+    return (os.getenv("CUSTOM_REQUEST_V1") or "").strip() == "1"
+
+
 def _guard_dev_only_flags() -> None:
     """Fail-fast: dev-флаги на проде → не стартуем."""
     if _is_dev_runtime():

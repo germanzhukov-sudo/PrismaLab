@@ -94,11 +94,12 @@ MINIAPP_V2 = os.getenv("MINIAPP_V2", "") == "1"
 
 async def app_page(request: Request):
     """Главная страница Mini App. MINIAPP_V2=1 → V2 UI."""
-    from prismalab.config import express_filters_v3
+    from prismalab.config import custom_request_v1, express_filters_v3
     template = "app_v2.html" if MINIAPP_V2 else "app.html"
     return templates.TemplateResponse(template, {
         "request": request,
         "express_v3": express_filters_v3(),
+        "custom_request_v1": custom_request_v1(),
     })
 
 
@@ -1343,6 +1344,263 @@ async def api_v3_history(request: Request):
     return JSONResponse({"items": items, "total": total, "limit": limit, "offset": offset})
 
 
+# ========== Custom Prompt Generation ==========
+
+async def api_v3_custom_capabilities(request: Request):
+    """V3: Capabilities for custom prompt generation."""
+    from .services.generation import CUSTOM_CAPABILITIES
+    return JSONResponse(CUSTOM_CAPABILITIES)
+
+
+async def api_v3_custom_generate(request: Request):
+    """V3: Generate from free-form prompt with optional photo references.
+
+    POST /app/api/v3/custom/generate
+    FormData: init_data, prompt, provider, request_id, photos (repeated key)
+    """
+    import uuid as _uuid
+    from PIL import Image as _PILImage
+
+    from .services.generation import CUSTOM_CAPABILITIES, run_custom_generation
+    from .services.locks import acquire_generation_lock, release_generation_lock
+
+    form = await request.form()
+    init_data = form.get("init_data", "")
+
+    user = validate_init_data(str(init_data), BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    user_id = user["user_id"]
+    prompt = str(form.get("prompt", "")).strip()
+    provider_choice = str(form.get("provider", "")).strip()
+    request_id = str(form.get("request_id", "")).strip()
+
+    # P3 fix: request_id is required
+    if not request_id:
+        return JSONResponse({"error": "request_id is required"}, status_code=400)
+    try:
+        _uuid.UUID(request_id)
+    except ValueError:
+        return JSONResponse({"error": "Invalid request_id (must be UUID)"}, status_code=400)
+
+    # Validate prompt
+    max_prompt = CUSTOM_CAPABILITIES["max_prompt_length"]
+    if not prompt:
+        return JSONResponse({"error": "Prompt is required"}, status_code=400)
+    if len(prompt) > max_prompt:
+        return JSONResponse({"error": f"Prompt too long (max {max_prompt} chars)"}, status_code=400)
+
+    # Validate provider
+    if provider_choice not in ("seedream", "nano-banana-pro"):
+        provider_choice = "seedream"
+
+    # P4 fix: cleanup BEFORE idempotency check
+    store = get_store()
+    store.cleanup_old_requests(max_age_hours=1)
+
+    # Idempotency check
+    existing_task = store.check_request_id(user_id, request_id)
+    if existing_task:
+        return JSONResponse({"task_id": existing_task, "status": "processing", "provider": provider_choice, "idempotent": True})
+
+    # Read photos (repeated key "photos")
+    _ALLOWED_PILLOW_FORMATS = {"JPEG", "PNG", "WEBP"}
+    photos_raw = form.getlist("photos")
+    photo_bytes_list: list[bytes] = []
+    max_photos = CUSTOM_CAPABILITIES["providers"][provider_choice]["max_photos"]
+    max_size = CUSTOM_CAPABILITIES["max_file_size_mb"] * 1024 * 1024
+    allowed_mime = set(CUSTOM_CAPABILITIES["allowed_mime"])
+
+    for i, photo in enumerate(photos_raw):
+        if not hasattr(photo, "read"):
+            continue
+        if len(photo_bytes_list) >= max_photos:
+            return JSONResponse({"error": f"Too many photos (max {max_photos} for {provider_choice})"}, status_code=400)
+        photo_data = await photo.read()
+        if len(photo_data) > max_size:
+            return JSONResponse({"error": f"Photo {i+1} too large (max {CUSTOM_CAPABILITIES['max_file_size_mb']}MB)"}, status_code=413)
+        # MIME check: content_type header
+        ct = getattr(photo, "content_type", "") or ""
+        if ct and ct not in allowed_mime:
+            return JSONResponse({"error": f"Photo {i+1}: unsupported format ({ct})"}, status_code=400)
+        # P2 fix: Pillow verify + format whitelist (catches GIF/BMP even with empty content_type)
+        try:
+            import io as _io
+            img = _PILImage.open(_io.BytesIO(photo_data))
+            fmt = (img.format or "").upper()
+            img.verify()
+            if fmt not in _ALLOWED_PILLOW_FORMATS:
+                return JSONResponse({"error": f"Photo {i+1}: unsupported format ({fmt})"}, status_code=400)
+        except Exception:
+            return JSONResponse({"error": f"Photo {i+1}: invalid or corrupted image"}, status_code=400)
+        photo_bytes_list.append(photo_data)
+
+    # Total payload check (60MB)
+    total_size = sum(len(b) for b in photo_bytes_list)
+    if total_size > 60 * 1024 * 1024:
+        return JSONResponse({"error": "Total upload size too large (max 60MB)"}, status_code=413)
+
+    # User lock
+    lock = await acquire_generation_lock(user_id)
+    if lock is None:
+        return JSONResponse({"error": "Generation already in progress"}, status_code=409)
+
+    # P1 fix: everything after lock acquire wrapped in try/finally
+    try:
+        # Credits check
+        profile = store.get_user(user_id)
+        has_free = not profile.free_generation_used
+        has_paid = profile.paid_generations_remaining > 0
+        if not has_free and not has_paid:
+            return JSONResponse({"error": "no_credits", "message": "Нет кредитов"}, status_code=402)
+
+        # Create task
+        task_id = str(_uuid.uuid4())[:8]
+        _generation_tasks[task_id] = {
+            "status": "processing",
+            "user_id": user_id,
+            "style_id": "__custom__",
+            "result_url": None,
+            "error": None,
+        }
+
+        # Save request_id atomically (ON CONFLICT safe)
+        saved_task = store.save_request_id(request_id, user_id, task_id)
+        if saved_task != task_id:
+            # Race: another worker already created this request
+            del _generation_tasks[task_id]
+            return JSONResponse({"task_id": saved_task, "status": "processing", "provider": provider_choice, "idempotent": True})
+
+        # Background generation (lock released inside _run_custom_generation finally)
+        asyncio.get_event_loop().create_task(
+            _run_custom_generation(
+                task_id, user_id, prompt, photo_bytes_list,
+                provider_choice, has_free, profile, lock, request_id,
+            )
+        )
+        lock = None  # ownership transferred to background task
+    finally:
+        # Release lock if background task was NOT started
+        if lock is not None:
+            release_generation_lock(user_id, lock)
+
+    return JSONResponse({
+        "task_id": task_id,
+        "status": "processing",
+        "provider": provider_choice,
+    })
+
+
+async def _run_custom_generation(
+    task_id: str,
+    user_id: int,
+    prompt: str,
+    photo_bytes_list: list[bytes],
+    provider: str,
+    use_free: bool,
+    profile,
+    lock,
+    request_id: str | None,
+):
+    """Background custom generation with guaranteed lock release."""
+    from prismalab.settings import load_settings
+
+    from .services.generation import run_custom_generation
+    from .services.locks import release_generation_lock
+
+    settings = load_settings()
+    store = get_store()
+
+    try:
+        result = await run_custom_generation(
+            prompt=prompt,
+            photo_bytes_list=photo_bytes_list,
+            provider=provider,
+            api_key=settings.kie_api_key,
+            max_seconds=settings.kie_max_seconds,
+        )
+
+        # Deduct credit
+        if use_free:
+            store.spend_free_generation(user_id)
+        else:
+            store.set_paid_generations_remaining(user_id, profile.paid_generations_remaining - 1)
+
+        # Log event
+        store.log_event(user_id, "generation", {
+            "mode": "custom",
+            "provider": provider,
+            "refs_count": len(photo_bytes_list),
+            "source": "miniapp",
+        })
+
+        # Upload to Supabase Storage
+        image_url = None
+        if result.raw_bytes:
+            try:
+                from prismalab.supabase_storage import upload_generation
+                image_url = await asyncio.to_thread(
+                    upload_generation, result.raw_bytes, user_id, result.file_ext, result.mime_type,
+                )
+            except Exception as e:
+                logger.warning("Custom upload failed (task=%s): %s", task_id, e)
+
+        # Save to history
+        prompt_preview = prompt.strip()[:100]
+        try:
+            store.save_generation_history(
+                user_id=user_id,
+                mode="custom",
+                style_slug="__custom__",
+                style_title=prompt_preview,
+                provider=provider,
+                image_url=image_url,
+                prompt_preview=prompt_preview,
+                refs_count=len(photo_bytes_list),
+                request_id=request_id,
+            )
+        except Exception as e:
+            logger.warning("Save custom history failed (task=%s): %s", task_id, e)
+
+        # TG send_document (best-effort)
+        if result.raw_bytes and _bot:
+            try:
+                import io
+                doc = io.BytesIO(result.raw_bytes)
+                doc.name = f"custom_{task_id}.{result.file_ext}"
+                await _bot.send_document(
+                    chat_id=user_id, document=doc,
+                    caption=f"✨ {prompt_preview}",
+                    read_timeout=60, write_timeout=60, connect_timeout=30,
+                )
+            except Exception as e:
+                logger.warning("TG send custom failed (task=%s): %s", task_id, e)
+
+        _generation_tasks[task_id] = {
+            "status": "done",
+            "user_id": user_id,
+            "style_id": "__custom__",
+            "result_url": result.data_url,
+            "image_url": image_url,
+            "error": None,
+        }
+        logger.info("Custom generation done: user=%s provider=%s photos=%d task=%s",
+                     user_id, provider, len(photo_bytes_list), task_id)
+
+    except Exception as e:
+        logger.exception("Custom generation error: user=%s task=%s: %s", user_id, task_id, e)
+        _generation_tasks[task_id] = {
+            "status": "error",
+            "user_id": user_id,
+            "style_id": "__custom__",
+            "result_url": None,
+            "error": str(e),
+        }
+    finally:
+        release_generation_lock(user_id, lock)
+
+
 # ========== Роуты ==========
 
 routes = [
@@ -1373,6 +1631,8 @@ routes = [
     Route("/app/api/v3/express/catalog", api_v3_express_catalog, methods=["GET"]),
     Route("/app/api/v3/express/generate", api_v3_express_generate, methods=["POST"]),
     Route("/app/api/v3/history", api_v3_history, methods=["GET"]),
+    Route("/app/api/v3/custom/capabilities", api_v3_custom_capabilities, methods=["GET"]),
+    Route("/app/api/v3/custom/generate", api_v3_custom_generate, methods=["POST"]),
     Mount("/app/static", StaticFiles(directory=str(BASE_DIR / "static")), name="miniapp_static"),
 ]
 
