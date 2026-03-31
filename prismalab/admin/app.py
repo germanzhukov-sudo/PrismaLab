@@ -931,7 +931,6 @@ async def express_styles_page(request: Request):
     """Список экспресс-стилей с фильтрами."""
     store = get_store()
     filter_gender = request.query_params.get("gender", "").strip()
-    filter_theme = request.query_params.get("theme", "").strip()
     filter_provider = request.query_params.get("provider", "").strip()
     saved = request.query_params.get("saved") == "1"
     deleted = request.query_params.get("deleted") == "1"
@@ -941,23 +940,21 @@ async def express_styles_page(request: Request):
         active_only=False,
     )
 
-    # Фильтр по теме и провайдеру (в storage нет этих фильтров)
-    if filter_theme:
-        styles = [s for s in styles if s.get("theme") == filter_theme]
     if filter_provider:
         styles = [s for s in styles if (s.get("provider") or "seedream") == filter_provider]
 
-    # Уникальные темы для фильтра
-    all_styles = store.get_express_styles(active_only=False)
-    themes = sorted(set(s.get("theme", "") for s in all_styles if s.get("theme")))
+    # Batch-загрузка категорий для всех стилей (без N+1)
+    style_categories_map = store.get_all_style_categories_map()
+    style_tags_map = store.get_all_style_tags_map()
 
     return templates.TemplateResponse("express_styles.html", {
         "request": request,
         "admin": request.state.admin,
+        "active_tab": "styles",
         "styles": styles,
-        "themes": themes,
+        "style_categories_map": style_categories_map,
+        "style_tags_map": style_tags_map,
         "filter_gender": filter_gender,
-        "filter_theme": filter_theme,
         "filter_provider": filter_provider,
         "saved": saved,
         "deleted": deleted,
@@ -1011,7 +1008,7 @@ async def express_style_save(request: Request):
     prompt = form.get("prompt", "").strip()
     negative_prompt = form.get("negative_prompt", "").strip()
     gender = form.get("gender", "female")
-    theme = form.get("theme", "lifestyle").strip()
+    theme = "general"  # compat-only field: theme replaced by categories in V3
     provider = form.get("provider", "seedream")
     model_params = form.get("model_params", "").strip()
     sort_order = int(form.get("sort_order", 0) or 0)
@@ -1147,6 +1144,7 @@ async def express_categories_page(request: Request):
         cat["_style_count"] = cat_style_counts.get(cat["id"], 0)
     return templates.TemplateResponse("express_categories.html", {
         "request": request, "admin": request.state.admin,
+        "active_tab": "categories",
         "categories": categories, "saved": saved, "deleted": deleted,
         "admin_base": ADMIN_BASE,
     })
@@ -1247,6 +1245,7 @@ async def express_tags_page(request: Request):
         tag["_style_count"] = tag_style_counts.get(tag["id"], 0)
     return templates.TemplateResponse("express_tags.html", {
         "request": request, "admin": request.state.admin,
+        "active_tab": "tags",
         "tags": tags, "saved": saved, "deleted": deleted,
         "admin_base": ADMIN_BASE,
     })

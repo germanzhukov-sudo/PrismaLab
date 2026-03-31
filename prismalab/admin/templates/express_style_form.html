@@ -30,11 +30,16 @@
                                    value="{{ style.title if style else '' }}"
                                    placeholder="Вечерний гламур" required>
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-2 mb-3">
                             <label class="form-label">Эмодзи</label>
-                            <input type="text" class="form-control" name="emoji"
+                            <input type="text" class="form-control text-center" name="emoji"
                                    value="{{ style.emoji if style else '' }}"
-                                   placeholder="✨" maxlength="4">
+                                   placeholder="✨" maxlength="4" style="font-size: 1.3em;">
+                        </div>
+                        <div class="col-md-2 mb-3">
+                            <label class="form-label">Порядок</label>
+                            <input type="number" class="form-control" name="sort_order"
+                                   value="{{ style.sort_order if style else 1 }}" min="1">
                         </div>
                     </div>
 
@@ -51,39 +56,28 @@
                     </div>
 
                     <div class="row">
-                        <div class="col-md-3 mb-3">
-                            <label class="form-label">Пол (legacy)</label>
-                            <select class="form-select" name="gender">
-                                <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
-                                <option value="male" {% if style and style.gender == 'male' %}selected{% endif %}>Male</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3 mb-3">
-                            <label class="form-label">Тема (legacy)</label>
-                            <input type="text" class="form-control" name="theme"
-                                   value="{{ style.theme if style else 'lifestyle' }}"
-                                   placeholder="lifestyle" list="theme-list">
-                            <datalist id="theme-list">
-                                <option value="lifestyle">
-                                <option value="glamour">
-                                <option value="mood">
-                                <option value="beauty">
-                                <option value="creative">
-                                <option value="outdoor">
-                                <option value="business">
-                            </datalist>
-                        </div>
-                        <div class="col-md-3 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label class="form-label">Провайдер</label>
                             <select class="form-select" name="provider">
                                 <option value="seedream" {% if style and style.provider == 'seedream' %}selected{% endif %}>seedream</option>
                                 <option value="nano-banana-pro" {% if style and style.provider == 'nano-banana-pro' %}selected{% endif %}>nano-banana-pro</option>
                             </select>
+                            <small class="text-muted">По умолчанию для стиля. Пользователь может выбрать другой.</small>
                         </div>
-                        <div class="col-md-3 mb-3">
-                            <label class="form-label">Порядок</label>
-                            <input type="number" class="form-control" name="sort_order"
-                                   value="{{ style.sort_order if style else 1 }}" min="1">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Пол</label>
+                            <select class="form-select" name="gender">
+                                <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
+                                <option value="male" {% if style and style.gender == 'male' %}selected{% endif %}>Male</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Статус</label>
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                                       {% if not style or style.is_active %}checked{% endif %}>
+                                <label class="form-check-label">Активен</label>
+                            </div>
                         </div>
                     </div>
 
@@ -107,7 +101,7 @@
                             </div>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Теги <small class="text-muted">(фильтруются по категориям)</small></label>
+                            <label class="form-label">Подкатегории <small class="text-muted">(фильтруются по категориям)</small></label>
                             <div id="tag-checkboxes">
                                 {% for t in all_tags %}
                                 <div class="form-check form-check-inline tag-item" data-tag-id="{{ t.id }}">
@@ -124,13 +118,6 @@
                         </div>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label">model_params (JSON)</label>
-                        <textarea class="form-control font-monospace" name="model_params" rows="2"
-                                  placeholder='{"resolution": "4K"}'>{{ style.model_params if style else '' }}</textarea>
-                        <small class="text-muted">Override параметров KIE API. Пусто = дефолты провайдера.</small>
-                    </div>
-
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Картинка</label>
@@ -142,14 +129,6 @@
                             {% endif %}
                             <input type="file" class="form-control" name="image" accept="image/*">
                             <small class="text-muted">JPG/PNG, рекомендуемый размер 400x600px.</small>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Статус</label>
-                            <div class="form-check form-switch mt-2">
-                                <input class="form-check-input" type="checkbox" name="is_active" value="1"
-                                       {% if not style or style.is_active %}checked{% endif %}>
-                                <label class="form-check-label">Активен</label>
-                            </div>
                         </div>
                     </div>
 
@@ -169,10 +148,9 @@
                 <i class="bi bi-info-circle me-2"></i>Подсказка
             </div>
             <div class="card-body">
-                <p><strong>Провайдер</strong> — seedream (быстрый, JPEG) или nano-banana-pro (качественный, PNG).</p>
-                <p><strong>Тема</strong> — группировка стилей в Mini App (lifestyle, glamour, mood, beauty, creative, outdoor).</p>
-                <p><strong>model_params</strong> — JSON для override KIE параметров. Например <code>{"resolution": "4K"}</code> для nano.</p>
-                <p class="mb-0"><strong>Slug</strong> — генерируется автоматически из названия.</p>
+                <p><strong>Провайдер</strong> — seedream (быстрый, JPEG) или nano-banana-pro (качественный, PNG). Это значение по умолчанию; пользователь может выбрать другой в приложении.</p>
+                <p><strong>Категории</strong> — к каким разделам относится стиль (Женские, Мужские и т.д.).</p>
+                <p class="mb-0"><strong>Подкатегории</strong> — подфильтры внутри категории. Показываются только разрешённые для выбранных категорий.</p>
             </div>
         </div>
     </div>
@@ -189,7 +167,12 @@ function filterTagsByCategories() {
     const tagItems = document.querySelectorAll('.tag-item');
 
     if (checkedCats.length === 0) {
-        tagItems.forEach(el => el.style.display = '');
+        // Нет категорий — все подкатегории доступны
+        tagItems.forEach(el => {
+            el.style.opacity = '';
+            const cb = el.querySelector('input[type="checkbox"]');
+            if (cb) cb.disabled = false;
+        });
         return;
     }
 
@@ -200,12 +183,13 @@ function filterTagsByCategories() {
 
     tagItems.forEach(el => {
         const tagId = parseInt(el.dataset.tagId);
+        const cb = el.querySelector('input[type="checkbox"]');
         if (allowedTags.has(tagId)) {
-            el.style.display = '';
+            el.style.opacity = '';
+            if (cb) cb.disabled = false;
         } else {
-            el.style.display = 'none';
-            const cb = el.querySelector('input[type="checkbox"]');
-            if (cb) cb.checked = false;
+            el.style.opacity = '0.4';
+            if (cb) { cb.disabled = true; cb.checked = false; }
         }
     });
 }

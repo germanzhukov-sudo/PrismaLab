@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>
         <i class="bi bi-tags me-2"></i>
-        {% if tag %}Редактировать тег{% else %}Новый тег{% endif %}
+        {% if tag %}Редактировать подкатегорию{% else %}Новая подкатегория{% endif %}
     </h2>
     <a href="{{ admin_base }}/express-tags" class="btn btn-outline-secondary">
         <i class="bi bi-arrow-left me-1"></i>Назад
@@ -30,16 +30,12 @@
                                    placeholder="ч/б" required>
                         </div>
                         <div class="col-md-3 mb-3">
-                            <label class="form-label">Slug</label>
-                            <input type="text" class="form-control font-monospace" name="slug"
-                                   value="{{ tag.slug if tag else '' }}"
-                                   placeholder="bw">
-                            <small class="text-muted">Авто из названия если пусто</small>
-                        </div>
-                        <div class="col-md-3 mb-3">
                             <label class="form-label">Порядок</label>
                             <input type="number" class="form-control" name="sort_order"
                                    value="{{ tag.sort_order if tag else 0 }}" min="0">
+                            {% if tag %}
+                            <small class="text-muted font-monospace">slug: {{ tag.slug }}</small>
+                            {% endif %}
                         </div>
                     </div>
 
@@ -67,8 +63,8 @@
                 <i class="bi bi-info-circle me-2"></i>Подсказка
             </div>
             <div class="card-body">
-                <p><strong>Тег</strong> — подфильтр в Mini App (ч/б, спорт, вечеринка).</p>
-                <p><strong>Привязка к категориям</strong> делается на странице категории (какие теги показывать).</p>
+                <p><strong>Подкатегория</strong> — подфильтр в Mini App (ч/б, спорт, вечеринка).</p>
+                <p><strong>Привязка к категориям</strong> делается на странице категории.</p>
                 <p class="mb-0"><strong>Привязка к стилям</strong> делается на странице стиля.</p>
             </div>
         </div>

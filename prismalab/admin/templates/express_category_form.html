@@ -30,21 +30,17 @@
                                    placeholder="Женские" required>
                         </div>
                         <div class="col-md-3 mb-3">
-                            <label class="form-label">Slug</label>
-                            <input type="text" class="form-control font-monospace" name="slug"
-                                   value="{{ category.slug if category else '' }}"
-                                   placeholder="female">
-                            <small class="text-muted">Авто из названия если пусто</small>
-                        </div>
-                        <div class="col-md-3 mb-3">
                             <label class="form-label">Порядок</label>
                             <input type="number" class="form-control" name="sort_order"
                                    value="{{ category.sort_order if category else 0 }}" min="0">
+                            {% if category %}
+                            <small class="text-muted font-monospace">slug: {{ category.slug }}</small>
+                            {% endif %}
                         </div>
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">Разрешённые теги</label>
+                        <label class="form-label">Разрешённые подкатегории</label>
                         <div class="row">
                             {% for tag in all_tags %}
                             <div class="col-md-4 mb-1">
@@ -64,7 +60,7 @@
                             </div>
                             {% endif %}
                         </div>
-                        <small class="text-muted">Какие теги-подфильтры показывать при выборе этой категории</small>
+                        <small class="text-muted">Какие подкатегории показывать при выборе этой категории</small>
                     </div>
 
                     <div class="mb-3">
@@ -92,7 +88,7 @@
             </div>
             <div class="card-body">
                 <p><strong>Категория</strong> — верхний уровень фильтрации в Mini App (Мужские, Женские, Детские, С животными).</p>
-                <p><strong>Теги</strong> — подфильтры, которые появляются при выборе категории (ч/б, спорт, вечеринка).</p>
+                <p><strong>Подкатегории</strong> — подфильтры, которые появляются при выборе категории (ч/б, спорт, вечеринка).</p>
                 <p class="mb-0"><strong>Отключение</strong> — категория исчезает из Mini App, стили остаются в базе.</p>
             </div>
         </div>

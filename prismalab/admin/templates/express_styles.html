@@ -3,6 +3,7 @@
 {% block title %}Экспресс-стили — PrismaLab Admin{% endblock %}
 
 {% block content %}
+{% include "_express_tabs.html" %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-lightning me-2"></i>Экспресс-стили</h2>
     <a href="{{ admin_base }}/express-styles/new" class="btn btn-primary">
@@ -35,25 +36,27 @@
                     <option value="male" {% if filter_gender == 'male' %}selected{% endif %}>Male</option>
                 </select>
             </div>
-            <div class="col-auto">
-                <select class="form-select form-select-sm" name="theme" onchange="this.form.submit()">
-                    <option value="">Все темы</option>
-                    {% for t in themes %}
-                    <option value="{{ t }}" {% if filter_theme == t %}selected{% endif %}>{{ t }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-auto">
-                <select class="form-select form-select-sm" name="provider" onchange="this.form.submit()">
-                    <option value="">Все провайдеры</option>
-                    <option value="seedream" {% if filter_provider == 'seedream' %}selected{% endif %}>seedream</option>
-                    <option value="nano-banana-pro" {% if filter_provider == 'nano-banana-pro' %}selected{% endif %}>nano-banana-pro</option>
-                </select>
-            </div>
             <div class="col-auto text-muted">
                 <small>{{ styles|length }} стилей</small>
             </div>
+            <div class="col-auto">
+                <a class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" href="#extraFilters" role="button">
+                    <i class="bi bi-funnel me-1"></i>Доп. фильтры
+                </a>
+            </div>
         </form>
+        <div class="collapse {% if filter_provider %}show{% endif %} mt-2" id="extraFilters">
+            <form method="GET" class="row g-2 align-items-center">
+                {% if filter_gender %}<input type="hidden" name="gender" value="{{ filter_gender }}">{% endif %}
+                <div class="col-auto">
+                    <select class="form-select form-select-sm" name="provider" onchange="this.form.submit()">
+                        <option value="">Все провайдеры</option>
+                        <option value="seedream" {% if filter_provider == 'seedream' %}selected{% endif %}>seedream</option>
+                        <option value="nano-banana-pro" {% if filter_provider == 'nano-banana-pro' %}selected{% endif %}>nano-banana-pro</option>
+                    </select>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
@@ -65,7 +68,7 @@
                     <th style="width: 50px">№</th>
                     <th style="width: 70px">Фото</th>
                     <th>Название</th>
-                    <th>Тема</th>
+                    <th>Категории</th>
                     <th>Пол</th>
                     <th>Провайдер</th>
                     <th>Статус</th>
@@ -89,7 +92,19 @@
                         <strong>{{ s.emoji }} {{ s.title }}</strong>
                         <br><small class="text-muted font-monospace">{{ s.slug }}</small>
                     </td>
-                    <td><span class="badge bg-light text-dark">{{ s.theme or '—' }}</span></td>
+                    <td>
+                        {% set cats = style_categories_map.get(s.id, []) %}
+                        {% set tags = style_tags_map.get(s.id, []) %}
+                        {% for c in cats %}
+                        <span class="badge bg-light text-dark">{{ c.title }}</span>
+                        {% endfor %}
+                        {% for t in tags %}
+                        <span class="badge bg-light text-dark" style="border: 1px dashed #aaa;">{{ t.title }}</span>
+                        {% endfor %}
+                        {% if not cats and not tags %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
                     <td>
                         {% if s.gender == 'male' %}
                         <span class="badge bg-primary">M</span>
