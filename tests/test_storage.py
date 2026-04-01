@@ -216,6 +216,28 @@ def test_style_previews_migration(store):
     assert "https://old.jpg" in previews
 
 
+def test_style_delete_orphan_legacy_image(store):
+    """При удалении стиля с image_url но без previews — image_url доступен для cleanup."""
+    style_id = store.create_persona_style(
+        slug="orphan_test", title="Orphan", gender="female", image_url="https://legacy.jpg",
+    )
+    # Не добавляем previews — имитируем legacy стиль
+    assert store.get_style_previews(style_id) == []
+
+    # Перед удалением admin route читает стиль и previews
+    style = store.get_persona_style(style_id)
+    assert style is not None
+    legacy_url = (style.get("image_url") or "").strip()
+    preview_urls = set(store.get_style_previews(style_id))
+
+    # legacy_url НЕ в previews → admin route вызовет delete_image(legacy_url)
+    assert legacy_url == "https://legacy.jpg"
+    assert legacy_url not in preview_urls
+
+    store.delete_persona_style(style_id)
+    assert store.get_persona_style(style_id) is None
+
+
 def test_express_styles_crud(store):
     """express_styles — полный CRUD цикл с новыми полями."""
     # Create
