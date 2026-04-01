@@ -243,13 +243,15 @@ def test_v2_express_generate_unauthorized(mock_auth, client):
 
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
 def test_v2_photosets_list(mock_auth, client, store):
-    """Список паков (из DEFAULT_PACKS без Astria API key)."""
+    """Unified список фотосетов + backward-compat packs."""
     resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
+    assert "photosets" in data
     assert "packs" in data
     # DEFAULT_PACKS имеет >= 2 пака
     assert len(data["packs"]) >= 2
+    assert len(data["photosets"]) >= len(data["packs"])
 
 
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
@@ -309,6 +311,46 @@ def test_v2_photosets_packs_have_credit_cost(mock_auth, client, store):
     data = resp.json()
     for pack in data.get("packs", []):
         assert "credit_cost" in pack
+        assert "preview_urls" in pack
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_photosets_unified_dto_shape(mock_auth, client, store):
+    """Unified DTO стабилен: id/entity_id/type/title/credit_cost/preview_urls/num_images."""
+    style_id = store.create_persona_style(
+        slug="dto_style",
+        title="DTO Style",
+        gender="female",
+        image_url="https://fallback.jpg",
+        credit_cost=7,
+    )
+    store.set_style_previews(style_id, ["https://s1.jpg", "https://s2.jpg", "https://s3.jpg", "https://s4.jpg"])
+
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    assert resp.status_code == 200
+    photosets = resp.json()["photosets"]
+
+    style_item = next((p for p in photosets if p["type"] == "style" and p["entity_id"] == style_id), None)
+    assert style_item is not None
+    assert style_item["id"] == f"style:{style_id}"
+    assert style_item["title"] == "DTO Style"
+    assert style_item["credit_cost"] == 7
+    assert style_item["num_images"] == 4
+    assert style_item["preview_urls"] == [
+        "https://s1.jpg",
+        "https://s2.jpg",
+        "https://s3.jpg",
+        "https://s4.jpg",
+    ]
+
+    pack_item = next((p for p in photosets if p["type"] == "pack"), None)
+    assert pack_item is not None
+    assert str(pack_item["id"]).startswith("pack:")
+    assert isinstance(pack_item["entity_id"], int)
+    assert isinstance(pack_item["title"], str)
+    assert isinstance(pack_item["credit_cost"], int)
+    assert isinstance(pack_item["num_images"], int)
+    assert isinstance(pack_item["preview_urls"], list)
 
 
 @patch("prismalab.config.packs_use_credits", return_value=False)

@@ -527,16 +527,24 @@ async def api_persona_styles(request: Request):
     gender = request.query_params.get("gender", "")
     store = get_store()
     styles = store.get_persona_styles(active_only=True, gender=gender if gender else None)
+    previews_map = store.get_all_style_previews_map()
     result = []
     for s in styles:
+        style_id = int(s["id"])
+        preview_urls = list(previews_map.get(style_id) or [])
+        fallback_image = (s.get("image_url") or "").strip()
+        if not preview_urls and fallback_image:
+            preview_urls = [fallback_image]
         result.append({
-            "id": s["id"],
+            "id": style_id,
             "slug": s["slug"],
             "title": s["title"],
             "description": s.get("description") or "",
             "gender": s["gender"],
-            "image_url": s.get("image_url") or "",
+            "image_url": preview_urls[0] if preview_urls else fallback_image,
+            "preview_urls": preview_urls,
             "credit_cost": int(s.get("credit_cost", 4) or 4),
+            "num_images": 4,
         })
     return JSONResponse({"styles": result})
 
@@ -548,13 +556,20 @@ async def api_persona_style_detail(request: Request):
     s = store.get_persona_style(style_id)
     if not s:
         return JSONResponse({"error": "Style not found"}, status_code=404)
+    preview_urls = store.get_style_previews(style_id)
+    fallback_image = (s.get("image_url") or "").strip()
+    if not preview_urls and fallback_image:
+        preview_urls = [fallback_image]
     return JSONResponse({
         "id": s["id"],
         "slug": s["slug"],
         "title": s["title"],
         "description": s.get("description") or "",
         "gender": s["gender"],
-        "image_url": s.get("image_url") or "",
+        "image_url": preview_urls[0] if preview_urls else fallback_image,
+        "preview_urls": preview_urls,
+        "credit_cost": int(s.get("credit_cost", 4) or 4),
+        "num_images": 4,
     })
 
 
@@ -946,7 +961,7 @@ async def api_v2_express_generate(request: Request):
 
 
 async def api_v2_photosets(request: Request):
-    """V2: Список фотосетов (паков). Включает packs_use_credits flag."""
+    """V2: Unified список фотосетов (pack + style) для единого grid."""
     from prismalab.config import packs_use_credits
     from .services.photosets import get_packs_list
 
@@ -955,13 +970,52 @@ async def api_v2_photosets(request: Request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
     packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY)
+    store = get_store()
+    styles = store.get_persona_styles(active_only=True)
+    style_previews = store.get_all_style_previews_map()
 
     # Опциональный фильтр по category
     category = request.query_params.get("category", "")
     if category:
         packs = [p for p in packs if p.get("category") == category]
 
+    photosets: list[dict] = []
+
+    for pack in packs:
+        entity_id = int(pack["id"])
+        preview_urls = list(pack.get("preview_urls") or [])
+        cover_url = str(pack.get("cover_url") or "").strip()
+        if not preview_urls and cover_url:
+            preview_urls = [cover_url]
+        photosets.append({
+            "id": f"pack:{entity_id}",
+            "entity_id": entity_id,
+            "type": "pack",
+            "title": str(pack.get("title") or f"Pack #{entity_id}"),
+            "credit_cost": int(pack.get("credit_cost", pack.get("expected_images", 20)) or 20),
+            "preview_urls": preview_urls[:4],
+            "num_images": int(pack.get("expected_images", 20) or 20),
+        })
+
+    for s in styles:
+        style_id = int(s["id"])
+        preview_urls = list(style_previews.get(style_id) or [])
+        fallback_image = str(s.get("image_url") or "").strip()
+        if not preview_urls and fallback_image:
+            preview_urls = [fallback_image]
+        photosets.append({
+            "id": f"style:{style_id}",
+            "entity_id": style_id,
+            "type": "style",
+            "title": str(s.get("title") or ""),
+            "description": str(s.get("description") or ""),
+            "credit_cost": int(s.get("credit_cost", 4) or 4),
+            "preview_urls": preview_urls[:4],
+            "num_images": 4,
+        })
+
     return JSONResponse({
+        "photosets": photosets,
         "packs": packs,
         "packs_use_credits": packs_use_credits(),
     })

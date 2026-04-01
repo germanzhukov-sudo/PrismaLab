@@ -51,13 +51,13 @@ const state = {
     v3SelectedTags: [],
     selectedProvider: 'seedream',
     // Photosets flow
+    photosets: [],
     packs: [],
     personaStyles: [],
     selectedPack: null,
     selectedPersonaStyle: null,
     photosetFile: null,
     photosetResult: null,
-    photosetFilter: 'all',
     // General
     hasPersona: false,
     packsUseCredits: false,
@@ -764,18 +764,30 @@ async function loadPhotosets() {
     grid.innerHTML = Array(4).fill('<div class="photoset-card skeleton"><div class="photoset-card-cover-placeholder"></div><div class="photoset-card-info"><div style="height:14px;width:80%;background:var(--bg-glass);border-radius:4px"></div></div></div>').join('');
 
     try {
-        // Load packs + persona styles in parallel
-        const [packsResp, stylesResp] = await Promise.all([
-            fetch('/app/api/v2/photosets', { headers: { 'X-Telegram-Init-Data': state.initData } }),
-            fetch('/app/api/persona-styles', { headers: { 'X-Telegram-Init-Data': state.initData } }),
-        ]);
+        const resp = await fetch('/app/api/v2/photosets', {
+            headers: { 'X-Telegram-Init-Data': state.initData },
+        });
+        const data = await resp.json();
 
-        const packsData = await packsResp.json();
-        const stylesData = await stylesResp.json();
-
-        state.packs = (packsData.packs || []).map(p => ({ ...p, kind: 'pack' }));
-        state.packsUseCredits = !!packsData.packs_use_credits;
-        state.personaStyles = (stylesData.styles || []).map(s => ({ ...s, kind: 'style' }));
+        state.photosets = (data.photosets || []).map(item => ({
+            ...item,
+            preview_urls: Array.isArray(item.preview_urls) ? item.preview_urls : [],
+        }));
+        state.packsUseCredits = !!data.packs_use_credits;
+        state.packs = state.photosets
+            .filter(item => item.type === 'pack')
+            .map(item => ({ id: item.entity_id, title: item.title, credit_cost: item.credit_cost, num_images: item.num_images, preview_urls: item.preview_urls }));
+        state.personaStyles = state.photosets
+            .filter(item => item.type === 'style')
+            .map(item => ({
+                id: item.entity_id,
+                title: item.title,
+                description: item.description || '',
+                credit_cost: item.credit_cost,
+                num_images: item.num_images,
+                preview_urls: item.preview_urls,
+                image_url: item.preview_urls?.[0] || '',
+            }));
 
         renderPhotosets();
     } catch (e) {
@@ -784,25 +796,25 @@ async function loadPhotosets() {
     }
 }
 
-function filterPhotosets(kind) {
-    state.photosetFilter = kind;
-    document.querySelectorAll('.photosets-tabs .category-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.kind === kind);
-    });
-    renderPhotosets();
-    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+function renderPhotosetCardPreview(item) {
+    const previews = (item.preview_urls || []).filter(Boolean).slice(0, 4);
+    if (previews.length >= 4) {
+        return `
+            <div class="photoset-card-cover-grid">
+                ${previews.map(url => `<img class="photoset-card-cover-grid-img" src="${url}" alt="" loading="lazy">`).join('')}
+            </div>
+        `;
+    }
+    if (previews.length > 0) {
+        return `<img class="photoset-card-cover" src="${previews[0]}" alt="" loading="lazy">`;
+    }
+    const icon = item.type === 'pack' ? '📸' : '🎭';
+    return `<div class="photoset-card-cover-placeholder">${icon}</div>`;
 }
 
 function renderPhotosets() {
     const grid = document.getElementById('photosets-grid');
-    let items = [];
-
-    if (state.photosetFilter === 'all' || state.photosetFilter === 'pack') {
-        items = items.concat(state.packs);
-    }
-    if (state.photosetFilter === 'all' || state.photosetFilter === 'style') {
-        items = items.concat(state.personaStyles);
-    }
+    const items = state.photosets || [];
 
     if (!items.length) {
         grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);grid-column:1/-1">Фотосеты скоро появятся</div>';
@@ -810,38 +822,23 @@ function renderPhotosets() {
     }
 
     grid.innerHTML = items.map((item, i) => {
-        if (item.kind === 'pack') {
-            const priceText = state.packsUseCredits
-                ? `${item.credit_cost || item.expected_images} кр`
-                : `${item.price_rub} ₽`;
-            return `
-            <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="openPackDetail(${item.id})">
-                ${item.cover_url
-                    ? `<img class="photoset-card-cover" src="${item.cover_url}" alt="" loading="lazy">`
-                    : '<div class="photoset-card-cover-placeholder">📸</div>'}
+        const isPack = item.type === 'pack';
+        const badgeClass = isPack ? 'badge-pack' : 'badge-style';
+        const badgeLabel = isPack ? 'Пак' : 'Образ';
+        const creditCost = Number(item.credit_cost || 0);
+        const numImages = Number(item.num_images || 0);
+        const openAction = isPack ? `openPackDetail(${item.entity_id})` : `openStyleDetail(${item.entity_id})`;
+        return `
+            <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="${openAction}">
+                ${renderPhotosetCardPreview(item)}
                 <div class="photoset-card-info">
-                    <div class="photoset-card-title">${item.title}</div>
+                    <div class="photoset-card-title">${item.title || ''}</div>
                     <div class="photoset-card-meta">
-                        <span class="photoset-card-badge badge-pack">Пак</span>
-                        <span class="photoset-card-price">${item.expected_images} фото · ${priceText}</span>
+                        <span class="photoset-card-badge ${badgeClass}">${badgeLabel}</span>
+                        <span class="photoset-card-price">${creditCost} кр · ${numImages} фото</span>
                     </div>
                 </div>
             </div>`;
-        } else {
-            return `
-            <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="openStyleDetail(${item.id})">
-                ${item.image_url
-                    ? `<img class="photoset-card-cover" src="${item.image_url}" alt="" loading="lazy">`
-                    : '<div class="photoset-card-cover-placeholder">🎭</div>'}
-                <div class="photoset-card-info">
-                    <div class="photoset-card-title">${item.title}</div>
-                    <div class="photoset-card-meta">
-                        <span class="photoset-card-badge badge-style">Образ</span>
-                        <span class="photoset-card-price">${item.credit_cost || 4} кр · 4 фото</span>
-                    </div>
-                </div>
-            </div>`;
-        }
     }).join('');
 }
 
@@ -949,18 +946,14 @@ function openStyleDetail(styleId) {
     document.getElementById('photoset-style-cost-value').textContent = creditCost;
     document.getElementById('photoset-style-cost-word').textContent = pluralCredits(creditCost);
 
-    // Preview grid (placeholder for 4 photos)
+    // Preview grid (2x2 из preview_urls, fallback до 4 плейсхолдеров)
     const preview = document.getElementById('photoset-style-preview');
-    if (style.image_url) {
-        preview.innerHTML = `
-            <img src="${style.image_url}" alt="">
-            <div class="preview-placeholder">?</div>
-            <div class="preview-placeholder">?</div>
-            <div class="preview-placeholder">?</div>
-        `;
-    } else {
-        preview.innerHTML = Array(4).fill('<div class="preview-placeholder">?</div>').join('');
+    const previews = (style.preview_urls || []).filter(Boolean).slice(0, 4);
+    const previewTiles = previews.map(url => `<img src="${url}" alt="" loading="lazy">`);
+    while (previewTiles.length < 4) {
+        previewTiles.push('<div class="preview-placeholder">?</div>');
     }
+    preview.innerHTML = previewTiles.join('');
 
     resetPhotosetUpload();
     showScreen('photoset-style-detail');

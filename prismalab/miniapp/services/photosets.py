@@ -529,6 +529,14 @@ async def get_packs_list(*, astria_api_key: str) -> list[dict]:
         if not isinstance(pack_data, dict):
             pack_data = _empty_pack_data()
         expected_images = resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
+        preview_urls: list[str] = []
+        examples = pack_data.get("examples")
+        if isinstance(examples, list):
+            preview_urls = [u for u in examples if isinstance(u, str) and u.startswith("http")][:4]
+        if not preview_urls:
+            cover_url = str(pack_data.get("cover_url") or "").strip()
+            if cover_url:
+                preview_urls = [cover_url]
         result.append({
             "id": offer["id"],
             "title": offer["title"],
@@ -536,6 +544,7 @@ async def get_packs_list(*, astria_api_key: str) -> list[dict]:
             "expected_images": expected_images,
             "credit_cost": offer.get("credit_cost", expected_images),
             "cover_url": pack_data.get("cover_url", ""),
+            "preview_urls": preview_urls,
             "category": offer.get("category", "female"),
         })
     return result
