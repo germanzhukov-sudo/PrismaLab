@@ -168,6 +168,7 @@ class PrismaLabStore:
                 ("persona_credits_remaining", "INTEGER DEFAULT 0"),
                 ("subject_gender", "TEXT"),
                 ("pending_pack_id", "INTEGER"),
+                ("pending_persona_batch", "TEXT"),
             ]:
                 try:
                     self._execute(conn, f"ALTER TABLE {self._users_table} ADD COLUMN {col} {col_type}")

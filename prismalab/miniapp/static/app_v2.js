@@ -56,8 +56,6 @@ const state = {
     personaStyles: [],
     selectedPack: null,
     selectedPersonaStyle: null,
-    photosetFile: null,
-    photosetResult: null,
     // General
     hasPersona: false,
     packsUseCredits: false,
@@ -781,6 +779,7 @@ async function loadPhotosets() {
             .filter(item => item.type === 'style')
             .map(item => ({
                 id: item.entity_id,
+                slug: item.slug || '',
                 title: item.title,
                 description: item.description || '',
                 credit_cost: item.credit_cost,
@@ -797,19 +796,11 @@ async function loadPhotosets() {
 }
 
 function renderPhotosetCardPreview(item) {
-    const previews = (item.preview_urls || []).filter(Boolean).slice(0, 4);
-    if (previews.length >= 4) {
-        return `
-            <div class="photoset-card-cover-grid">
-                ${previews.map(url => `<img class="photoset-card-cover-grid-img" src="${url}" alt="" loading="lazy">`).join('')}
-            </div>
-        `;
-    }
+    const previews = (item.preview_urls || []).filter(Boolean);
     if (previews.length > 0) {
         return `<img class="photoset-card-cover" src="${previews[0]}" alt="" loading="lazy">`;
     }
-    const icon = item.type === 'pack' ? '📸' : '🎭';
-    return `<div class="photoset-card-cover-placeholder">${icon}</div>`;
+    return `<div class="photoset-card-cover-placeholder">📸</div>`;
 }
 
 function renderPhotosets() {
@@ -822,20 +813,16 @@ function renderPhotosets() {
     }
 
     grid.innerHTML = items.map((item, i) => {
-        const isPack = item.type === 'pack';
-        const badgeClass = isPack ? 'badge-pack' : 'badge-style';
-        const badgeLabel = isPack ? 'Пак' : 'Образ';
         const creditCost = Number(item.credit_cost || 0);
         const numImages = Number(item.num_images || 0);
-        const openAction = isPack ? `openPackDetail(${item.entity_id})` : `openStyleDetail(${item.entity_id})`;
+        const openAction = item.type === 'pack' ? `openPackDetail(${item.entity_id})` : `openStyleDetail(${item.entity_id})`;
         return `
             <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="${openAction}">
                 ${renderPhotosetCardPreview(item)}
                 <div class="photoset-card-info">
                     <div class="photoset-card-title">${item.title || ''}</div>
                     <div class="photoset-card-meta">
-                        <span class="photoset-card-badge ${badgeClass}">${badgeLabel}</span>
-                        <span class="photoset-card-price">${creditCost} кр · ${numImages} фото</span>
+                        <span class="photoset-card-price">${numImages} фото · &#128142; ${creditCost}</span>
                     </div>
                 </div>
             </div>`;
@@ -942,7 +929,7 @@ function openStyleDetail(styleId) {
     document.getElementById('photoset-style-title').textContent = style.title;
     document.getElementById('photoset-style-desc').textContent = style.description || '';
 
-    const creditCost = style.credit_cost || 4;
+    const creditCost = style.credit_cost;
     document.getElementById('photoset-style-cost-value').textContent = creditCost;
     document.getElementById('photoset-style-cost-word').textContent = pluralCredits(creditCost);
 
@@ -955,48 +942,26 @@ function openStyleDetail(styleId) {
     }
     preview.innerHTML = previewTiles.join('');
 
-    resetPhotosetUpload();
+    // Generate button — gate by persona
+    const generateBtn = document.getElementById('photoset-generate-btn');
+    const noPersonaBlock = document.getElementById('photoset-no-persona');
+    if (state.hasPersona) {
+        generateBtn.style.display = '';
+        noPersonaBlock.style.display = 'none';
+    } else {
+        generateBtn.style.display = 'none';
+        noPersonaBlock.style.display = '';
+    }
+
     showScreen('photoset-style-detail');
 }
 
-// Photoset Upload
-function handlePhotosetFile(event) {
-    const file = event.target.files?.[0];
-    if (file) processPhotosetFile(file);
-}
-
-function processPhotosetFile(file) {
-    if (file.size > 15 * 1024 * 1024) {
-        alert('Файл слишком большой (макс. 15 МБ)');
-        return;
-    }
-    state.photosetFile = file;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        document.getElementById('photoset-preview-image').src = e.target.result;
-        document.getElementById('photoset-upload-zone').style.display = 'none';
-        document.getElementById('photoset-preview').style.display = 'block';
-        document.getElementById('photoset-generate-btn').style.display = 'block';
-    };
-    reader.readAsDataURL(file);
-}
-
-function resetPhotosetUpload() {
-    state.photosetFile = null;
-    document.getElementById('photoset-upload-zone').style.display = '';
-    document.getElementById('photoset-preview').style.display = 'none';
-    document.getElementById('photoset-generate-btn').style.display = 'none';
-    const input = document.getElementById('photoset-file-input');
-    if (input) input.value = '';
-}
-
-// Photoset Generation (4 photos)
-async function startPhotosetGeneration() {
-    if (!state.photosetFile || !state.selectedPersonaStyle) return;
+// Style batch generation (Astria via bot)
+async function startStyleBatchGeneration() {
+    if (!state.selectedPersonaStyle) return;
 
     const style = state.selectedPersonaStyle;
-    const creditCost = style.credit_cost || 4;
+    const creditCost = style.credit_cost;
 
     if (state.photosetsCredits < creditCost) {
         document.getElementById('nocredits-text').textContent =
@@ -1005,92 +970,61 @@ async function startPhotosetGeneration() {
         return;
     }
 
-    trackEvent('v2_photoset_generate_start', { style_id: style.id });
+    trackEvent('v2_style_batch_start', { style_id: style.id, slug: style.slug });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
-    showScreen('photoset-generating');
-    startProgressAnimation('photoset-progress-bar', 'photoset-generating-tip', true);
-
-    const requestId = uuid();
-    const formData = new FormData();
-    formData.append('init_data', state.initData);
-    formData.append('request_id', requestId);
-    formData.append('photo', state.photosetFile);
+    const generateBtn = document.getElementById('photoset-generate-btn');
+    generateBtn.disabled = true;
+    generateBtn.querySelector('.btn-text').textContent = 'Отправляем...';
 
     try {
-        const resp = await fetch(`/app/api/v2/photosets/style/${style.id}/generate`, {
+        const resp = await fetch('/app/api/persona/generate', {
             method: 'POST',
-            body: formData,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                init_data: state.initData,
+                styles: [{ slug: style.slug }],
+            }),
         });
         const data = await resp.json();
 
-        stopProgressAnimation('photoset-progress-bar');
-
-        if (resp.status === 402) {
-            showScreen('nocredits');
-            return;
-        }
-        if (resp.status === 409) {
-            alert('Генерация уже запущена. Подождите завершения.');
-            showScreen('photosets');
-            return;
-        }
-        if (!resp.ok && resp.status !== 200) {
-            throw new Error(data.error || 'Generation failed');
+        if (!resp.ok) {
+            if (resp.status === 402) {
+                showScreen('nocredits');
+                return;
+            }
+            throw new Error(data.error || 'Request failed');
         }
 
-        state.photosetResult = data;
-        state.photosetsCredits = data.credits_balance ?? state.photosetsCredits;
-        updateBalanceDisplays();
+        trackEvent('v2_style_batch_sent', { style_id: style.id, count: data.count });
 
-        showPhotosetResult(data);
-
-        trackEvent('v2_photoset_generate_done', {
-            style_id: style.id,
-            success_count: data.success_count,
-            status: data.status,
-        });
-
-        if (data.status === 'done' || data.status === 'partial') {
-            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-        } else {
-            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+        if (data.bot_link && tg?.openTelegramLink) {
+            tg.openTelegramLink(data.bot_link);
+        } else if (data.bot_link) {
+            window.open(data.bot_link, '_blank');
         }
+
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     } catch (e) {
-        console.error('Photoset generation error:', e);
-        stopProgressAnimation('photoset-progress-bar');
-        alert('Ошибка генерации: ' + e.message);
-        showScreen('photoset-style-detail');
+        console.error('Style batch error:', e);
+        alert('Ошибка: ' + e.message);
         if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+    } finally {
+        generateBtn.disabled = false;
+        generateBtn.querySelector('.btn-text').textContent = '\u2728 Сгенерировать (' + (style.num_images || 4) + ' фото)';
     }
 }
 
-function showPhotosetResult(data) {
-    const grid = document.getElementById('photoset-result-grid');
-    const stats = document.getElementById('photoset-result-stats');
-
-    grid.innerHTML = (data.images || []).map((url, i) =>
-        `<img src="${url}" alt="Фото ${i + 1}" onclick="openLightbox('${url}')">`
-    ).join('');
-
-    let statsText = `${data.success_count}/${data.requested_count} фото`;
-    if (data.credits_spent > 0) statsText += ` · Списано ${data.credits_spent} ${pluralCredits(data.credits_spent)}`;
-    if (data.credits_refunded > 0) statsText += ` · Возврат ${data.credits_refunded}`;
-    stats.textContent = statsText;
-
-    showScreen('photoset-result');
+function goToCreatePersona() {
+    trackEvent('v2_style_create_persona');
+    const botUsername = tg?.initDataUnsafe?.bot?.username;
+    if (botUsername && tg?.openTelegramLink) {
+        tg.openTelegramLink('https://t.me/' + botUsername);
+    } else if (botUsername) {
+        window.open('https://t.me/' + botUsername, '_blank');
+    }
 }
 
-function downloadAllPhotoset() {
-    if (!state.photosetResult?.images?.length) return;
-    state.photosetResult.images.forEach((url, i) => {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `prismalab_photoset_${i + 1}.jpg`;
-        link.click();
-    });
-    if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-}
 
 // === Progress Animation ===
 
@@ -1160,17 +1094,6 @@ function setupDragDrop() {
         });
     }
 
-    // Photoset upload zone
-    const photosetZone = document.getElementById('photoset-upload-zone');
-    if (photosetZone) {
-        photosetZone.addEventListener('dragover', e => { e.preventDefault(); photosetZone.classList.add('dragover'); });
-        photosetZone.addEventListener('dragleave', () => photosetZone.classList.remove('dragover'));
-        photosetZone.addEventListener('drop', e => {
-            e.preventDefault(); photosetZone.classList.remove('dragover');
-            const file = e.dataTransfer?.files?.[0];
-            if (file) processPhotosetFile(file);
-        });
-    }
 
     // Custom prompt character counter
     const promptInput = document.getElementById('custom-prompt-input');

@@ -1,10 +1,10 @@
-"""Тесты V2 генерации фотосета-стиля (4 фото + биллинг)."""
+"""Тесты V2 стили фотосетов: Astria batch flow (через бот), deprecated KIE endpoint."""
 from __future__ import annotations
 
+import json
 import os
 import sys
-from io import BytesIO
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -31,15 +31,6 @@ def store(tmp_path):
 FAKE_USER = {"user_id": 12345, "first_name": "Test", "username": "test"}
 
 
-@pytest.fixture(autouse=True)
-def _cleanup_photoset_state():
-    """Очистка in-memory state между тестами."""
-    yield
-    from prismalab.miniapp.services.photosets import _photoset_requests, _user_locks
-    _photoset_requests.clear()
-    _user_locks.clear()
-
-
 @pytest.fixture
 def app(store):
     from prismalab.miniapp.routes import create_miniapp, set_store
@@ -53,9 +44,8 @@ def client(app):
     return TestClient(app)
 
 
-def _fake_photo():
-    """Минимальный JPEG для тестов."""
-    return ("test.jpg", BytesIO(b"\xff\xd8" + b"\x00" * 100), "image/jpeg")
+def _auth_headers():
+    return {"X-Telegram-Init-Data": "fake_init_data"}
 
 
 def _setup_style_and_credits(store, *, credits=10, credit_cost=4, is_active=True):
@@ -69,309 +59,248 @@ def _setup_style_and_credits(store, *, credits=10, credit_cost=4, is_active=True
     )
     if not is_active:
         store.update_persona_style(style_id, is_active=0)
-    store.get_user(12345)  # auto-create
+    store.get_user(12345)
     store.set_persona_credits(12345, credits)
     return style_id
 
 
-# ── Вспомогательная mock-генерация ────────────────────────────────────
+# ── Unified DTO: style содержит slug ──────────────────────────────────
 
-def _make_gen_mock(*, success_count=4, total=4):
-    """Создаёт мок run_generation: первые success_count успешны, остальные фейл."""
-    call_count = 0
-
-    async def mock_run_generation(
-        photo_bytes=b"",
-        style_slug="",
-        prompt="",
-        negative_prompt="",
-        provider="seedream",
-        model_params_json="",
-        api_key="",
-        max_seconds=300,
-        **kwargs,
-    ):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= success_count:
-            from prismalab.miniapp.services.generation import GenerationResult
-            return GenerationResult(
-                data_url=f"data:image/jpeg;base64,fake_{call_count}",
-                provider=provider,
-                style_slug=style_slug,
-            )
-        else:
-            raise RuntimeError(f"Generation {call_count} failed")
-
-    return mock_run_generation
-
-
-# ── 4/4 Success ───────────────────────────────────────────────────────
 
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_4_of_4_success(mock_auth, client, store, monkeypatch):
-    """4/4 → status=done, 4 images, credits_spent=4, refund=0."""
-    import prismalab.miniapp.services.photosets as ps_mod
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=4))
-
-    style_id = _setup_style_and_credits(store, credits=10, credit_cost=4)
-
-    resp = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-4-4"},
-        files={"photo": _fake_photo()},
+def test_v2_photosets_style_has_slug(mock_auth, client, store):
+    """Style в /app/api/v2/photosets содержит slug."""
+    store.create_persona_style(
+        slug="slug_test", title="Slug Test", gender="female", credit_cost=4,
     )
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
     assert resp.status_code == 200
+    photosets = resp.json()["photosets"]
+
+    style_item = next((p for p in photosets if p["type"] == "style"), None)
+    assert style_item is not None
+    assert "slug" in style_item
+    assert style_item["slug"] == "slug_test"
+
+
+# ── 410 Gone: style generate deprecated ─────────────────────────────
+
+
+def test_v2_photoset_style_generate_410(client):
+    """POST /app/api/v2/photosets/style/{id}/generate → 410 Gone."""
+    resp = client.post("/app/api/v2/photosets/style/1/generate")
+    assert resp.status_code == 410
     data = resp.json()
-    assert data["status"] == "done"
-    assert data["requested_count"] == 4
-    assert data["success_count"] == 4
-    assert len(data["images"]) == 4
-    assert data["credits_spent"] == 4
-    assert data["credits_refunded"] == 0
-    assert data["credits_balance"] == 6  # 10 - 4
-    assert data["request_id"] == "req-4-4"
+    assert data["error"] == "deprecated"
+    assert "persona/generate" in data["message"]
 
 
-# ── 2/4 Partial ──────────────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_2_of_4_partial(mock_auth, client, store, monkeypatch):
-    """2/4 → status=partial, 2 images, refund пропорциональный."""
-    import prismalab.miniapp.services.photosets as ps_mod
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=2))
-
-    style_id = _setup_style_and_credits(store, credits=10, credit_cost=4)
-
-    resp = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-2-4"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "partial"
-    assert data["success_count"] == 2
-    assert len(data["images"]) == 2
-    # credit_cost=4, success=2/4 → spent = (4*2)//4 = 2, refund = 4-2 = 2
-    assert data["credits_spent"] == 2
-    assert data["credits_refunded"] == 2
-    assert data["credits_balance"] == 8  # 10 - 4 + 2 = 8
-
-
-# ── 0/4 Error ─────────────────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_0_of_4_error(mock_auth, client, store, monkeypatch):
-    """0/4 → status=error, full refund."""
-    import prismalab.miniapp.services.photosets as ps_mod
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=0))
-
-    style_id = _setup_style_and_credits(store, credits=10, credit_cost=4)
-
-    resp = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-0-4"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "error"
-    assert data["success_count"] == 0
-    assert len(data["images"]) == 0
-    assert data["credits_spent"] == 0
-    assert data["credits_refunded"] == 4
-    assert data["credits_balance"] == 10  # полный возврат
-
-
-# ── No credits → 402 ─────────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_no_credits(mock_auth, client, store):
-    """Нет кредитов → 402."""
-    style_id = _setup_style_and_credits(store, credits=2, credit_cost=4)
-
-    resp = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-no-credits"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp.status_code == 402
-    data = resp.json()
-    assert data["error"] == "no_credits"
-    assert data["credits_balance"] == 2
-    assert data["credits_required"] == 4
-
-
-# ── Inactive style → 404 ─────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_inactive_style(mock_auth, client, store):
-    """Inactive стиль → 404."""
-    style_id = _setup_style_and_credits(store, is_active=False)
-
-    resp = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-inactive"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp.status_code == 404
-
-
-# ── Idempotency: duplicate request_id ─────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_idempotent_request(mock_auth, client, store, monkeypatch):
-    """Повтор request_id → тот же результат без повторной генерации."""
-    import prismalab.miniapp.services.photosets as ps_mod
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=4))
-
-    style_id = _setup_style_and_credits(store, credits=10, credit_cost=4)
-
-    # Первый запрос
-    resp1 = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-idem"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp1.status_code == 200
-    data1 = resp1.json()
-    assert data1["credits_balance"] == 6
-
-    # Повтор — тот же request_id
-    resp2 = client.post(
-        f"/app/api/v2/photosets/style/{style_id}/generate",
-        data={"init_data": "fake", "request_id": "req-idem"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp2.status_code == 200
-    data2 = resp2.json()
-
-    # Тот же результат, баланс не изменился
-    assert data2["request_id"] == "req-idem"
-    assert data2["credits_spent"] == data1["credits_spent"]
-    assert data2["success_count"] == data1["success_count"]
-
-    # Кредиты списались ОДИН раз
-    profile = store.get_user(12345)
-    assert profile.persona_credits_remaining == 6
-
-
-# ── Cross-user isolation ──────────────────────────────────────────────
-
-FAKE_USER2 = {"user_id": 99999, "first_name": "Other", "username": "other"}
-
-
-def test_photoset_cross_user_isolation(client, store, monkeypatch):
-    """Два юзера с одинаковым request_id → каждый получает свой результат."""
-    import prismalab.miniapp.services.photosets as ps_mod
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=4))
-
-    # Setup user1
-    style_id = store.create_persona_style(
-        slug="cross_test", title="Cross", prompt="test", gender="female", credit_cost=4,
-    )
-    store.get_user(12345)
-    store.set_persona_credits(12345, 10)
-    store.get_user(99999)
-    store.set_persona_credits(99999, 10)
-
-    # User1 генерирует
-    with patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER):
-        resp1 = client.post(
-            f"/app/api/v2/photosets/style/{style_id}/generate",
-            data={"init_data": "fake", "request_id": "same-req-id"},
-            files={"photo": _fake_photo()},
-        )
-    assert resp1.status_code == 200
-    data1 = resp1.json()
-    assert data1["credits_balance"] == 6  # user1: 10 - 4
-
-    # Reset mock counter for user2
-    monkeypatch.setattr(ps_mod, "run_generation", _make_gen_mock(success_count=4))
-
-    # User2 с тем же request_id — должен получить СВОЙ результат, не кэш user1
-    with patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER2):
-        resp2 = client.post(
-            f"/app/api/v2/photosets/style/{style_id}/generate",
-            data={"init_data": "fake", "request_id": "same-req-id"},
-            files={"photo": _fake_photo()},
-        )
-    assert resp2.status_code == 200
-    data2 = resp2.json()
-    assert data2["credits_balance"] == 6  # user2: 10 - 4 (свой баланс)
-
-    # Оба списали кредиты независимо
-    assert store.get_user(12345).persona_credits_remaining == 6
-    assert store.get_user(99999).persona_credits_remaining == 6
-
-
-# ── Concurrent tap → 409 ─────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_concurrent_tap_409(mock_auth, client, store):
-    """Если генерация уже идёт → 409."""
-    import asyncio
-    style_id = _setup_style_and_credits(store, credits=10, credit_cost=4)
-
-    # Имитируем locked asyncio.Lock
-    from prismalab.miniapp.services.photosets import get_user_lock
-    lock = get_user_lock(12345)
-    # Acquire lock без await (синхронно через internal _locked flag)
-    lock._locked = True
-
-    try:
-        resp = client.post(
-            f"/app/api/v2/photosets/style/{style_id}/generate",
-            data={"init_data": "fake", "request_id": "req-concurrent"},
-            files={"photo": _fake_photo()},
-        )
-        assert resp.status_code == 409
-        assert "already in progress" in resp.json()["error"]
-    finally:
-        lock._locked = False
-
-
-# ── Unauthorized → 401 ───────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=None)
-def test_photoset_unauthorized(mock_auth, client):
-    resp = client.post(
-        "/app/api/v2/photosets/style/1/generate",
-        data={"init_data": "fake", "request_id": "req-unauth"},
-        files={"photo": _fake_photo()},
-    )
-    assert resp.status_code == 401
-
-
-# ── kind=pack → 501 ──────────────────────────────────────────────────
-
-@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_pack_not_implemented(mock_auth, client, store):
-    resp = client.post(
-        "/app/api/v2/photosets/pack/123/generate",
-        data={"init_data": "fake", "request_id": "req-pack"},
-        files={"photo": _fake_photo()},
-    )
+def test_v2_photoset_pack_generate_501(client):
+    """POST /app/api/v2/photosets/pack/{id}/generate → 501."""
+    resp = client.post("/app/api/v2/photosets/pack/1/generate")
     assert resp.status_code == 501
 
 
-# ── Missing request_id → 400 ─────────────────────────────────────────
+# ── /app/api/persona/generate: batch flow ────────────────────────────
+
+
+@patch("prismalab.miniapp.routes.get_bot_username", return_value="test_bot")
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_v2_batch(mock_auth, mock_bot, client, store):
+    """/app/api/persona/generate: batch с одним стилем → ok + bot_link."""
+    store.create_persona_style(
+        slug="batch_style", title="Batch", prompt="test", gender="female", credit_cost=4,
+    )
+    store.get_user(12345)
+    store.set_persona_credits(12345, 10)
+    # Даём юзеру tune_id чтобы has_persona = True
+    with store._connect() as conn:
+        store._execute(conn,
+            f"UPDATE {store._users_table} SET astria_lora_tune_id = %s WHERE user_id = %s",
+            (999, 12345),
+        )
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "batch_style"}],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["count"] == 1
+    assert "bot_link" in data
+    assert "test_bot" in data["bot_link"]
+    assert "persona_batch" in data["bot_link"]
+
 
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
-def test_photoset_missing_request_id(mock_auth, client, store):
-    _setup_style_and_credits(store)
-
-    resp = client.post(
-        "/app/api/v2/photosets/style/1/generate",
-        data={"init_data": "fake"},
-        files={"photo": _fake_photo()},
+def test_persona_generate_credits_cutoff(mock_auth, client, store):
+    """Batch cutoff: если кредитов меньше credit_cost → стиль обрезается."""
+    store.create_persona_style(
+        slug="expensive", title="Expensive", prompt="test", gender="female", credit_cost=8,
     )
+    store.get_user(12345)
+    store.set_persona_credits(12345, 5)
+    with store._connect() as conn:
+        store._execute(conn,
+            f"UPDATE {store._users_table} SET astria_lora_tune_id = %s WHERE user_id = %s",
+            (999, 12345),
+        )
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "expensive"}],
+    })
+    # credit_cost=8 > credits=5 → batch пустой → 400
     assert resp.status_code == 400
-    assert "request_id" in resp.json()["error"]
+    assert "No valid styles" in resp.json()["error"]
 
 
-# ── Storage: reserve + refund ─────────────────────────────────────────
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_no_credits(mock_auth, client, store):
+    """0 кредитов → 402."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 0)
+    with store._connect() as conn:
+        store._execute(conn,
+            f"UPDATE {store._users_table} SET astria_lora_tune_id = %s WHERE user_id = %s",
+            (999, 12345),
+        )
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "any"}],
+    })
+    assert resp.status_code == 402
+
+
+# ── has_persona gate: оба tune ID ────────────────────────────────────
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_no_persona(mock_auth, client, store):
+    """Нет персоны (ни одного tune_id) → 400."""
+    store.get_user(12345)
+    store.set_persona_credits(12345, 10)
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "any"}],
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "No persona"
+
+
+@patch("prismalab.miniapp.routes.get_bot_username", return_value="test_bot")
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_pack_tune_id_accepted(mock_auth, mock_bot, client, store):
+    """has_persona учитывает astria_lora_pack_tune_id (не только astria_lora_tune_id)."""
+    store.create_persona_style(
+        slug="pack_tune_test", title="Test", prompt="test", gender="female", credit_cost=4,
+    )
+    store.get_user(12345)
+    store.set_persona_credits(12345, 10)
+    # Только pack tune_id, без основного
+    with store._connect() as conn:
+        store._execute(conn,
+            f"UPDATE {store._users_table} SET astria_lora_pack_tune_id = %s WHERE user_id = %s",
+            (888, 12345),
+        )
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "pack_tune_test"}],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+
+
+# ── P1: валидация styles (injection / unknown slug) ──────────────────
+
+
+def _setup_user_with_persona(store, user_id=12345, credits=10):
+    """Создаёт юзера с tune_id и кредитами."""
+    store.get_user(user_id)
+    store.set_persona_credits(user_id, credits)
+    with store._connect() as conn:
+        store._execute(conn,
+            f"UPDATE {store._users_table} SET astria_lora_tune_id = %s WHERE user_id = %s",
+            (999, user_id),
+        )
+
+
+@patch("prismalab.miniapp.routes.get_bot_username", return_value="test_bot")
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_unknown_slug_400(mock_auth, mock_bot, client, store):
+    """Неизвестный slug → пустой batch → 400."""
+    _setup_user_with_persona(store)
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "nonexistent_style"}],
+    })
+    assert resp.status_code == 400
+    assert "No valid styles" in resp.json()["error"]
+
+
+@patch("prismalab.miniapp.routes.get_bot_username", return_value="test_bot")
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_ignores_client_prompt(mock_auth, mock_bot, client, store):
+    """Клиентский prompt игнорируется — batch содержит prompt из каталога."""
+    store.create_persona_style(
+        slug="safe_style", title="Safe", prompt="CATALOG PROMPT", gender="female", credit_cost=4,
+    )
+    _setup_user_with_persona(store)
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "safe_style", "prompt": "INJECTED CUSTOM PROMPT"}],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 1
+
+    # Проверяем что в pending_persona_batch сохранился каталожный prompt
+    batch_json = store.get_pending_persona_batch(12345)
+    assert batch_json is not None
+    batch = json.loads(batch_json)
+    assert batch[0]["prompt"] == "CATALOG PROMPT"
+    assert "INJECTED" not in json.dumps(batch)
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_invalid_styles_format(mock_auth, client, store):
+    """styles: ['bad'] (не dict) → 400."""
+    _setup_user_with_persona(store)
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": ["bad_string"],
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "Invalid styles format"
+
+
+@patch("prismalab.miniapp.routes.get_bot_username", return_value="test_bot")
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_persona_generate_inactive_style_400(mock_auth, mock_bot, client, store):
+    """Inactive стиль пропускается (active_only=True) → пустой batch → 400."""
+    sid = store.create_persona_style(
+        slug="inactive_style", title="Inactive", prompt="test", gender="female", credit_cost=4,
+    )
+    store.update_persona_style(sid, is_active=0)
+    _setup_user_with_persona(store)
+
+    resp = client.post("/app/api/persona/generate", json={
+        "init_data": "fake",
+        "styles": [{"slug": "inactive_style"}],
+    })
+    assert resp.status_code == 400
+    assert "No valid styles" in resp.json()["error"]
+
+
+# ── Storage: reserve + refund (всё ещё актуальны) ────────────────────
+
 
 def test_reserve_credits_success(store):
     """reserve_persona_credits: достаточно кредитов → True."""

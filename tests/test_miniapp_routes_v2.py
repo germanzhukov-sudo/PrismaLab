@@ -333,6 +333,7 @@ def test_v2_photosets_unified_dto_shape(mock_auth, client, store):
     style_item = next((p for p in photosets if p["type"] == "style" and p["entity_id"] == style_id), None)
     assert style_item is not None
     assert style_item["id"] == f"style:{style_id}"
+    assert style_item["slug"] == "dto_style"
     assert style_item["title"] == "DTO Style"
     assert style_item["credit_cost"] == 7
     assert style_item["num_images"] == 4
