@@ -20,7 +20,7 @@
                 <form method="POST" action="{{ admin_base }}/persona-styles/save" enctype="multipart/form-data">
                     {% if style %}
                     <input type="hidden" name="style_id" value="{{ style.id }}">
-                    <input type="hidden" name="existing_image_url" value="{{ style.image_url or '' }}">
+                    <input type="hidden" name="existing_previews" value="{{ previews | join('\n') }}">
                     {% endif %}
 
                     <div class="mb-3">
@@ -44,7 +44,7 @@
                     </div>
 
                     <div class="row">
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-3 mb-3">
                             <label class="form-label">Пол</label>
                             <select class="form-select" name="gender">
                                 <option value="female" {% if style and style.gender == 'female' %}selected{% endif %}>Female</option>
@@ -52,13 +52,19 @@
                                 <option value="unisex" {% if style and style.gender == 'unisex' %}selected{% endif %}>Unisex</option>
                             </select>
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Кредиты</label>
+                            <input type="number" class="form-control" name="credit_cost"
+                                   value="{{ style.credit_cost if style else 4 }}" min="1">
+                            <small class="text-muted">Стоимость генерации</small>
+                        </div>
+                        <div class="col-md-3 mb-3">
                             <label class="form-label">Порядок</label>
                             <input type="number" class="form-control" name="sort_order"
                                    value="{{ style.sort_order if style else 1 }}" min="1">
-                            <small class="text-muted">1 = первый в списке</small>
+                            <small class="text-muted">1 = первый</small>
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-3 mb-3">
                             <label class="form-label">Статус</label>
                             <div class="form-check form-switch mt-2">
                                 <input class="form-check-input" type="checkbox" name="is_active" value="1"
@@ -69,15 +75,27 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label">Картинка</label>
-                        {% if style and style.image_url %}
-                        <div class="mb-2">
-                            <img src="{{ style.image_url }}" alt="{{ style.title }}"
-                                 style="max-width: 200px; max-height: 200px; object-fit: cover; border-radius: 12px;">
+                        <label class="form-label">Превью (до 4 фото)</label>
+                        {% if previews %}
+                        <div class="row g-2 mb-2">
+                            {% for url in previews %}
+                            <div class="col-3">
+                                <div class="position-relative">
+                                    <img src="{{ url }}" alt="preview {{ loop.index }}"
+                                         style="width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px;">
+                                    <div class="form-check position-absolute top-0 end-0 m-1">
+                                        <input class="form-check-input" type="checkbox"
+                                               name="keep_preview_{{ loop.index0 }}" value="1" checked
+                                               title="Оставить">
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
                         </div>
+                        <small class="text-muted d-block mb-2">Снимите галочку, чтобы удалить фото.</small>
                         {% endif %}
-                        <input type="file" class="form-control" name="image" accept="image/*">
-                        <small class="text-muted">JPG/PNG, рекомендуемый размер 400x600px. {% if style and style.image_url %}Загрузите новую для замены.{% endif %}</small>
+                        <input type="file" class="form-control" name="images" accept="image/*" multiple>
+                        <small class="text-muted">JPG/PNG, до {{ 4 - (previews|length if previews else 0) }} файлов. Рекомендуемый размер 400x600px.</small>
                     </div>
 
                     <hr>
@@ -97,8 +115,9 @@
             </div>
             <div class="card-body">
                 <p><strong>Пол</strong> — определяет, кому показывать стиль в каталоге Mini App.</p>
-                <p><strong>Картинка</strong> — загружается в Supabase Storage. Отображается в каталоге Mini App.</p>
-                <p class="mb-0"><strong>Порядок</strong> — стили сортируются по возрастанию. 0 = первый.</p>
+                <p><strong>Кредиты</strong> — сколько кредитов списывается за генерацию этого стиля.</p>
+                <p><strong>Превью</strong> — до 4 фото в сетке 2x2. Загружаются в Supabase Storage.</p>
+                <p class="mb-0"><strong>Порядок</strong> — стили сортируются по возрастанию. 1 = первый.</p>
             </div>
         </div>
     </div>

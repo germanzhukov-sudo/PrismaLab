@@ -163,6 +163,59 @@ def test_persona_style_credit_cost_default(store):
     assert s["credit_cost"] == 4
 
 
+def test_style_previews_crud(store):
+    """persona_style_previews — set, get, replace, cascade delete."""
+    style_id = store.create_persona_style(
+        slug="preview_test", title="Preview Test", gender="female",
+    )
+    # Пустые превью по умолчанию
+    assert store.get_style_previews(style_id) == []
+
+    # Set previews
+    store.set_style_previews(style_id, ["url1", "url2", "url3", "url4"])
+    previews = store.get_style_previews(style_id)
+    assert previews == ["url1", "url2", "url3", "url4"]
+
+    # Replace previews
+    store.set_style_previews(style_id, ["new1", "new2"])
+    assert store.get_style_previews(style_id) == ["new1", "new2"]
+
+    # Max 4 — лишние обрезаются
+    store.set_style_previews(style_id, ["a", "b", "c", "d", "e"])
+    assert len(store.get_style_previews(style_id)) == 4
+
+    # Cascade delete — удаление стиля удаляет превью
+    store.delete_persona_style(style_id)
+    assert store.get_style_previews(style_id) == []
+
+
+def test_style_previews_map(store):
+    """get_all_style_previews_map — batch загрузка без N+1."""
+    s1 = store.create_persona_style(slug="map_a", title="Map A", gender="female")
+    s2 = store.create_persona_style(slug="map_b", title="Map B", gender="male")
+    store.set_style_previews(s1, ["a1", "a2"])
+    store.set_style_previews(s2, ["b1", "b2", "b3"])
+
+    m = store.get_all_style_previews_map()
+    assert m[s1] == ["a1", "a2"]
+    assert m[s2] == ["b1", "b2", "b3"]
+
+
+def test_style_previews_migration(store):
+    """Миграция image_url → previews: стиль с image_url, повторный init подхватывает."""
+    # Создаём стиль с image_url (после первичного init)
+    style_id = store.create_persona_style(
+        slug="migrate_test", title="Migrate", gender="female", image_url="https://old.jpg",
+    )
+    # Превью пусто — миграция уже прошла до создания стиля
+    assert store.get_style_previews(style_id) == []
+
+    # Повторный init — миграция подхватит существующий image_url
+    store._init_admin_tables()
+    previews = store.get_style_previews(style_id)
+    assert "https://old.jpg" in previews
+
+
 def test_express_styles_crud(store):
     """express_styles — полный CRUD цикл с новыми полями."""
     # Create

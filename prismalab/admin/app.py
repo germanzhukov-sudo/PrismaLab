@@ -817,15 +817,18 @@ async def persona_style_form(request: Request):
     style_id = request.path_params.get("style_id")
     store = get_store()
     style = None
+    previews: list[str] = []
     if style_id:
         style = store.get_persona_style(int(style_id))
         if not style:
             return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles", status_code=302)
+        previews = store.get_style_previews(int(style_id))
 
     return templates.TemplateResponse("persona_style_form.html", {
         "request": request,
         "admin": request.state.admin,
         "style": style,
+        "previews": previews,
     })
 
 
@@ -850,22 +853,47 @@ async def persona_style_save(request: Request):
     slug = "".join(_translit.get(c, c) for c in title.lower())
     slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_") or f"style_{int(_time.time())}"
 
-    # Обработка загрузки картинки
-    image_url = form.get("existing_image_url", "").strip()
-    image_file = form.get("image")
-    if image_file and hasattr(image_file, "read"):
-        file_bytes = await image_file.read()
-        if file_bytes and len(file_bytes) > 0:
-            from prismalab.supabase_storage import upload_image
-            content_type = getattr(image_file, "content_type", "image/jpeg") or "image/jpeg"
-            filename = getattr(image_file, "filename", "style.jpg") or "style.jpg"
-            new_url = upload_image(file_bytes, filename, content_type)
-            if new_url:
-                # Удалить старую картинку если была
-                if image_url:
-                    from prismalab.supabase_storage import delete_image
-                    delete_image(image_url)
-                image_url = new_url
+    credit_cost = int(form.get("credit_cost", 4) or 4)
+
+    # Обработка загрузки превью (до 4 файлов)
+    from prismalab.supabase_storage import upload_image, delete_image
+    existing_previews_raw = form.get("existing_previews", "").strip()
+    existing_previews = [u for u in existing_previews_raw.split("\n") if u.strip()] if existing_previews_raw else []
+    # Какие превью удалить (unchecked в форме)
+    keep_indices = set()
+    for key in form.keys():
+        if key.startswith("keep_preview_"):
+            try:
+                keep_indices.add(int(key.replace("keep_preview_", "")))
+            except ValueError:
+                pass
+    # Если форма edit и были превью — оставляем только отмеченные
+    preview_urls: list[str] = []
+    removed_urls: list[str] = []
+    if style_id and existing_previews:
+        for i, url in enumerate(existing_previews):
+            if i in keep_indices:
+                preview_urls.append(url)
+            else:
+                removed_urls.append(url)
+    # Загрузить новые файлы (до 4 - len(preview_urls))
+    image_files = form.getlist("images")
+    for image_file in image_files:
+        if len(preview_urls) >= 4:
+            break
+        if image_file and hasattr(image_file, "read"):
+            file_bytes = await image_file.read()
+            if file_bytes and len(file_bytes) > 0:
+                content_type = getattr(image_file, "content_type", "image/jpeg") or "image/jpeg"
+                filename = getattr(image_file, "filename", "style.jpg") or "style.jpg"
+                new_url = upload_image(file_bytes, filename, content_type)
+                if new_url:
+                    preview_urls.append(new_url)
+    # Удалить убранные файлы из Supabase
+    for url in removed_urls:
+        delete_image(url)
+    # image_url = первое превью (для обратной совместимости)
+    image_url = preview_urls[0] if preview_urls else ""
 
     if style_id:
         # Обновление — сдвинуть остальные если порядок занят
@@ -875,17 +903,21 @@ async def persona_style_save(request: Request):
             slug=slug, title=title, description=description,
             prompt=prompt, gender=gender, image_url=image_url,
             sort_order=sort_order, is_active=is_active,
+            credit_cost=credit_cost,
         )
+        store.set_style_previews(int(style_id), preview_urls)
     else:
         # Создание
         if not title:
             return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles/new", status_code=302)
         store._shift_persona_style_sort_order(sort_order)
-        store.create_persona_style(
+        new_id = store.create_persona_style(
             slug=slug, title=title, description=description,
             prompt=prompt, gender=gender, image_url=image_url,
-            sort_order=sort_order,
+            sort_order=sort_order, credit_cost=credit_cost,
         )
+        if new_id and preview_urls:
+            store.set_style_previews(new_id, preview_urls)
 
     return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?saved=1", status_code=303)
 
@@ -914,11 +946,10 @@ async def persona_style_delete(request: Request):
     style_id = int(request.path_params["style_id"])
     store = get_store()
 
-    # Получить стиль для удаления картинки из Storage
-    style = store.get_persona_style(style_id)
-    if style and style.get("image_url"):
-        from prismalab.supabase_storage import delete_image
-        delete_image(style["image_url"])
+    # Удалить все превью из Supabase Storage
+    from prismalab.supabase_storage import delete_image
+    for url in store.get_style_previews(style_id):
+        delete_image(url)
 
     store.delete_persona_style(style_id)
     return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?deleted=1", status_code=303)

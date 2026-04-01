@@ -92,6 +92,7 @@ class PrismaLabStore:
         self._express_category_tags_table = f"public.{self._prefix}express_category_tags" if self._use_pg else f"{self._prefix}express_category_tags"
         self._generation_history_table = f"public.{self._prefix}generation_history" if self._use_pg else f"{self._prefix}generation_history"
         self._generation_requests_table = f"public.{self._prefix}generation_requests" if self._use_pg else f"{self._prefix}generation_requests"
+        self._persona_style_previews_table = f"public.{self._prefix}persona_style_previews" if self._use_pg else f"{self._prefix}persona_style_previews"
         self._pg_pool = None
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
@@ -1024,6 +1025,16 @@ class PrismaLabStore:
                         )
                     """)
                     conn.commit()
+                    # Таблица превью стилей персоны (нормализованная)
+                    cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self._persona_style_previews_table} (
+                            id SERIAL PRIMARY KEY,
+                            style_id INTEGER NOT NULL REFERENCES {self._persona_styles_table}(id) ON DELETE CASCADE,
+                            image_url TEXT NOT NULL,
+                            sort_order INTEGER DEFAULT 0
+                        )
+                    """)
+                    conn.commit()
                     # Таблица экспресс-стилей
                     cur.execute(f"""
                         CREATE TABLE IF NOT EXISTS {self._express_styles_table} (
@@ -1144,6 +1155,17 @@ class PrismaLabStore:
                     # Добавить credit_cost в persona_styles если нет
                     try:
                         cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN credit_cost INTEGER DEFAULT 4")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                    # Миграция: перенести persona_styles.image_url → persona_style_previews
+                    try:
+                        cur.execute(f"""
+                            INSERT INTO {self._persona_style_previews_table} (style_id, image_url, sort_order)
+                            SELECT id, image_url, 0 FROM {self._persona_styles_table}
+                            WHERE image_url IS NOT NULL AND image_url != ''
+                            AND id NOT IN (SELECT style_id FROM {self._persona_style_previews_table})
+                        """)
                         conn.commit()
                     except Exception:
                         conn.rollback()
@@ -1301,6 +1323,25 @@ class PrismaLabStore:
                 # Добавить credit_cost если нет (миграция)
                 try:
                     conn.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN credit_cost INTEGER DEFAULT 4")
+                except Exception:
+                    pass
+                # Таблица превью стилей персоны (SQLite)
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._persona_style_previews_table} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        style_id INTEGER NOT NULL REFERENCES {self._persona_styles_table}(id) ON DELETE CASCADE,
+                        image_url TEXT NOT NULL,
+                        sort_order INTEGER DEFAULT 0
+                    )
+                """)
+                # Миграция: перенести persona_styles.image_url → persona_style_previews
+                try:
+                    conn.execute(f"""
+                        INSERT INTO {self._persona_style_previews_table} (style_id, image_url, sort_order)
+                        SELECT id, image_url, 0 FROM {self._persona_styles_table}
+                        WHERE image_url IS NOT NULL AND image_url != ''
+                        AND id NOT IN (SELECT style_id FROM {self._persona_style_previews_table})
+                    """)
                 except Exception:
                     pass
                 # Таблица экспресс-стилей (SQLite)
@@ -2696,6 +2737,68 @@ class PrismaLabStore:
                 )
                 conn.commit()
                 return cur.rowcount > 0
+
+    # ========================================
+    # Persona Style Previews (превью-фото для стилей)
+    # ========================================
+
+    def get_style_previews(self, style_id: int) -> list[str]:
+        """Получить список URL превью для стиля, отсортированных по sort_order."""
+        sql = f"SELECT image_url FROM {self._persona_style_previews_table} WHERE style_id = %s ORDER BY sort_order, id"
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql, (int(style_id),))
+                    return [row["image_url"] for row in cur.fetchall()]
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql.replace("%s", "?"), (int(style_id),)).fetchall()
+                return [row["image_url"] if isinstance(row, dict) else row[0] for row in rows]
+
+    def set_style_previews(self, style_id: int, urls: list[str]) -> None:
+        """Заменить превью стиля. Удаляет старые, вставляет новые (max 4)."""
+        urls = urls[:4]
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"DELETE FROM {self._persona_style_previews_table} WHERE style_id = %s", (int(style_id),))
+                    for i, url in enumerate(urls):
+                        cur.execute(
+                            f"INSERT INTO {self._persona_style_previews_table} (style_id, image_url, sort_order) VALUES (%s, %s, %s)",
+                            (int(style_id), url, i),
+                        )
+                    conn.commit()
+        else:
+            with self._connect() as conn:
+                conn.execute(f"DELETE FROM {self._persona_style_previews_table} WHERE style_id = ?", (int(style_id),))
+                for i, url in enumerate(urls):
+                    conn.execute(
+                        f"INSERT INTO {self._persona_style_previews_table} (style_id, image_url, sort_order) VALUES (?, ?, ?)",
+                        (int(style_id), url, i),
+                    )
+                conn.commit()
+
+    def get_all_style_previews_map(self) -> dict[int, list[str]]:
+        """Получить превью для всех стилей (batch, без N+1). Возвращает {style_id: [url, ...]}."""
+        sql = f"SELECT style_id, image_url FROM {self._persona_style_previews_table} ORDER BY style_id, sort_order, id"
+        result: dict[int, list[str]] = {}
+        if self._use_pg:
+            with self._connect() as conn:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(sql)
+                    for row in cur.fetchall():
+                        result.setdefault(int(row["style_id"]), []).append(row["image_url"])
+        else:
+            with self._connect() as conn:
+                rows = conn.execute(sql).fetchall()
+                for row in rows:
+                    sid = row["style_id"] if isinstance(row, dict) else row[0]
+                    url = row["image_url"] if isinstance(row, dict) else row[1]
+                    result.setdefault(int(sid), []).append(url)
+        return result
 
     # ========================================
     # Express Styles (экспресс-фото стили из БД)
