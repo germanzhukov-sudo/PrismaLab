@@ -946,10 +946,16 @@ async def persona_style_delete(request: Request):
     style_id = int(request.path_params["style_id"])
     store = get_store()
 
-    # Удалить все превью из Supabase Storage
+    # Удалить все превью из Supabase Storage + legacy image_url (сирота)
     from prismalab.supabase_storage import delete_image
-    for url in store.get_style_previews(style_id):
+    preview_urls = set(store.get_style_previews(style_id))
+    for url in preview_urls:
         delete_image(url)
+    style = store.get_persona_style(style_id)
+    if style:
+        legacy_url = (style.get("image_url") or "").strip()
+        if legacy_url and legacy_url not in preview_urls:
+            delete_image(legacy_url)
 
     store.delete_persona_style(style_id)
     return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?deleted=1", status_code=303)
