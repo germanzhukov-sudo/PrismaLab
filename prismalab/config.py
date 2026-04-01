@@ -126,6 +126,28 @@ def custom_request_v1() -> bool:
     return (os.getenv("CUSTOM_REQUEST_V1") or "").strip() == "1"
 
 
+def persona_lora_name(gender: str | None, user_id: int | None = None) -> str:
+    """Имя класса для LoRA: woman/man (при mode=gender) или person (default).
+
+    Feature flag: PRISMALAB_PERSONA_LORA_NAME_MODE=gender.
+    Если gender пустой при mode=gender → safe fallback "woman" + warning.
+    """
+    import logging
+    mode = (os.getenv("PRISMALAB_PERSONA_LORA_NAME_MODE") or "person").strip().lower()
+    if mode in {"gender", "class", "man_woman"}:
+        if not gender:
+            logging.getLogger("prismalab").warning(
+                "persona_lora_name: empty gender for user=%s, fallback to woman", user_id,
+            )
+        return "man" if gender == "male" else "woman"
+    return "person"
+
+
+def lora_weight_for_flow(flow: str) -> float:
+    """Вес LoRA по типу flow. style=1.1 (наши образы), pack=1.0 (Astria default)."""
+    return 1.1 if flow == "style" else 1.0
+
+
 def _guard_dev_only_flags() -> None:
     """Fail-fast: dev-флаги на проде → не стартуем."""
     if _is_dev_runtime():

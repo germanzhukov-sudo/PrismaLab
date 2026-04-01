@@ -107,12 +107,13 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
         for i, style_data in enumerate(batch, 1):
             slug = style_data.get("slug", "")
             title = style_data.get("title", slug)
+            credit_cost = int(style_data.get("credit_cost", 4))
             # Промпт из БД (обогащён API endpoint), фоллбэк на словарь
             prompt = style_data.get("prompt") or _bot._persona_style_prompt(slug, title)
 
-            # Проверяем кредиты перед каждой генерацией
+            # Проверяем кредиты перед каждой генерацией (по credit_cost, не по 1)
             current_profile = _bot.store.get_user(user_id)
-            if current_profile.persona_credits_remaining <= 0:
+            if current_profile.persona_credits_remaining < credit_cost:
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=f"Кредиты закончились после {i-1}/{total} фото."
@@ -154,6 +155,8 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     is_persona_style=True,
                     context=context,
                     skip_post_message=True,
+                    num_images=4,
+                    credits_to_spend=credit_cost,
                 )
             except Exception as e:
                 logger.error("Batch gen error user %s style %s: %s", user_id, slug, e, exc_info=True)
@@ -1181,8 +1184,11 @@ async def _start_astria_lora(
             )
             return
 
-        # Для persona-flow всегда обучаем как "person" (лучшее качество для стилей).
-        name = "person"
+        # Имя класса: woman/man (при PERSONA_LORA_NAME_MODE=gender) или person (default).
+        from prismalab.config import persona_lora_name
+        profile = _bot.store.get_user(user_id)
+        gender = getattr(profile, "subject_gender", None) or context.user_data.get(USERDATA_SUBJECT_GENDER)
+        name = persona_lora_name(gender, user_id=user_id)
 
         # Скачиваем все 10 фото (с обработкой таймаутов)
         image_bytes_list = []

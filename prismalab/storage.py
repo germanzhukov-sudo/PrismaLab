@@ -669,8 +669,9 @@ class PrismaLabStore:
             (int(user_id), max(0, int(count))),
         )
 
-    def decrement_persona_credits(self, user_id: int) -> int:
-        """Атомарно вычитает 1 кредит. Возвращает новый баланс или 0, если не было кредитов."""
+    def decrement_persona_credits(self, user_id: int, count: int = 1) -> int:
+        """Атомарно вычитает count кредитов. Возвращает новый баланс или 0, если недостаточно."""
+        count = max(1, count)
         with self._connect() as conn:
             uid = int(user_id)
             if self._use_pg:
@@ -679,21 +680,21 @@ class PrismaLabStore:
                     cur.execute(
                         f"""
                         UPDATE {self._users_table}
-                        SET persona_credits_remaining = persona_credits_remaining - 1,
+                        SET persona_credits_remaining = persona_credits_remaining - %s,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE user_id = %s AND persona_credits_remaining > 0
+                        WHERE user_id = %s AND persona_credits_remaining >= %s
                         RETURNING persona_credits_remaining
                         """,
-                        (uid,),
+                        (count, uid, count),
                     )
                     row = cur.fetchone()
                 conn.commit()
                 return int(row["persona_credits_remaining"]) if row else 0
             else:
                 cur = conn.execute(
-                    f"UPDATE {self._users_table} SET persona_credits_remaining = persona_credits_remaining - 1, updated_at = CURRENT_TIMESTAMP "
-                    f"WHERE user_id = ? AND persona_credits_remaining > 0 RETURNING persona_credits_remaining",
-                    (uid,),
+                    f"UPDATE {self._users_table} SET persona_credits_remaining = persona_credits_remaining - ?, updated_at = CURRENT_TIMESTAMP "
+                    f"WHERE user_id = ? AND persona_credits_remaining >= ? RETURNING persona_credits_remaining",
+                    (count, uid, count),
                 )
                 row = cur.fetchone()
                 conn.commit()

@@ -507,6 +507,8 @@ async def _run_style_job(
     is_persona_style: bool = False,
     context: ContextTypes.DEFAULT_TYPE | None = None,
     skip_post_message: bool = False,
+    num_images: int = 1,
+    credits_to_spend: int = 1,
 ) -> None:
     try:
         use_test_prompt = test_prompt is not None
@@ -588,7 +590,8 @@ async def _run_style_job(
         if use_lora:
             # LoRA генерация: используем <lora:{tune_id}:strength> в промпте
             # Inference на базовой модели Flux1.dev (1504944)
-            lora_weight = 1.1  # Вес LoRA для сходства (1.0–1.2)
+            from prismalab.config import lora_weight_for_flow
+            lora_weight = lora_weight_for_flow("style")  # 1.1 для наших образов
 
             # Промпт для Astria LoRA (lora_prompt_override — для Персоны)
             # Токен должен совпадать с name при обучении: person (бот) или woman/man (пак)
@@ -733,30 +736,66 @@ async def _run_style_job(
             film_grain=use_film_grain,
             seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
             aspect_ratio="3:4",
+            num_images=num_images,
             max_seconds=settings.astria_max_seconds,
             poll_seconds=6.0,
         )
         if not is_persona_style:
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
-        out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
-        out_bytes = _postprocess_output(style_id, out_bytes)
 
-        bio = io.BytesIO(out_bytes)
-        bio.name = f"{settings.app_name}_{style.id}.png"
-        if not is_persona_style:
-            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
-        tune_type_label = "LoRA" if use_lora else "FaceID"
+        # Скачиваем результаты (1 или N картинок)
+        if num_images > 1 and len(astria_res.images) > 1:
+            # Альбом: скачиваем все, отправляем sendMediaGroup
+            all_bytes = []
+            for img_url in astria_res.images[:num_images]:
+                try:
+                    img_bytes = await astria_download_first_image_bytes([img_url], api_key=settings.astria_api_key)
+                    all_bytes.append(_postprocess_output(style_id, img_bytes))
+                except Exception as dl_err:
+                    logger.warning("Failed to download image %s: %s", img_url, dl_err)
 
-        persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
-        await _safe_send_document(
-            bot=bot,
-            chat_id=chat_id,
-            document=bio,
-            caption=persona_caption,
-        )
+            if not is_persona_style:
+                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
+
+            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово: «{style.title}»"
+
+            if all_bytes:
+                # Пробуем отправить альбомом
+                try:
+                    from telegram import InputMediaDocument
+                    media = []
+                    for idx, img_b in enumerate(all_bytes):
+                        bio = io.BytesIO(img_b)
+                        bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
+                        media.append(InputMediaDocument(media=bio, caption=persona_caption if idx == 0 else None))
+                    await bot.send_media_group(chat_id=chat_id, media=media)
+                except Exception as album_err:
+                    logger.warning("sendMediaGroup failed, sending individually: %s", album_err)
+                    # Fallback: отправляем поштучно
+                    for idx, img_b in enumerate(all_bytes):
+                        try:
+                            bio = io.BytesIO(img_b)
+                            bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
+                            await _safe_send_document(bot=bot, chat_id=chat_id, document=bio,
+                                                      caption=persona_caption if idx == 0 else "")
+                        except Exception:
+                            logger.warning("Fallback send failed for image %d", idx + 1)
+        else:
+            # Одна картинка (legacy flow)
+            out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
+            out_bytes = _postprocess_output(style_id, out_bytes)
+
+            bio = io.BytesIO(out_bytes)
+            bio.name = f"{settings.app_name}_{style.id}.png"
+            if not is_persona_style:
+                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
+            tune_type_label = "LoRA" if use_lora else "FaceID"
+            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
+            await _safe_send_document(bot=bot, chat_id=chat_id, document=bio, caption=persona_caption)
+
         # Логируем успешную генерацию для аналитики
         try:
-            store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria"})
+            store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria", "num_images": num_images})
         except Exception:
             pass
 
@@ -765,7 +804,8 @@ async def _run_style_job(
                 await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
             except Exception:
                 pass
-            credits = store.decrement_persona_credits(user_id)
+            # Списание credits_to_spend (не фикс 1)
+            credits = store.decrement_persona_credits(user_id, count=credits_to_spend)
             if not skip_post_message:
                 if credits <= 0:
                     profile = store.get_user(user_id)

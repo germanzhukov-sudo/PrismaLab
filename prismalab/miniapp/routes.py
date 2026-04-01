@@ -747,14 +747,21 @@ async def api_persona_generate(request: Request):
     if credits <= 0:
         return JSONResponse({"error": "No credits"}, status_code=402)
 
-    # Ограничиваем батч кредитами и обогащаем промптами из БД
-    batch = styles[:credits]
+    # Ограничиваем батч по сумме credit_cost (не по count)
     all_db_styles = store.get_persona_styles(active_only=False)
     db_by_slug = {s["slug"]: s for s in all_db_styles}
-    for item in batch:
+    batch = []
+    total_cost = 0
+    for item in styles:
         db_style = db_by_slug.get(item.get("slug", ""))
+        cost = int(db_style.get("credit_cost", 4)) if db_style else 4
+        if total_cost + cost > credits:
+            break
+        item["credit_cost"] = cost
         if db_style and db_style.get("prompt"):
             item["prompt"] = db_style["prompt"]
+        batch.append(item)
+        total_cost += cost
 
     store.set_pending_persona_batch(user_id, json.dumps(batch))
     logger.info("Persona batch saved for user %s: %d styles", user_id, len(batch))
@@ -1016,20 +1023,24 @@ async def api_v2_pack_buy_credits(request: Request):
     })
 
     # Запускаем генерацию пака — через бот (как при обычной покупке)
-    bot = get_bot()
     application = get_application()
-    if bot and application:
+    if application:
         try:
             from prismalab.handlers.packs import _run_persona_pack_generation
-            import asyncio
+            class _MiniAppContext:
+                """Минимальный context-заглушка для вызова pack generation из miniapp."""
+                def __init__(self, app):
+                    self.bot = app.bot
+                    self.application = app
+                    self.user_data = {}
+            context = _MiniAppContext(application)
             asyncio.get_event_loop().create_task(
                 _run_persona_pack_generation(
-                    bot=bot, store=store, application=application,
-                    user_id=user_id, chat_id=user_id,
-                    pack_id=str(pack_id),
-                    pack_title=str(offer.get("title", "")),
-                    pack_class=buy_data["class_key"],
-                    pack_num_images=str(offer.get("expected_images", 20)),
+                    context=context,
+                    chat_id=user_id,
+                    user_id=user_id,
+                    pack_id=pack_id,
+                    offer=offer,
                 )
             )
         except Exception as e:

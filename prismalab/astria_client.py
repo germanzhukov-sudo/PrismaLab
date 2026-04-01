@@ -127,6 +127,7 @@ def _post_prompt(
     film_grain: bool | None = None,
     seed: int | None = None,
     aspect_ratio: str | None = None,
+    num_images: int = 1,
     timeout_s: float,
 ) -> dict[str, Any]:
     if not api_key:
@@ -139,7 +140,7 @@ def _post_prompt(
     data: dict[str, Any] = {"prompt[text]": text}
     if negative_prompt:
         data["prompt[negative_prompt]"] = negative_prompt
-    data["prompt[num_images]"] = "1"
+    data["prompt[num_images]"] = str(max(1, min(num_images, 8)))
 
     if cfg_scale is not None:
         data["prompt[cfg_scale]"] = str(float(cfg_scale))
@@ -263,6 +264,7 @@ async def run_prompt_and_wait(
     film_grain: bool | None = None,
     seed: int | None = None,
     aspect_ratio: str | None = None,
+    num_images: int = 1,
     max_seconds: int = 300,
     poll_seconds: float = 6.0,
 ) -> AstriaPromptResult:
@@ -293,6 +295,7 @@ async def run_prompt_and_wait(
                 film_grain=film_grain,
                 seed=seed,
                 aspect_ratio=aspect_ratio,
+                num_images=num_images,
                 timeout_s=timeout_s,
             )
             break

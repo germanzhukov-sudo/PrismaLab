@@ -71,16 +71,7 @@ import prismalab.bot as _bot  # noqa: E402
 def _persona_pack_class_name(gender: str | None) -> str:
     return "man" if gender == "male" else "woman"
 
-def _persona_lora_name(gender: str | None) -> str:
-    """
-    Имя класса для обучения персональной LoRA.
-    По умолчанию сохраняем историческое поведение: person.
-    Для dev-экспериментов можно включить man/woman через env.
-    """
-    mode = (os.getenv("PRISMALAB_PERSONA_LORA_NAME_MODE") or "person").strip().lower()
-    if mode in {"gender", "class", "man_woman"}:
-        return _persona_pack_class_name(gender)
-    return "person"
+# _persona_lora_name перенесён в config.py как persona_lora_name()
 
 def _resolve_pack_class_name(offer: dict[str, Any], gender: str | None) -> str:
     custom = str(offer.get("class_name") or "").strip().lower()
@@ -764,7 +755,14 @@ async def _run_persona_pack_generation(
                     offer_title=offer.get("title", "") or "",
                 )
             try:
-                if class_name in {"man", "woman"}:
+                # Если persona tune class совпадает с pack class → skip double-tune
+                _persona_class = getattr(profile, "persona_lora_class_name", None) or ""
+                _persona_matches_pack = _persona_class == class_name
+                logger.info(
+                    "pack tune: persona_class=%s pack_class=%s matches=%s user_id=%s",
+                    _persona_class, class_name, _persona_matches_pack, user_id,
+                )
+                if class_name in {"man", "woman"} and not _persona_matches_pack:
                     active_tune_id, reason = await _ensure_pack_lora_tune_id(
                         context=context,
                         chat_id=chat_id,
@@ -804,6 +802,10 @@ async def _run_persona_pack_generation(
                         return
                     try:
                         active_tune_id = int(str(lora_tune_id_raw))
+                        logger.info(
+                            "pack experiment: using persona tune_id=%s (class=%s pack_id=%s user_id=%s)",
+                            active_tune_id, class_name, pack_id, user_id,
+                        )
                     except ValueError:
                         _bot._pack_processing_active.discard(run_id)
                         await _safe_edit_status(
