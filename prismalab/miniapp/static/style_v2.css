@@ -660,6 +660,26 @@ body {
 .nocredits-title { font-size: 24px; font-weight: 700; }
 .nocredits-text { color: var(--text-secondary); font-size: 15px; line-height: 1.5; max-width: 300px; }
 
+/* ===== Tariff Buttons ===== */
+.tariff-btn {
+    display: flex; justify-content: space-between; align-items: center;
+    width: 100%; max-width: 300px;
+    padding: 16px 20px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 16px; font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+.tariff-btn:active {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+.tariff-title { font-size: 16px; }
+.tariff-price { font-size: 16px; color: var(--accent-primary); font-weight: 700; }
+
 /* ===== Profile ===== */
 
 .profile-container { padding: 16px; }

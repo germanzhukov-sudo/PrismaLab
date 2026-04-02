@@ -942,15 +942,23 @@ function openStyleDetail(styleId) {
     }
     preview.innerHTML = previewTiles.join('');
 
-    // Generate button — gate by persona
+    // Gate on the generate button — user always sees the detail screen
     const generateBtn = document.getElementById('photoset-generate-btn');
     const noPersonaBlock = document.getElementById('photoset-no-persona');
-    if (state.hasPersona) {
+    generateBtn.style.display = 'none';
+    noPersonaBlock.style.display = 'none';
+
+    if (state.photosetsCredits < creditCost) {
+        // Not enough credits — show tariff button, opens tariffs screen
         generateBtn.style.display = '';
-        noPersonaBlock.style.display = 'none';
-    } else {
-        generateBtn.style.display = 'none';
+        generateBtn.onclick = function() { showScreen('tariffs'); };
+        generateBtn.querySelector('.btn-text').textContent = `\u{1F48E} Нужно ${creditCost} ${pluralCredits(creditCost)}`;
+    } else if (!state.hasPersona) {
         noPersonaBlock.style.display = '';
+    } else {
+        generateBtn.style.display = '';
+        generateBtn.onclick = startStyleBatchGeneration;
+        generateBtn.querySelector('.btn-text').textContent = `\u2728 Сгенерировать (${style.num_images || 4} фото)`;
     }
 
     showScreen('photoset-style-detail');
@@ -1017,13 +1025,37 @@ async function startStyleBatchGeneration() {
 
 function goToCreatePersona() {
     trackEvent('v2_style_create_persona');
-    const botUsername = tg?.initDataUnsafe?.bot?.username;
-    if (botUsername && tg?.openTelegramLink) {
-        tg.openTelegramLink('https://t.me/' + botUsername);
-    } else if (botUsername) {
-        window.open('https://t.me/' + botUsername, '_blank');
+    closeMiniApp();
+}
+
+function goToTariffs() {
+    trackEvent('v2_go_to_tariffs');
+    showScreen('tariffs');
+}
+
+async function buyTariff(credits) {
+    trackEvent('v2_tariff_buy', { credits });
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+
+    try {
+        const resp = await fetch('/app/api/persona/buy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, credits }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Payment failed');
+
+        if (data.payment_url) {
+            if (tg) { tg.openLink(data.payment_url); }
+            else { window.open(data.payment_url, '_blank'); }
+        }
+    } catch (e) {
+        console.error('Tariff buy error:', e);
+        alert('Ошибка оплаты: ' + e.message);
     }
 }
+
 
 
 // === Progress Animation ===
