@@ -304,7 +304,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
         pass
 
     if _bot.use_yookassa():
-        amount = _amount_rub("persona_create", credits)
+        amount = _amount_rub(_bot.store, "persona_create", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
         url, payment_id = create_payment(
@@ -342,7 +342,7 @@ async def handle_persona_buy_callback(update: Update, context: ContextTypes.DEFA
             return
 
     if _bot.use_telegram_payments():
-        amount = _amount_rub("persona_create", credits)
+        amount = _amount_rub(_bot.store, "persona_create", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_create:{credits}:{user_id}"
         try:
@@ -439,7 +439,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
         pass
 
     if _bot.use_yookassa():
-        amount = _amount_rub("persona_topup", credits)
+        amount = _amount_rub(_bot.store, "persona_topup", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
         url, payment_id = create_payment(
@@ -477,7 +477,7 @@ async def handle_persona_topup_buy_callback(update: Update, context: ContextType
             return
 
     if _bot.use_telegram_payments():
-        amount = _amount_rub("persona_topup", credits)
+        amount = _amount_rub(_bot.store, "persona_topup", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_topup:{credits}:{user_id}"
         try:
@@ -565,7 +565,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
         pass
 
     if _bot.use_yookassa():
-        amount = _amount_rub("persona_topup", credits)
+        amount = _amount_rub(_bot.store, "persona_topup", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
         url, payment_id = create_payment(
@@ -603,7 +603,7 @@ async def handle_persona_topup_confirm_callback(update: Update, context: Context
             return
 
     if _bot.use_telegram_payments():
-        amount = _amount_rub("persona_topup", credits)
+        amount = _amount_rub(_bot.store, "persona_topup", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_topup:{credits}:{user_id}"
         try:
@@ -782,7 +782,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
     chat_id = query.message.chat_id if query.message else 0
 
     if _bot.use_yookassa():
-        amount = _amount_rub("persona_create", credits)
+        amount = _amount_rub(_bot.store, "persona_create", credits)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
         url, payment_id = create_payment(
@@ -820,7 +820,7 @@ async def handle_persona_confirm_pay_callback(update: Update, context: ContextTy
             return
 
     if _bot.use_telegram_payments():
-        amount = _amount_rub("persona_create", credits)
+        amount = _amount_rub(_bot.store, "persona_create", credits)
         amount_kop = max(8800, int(amount * 100))  # минимум 88 ₽ для Telegram
         payload = f"pl:persona_create:{credits}:{user_id}"
         try:

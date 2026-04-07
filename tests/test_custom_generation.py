@@ -69,7 +69,7 @@ class TestCustomCapabilities:
         assert "providers" in data
         assert "seedream" in data["providers"]
         assert "nano-banana-pro" in data["providers"]
-        assert data["providers"]["seedream"]["max_photos"] == 14
+        assert data["providers"]["seedream"]["max_photos"] == 5
         assert data["providers"]["nano-banana-pro"]["max_photos"] == 8
         assert data["max_prompt_length"] == 2000
         assert "allowed_mime" in data

@@ -121,13 +121,13 @@ class PrismaLabStore:
             return self._connect_pg()
         return self._connect_sqlite()
 
-    def _execute(self, conn, sql: str, params: tuple = ()) -> None:
+    def _execute(self, conn, sql: str, params: tuple = ()):
         if self._use_pg:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
         else:
-            conn.execute(sql.replace("%s", "?"), params)
+            return conn.execute(sql.replace("%s", "?"), params)
 
     def _init(self) -> None:
         if self._use_pg:
@@ -188,6 +188,20 @@ class PrismaLabStore:
                         class_name TEXT NOT NULL,
                         offer_title TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """,
+                )
+            except (sqlite3.OperationalError, Exception):
+                pass
+            # Таблица admin_settings (для тарифов и настроек)
+            try:
+                self._execute(
+                    conn,
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._admin_settings_table} (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                     """,
                 )
@@ -367,6 +381,76 @@ class PrismaLabStore:
                             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
                         """, (key, str(value)))
                 conn.commit()
+
+    def get_admin_setting(self, key: str) -> str | None:
+        """Получить одну настройку по точному ключу."""
+        result = self.get_admin_settings_by_prefix(key)
+        return result.get(key)
+
+    def get_admin_settings_by_prefix(self, prefix: str) -> dict[str, str]:
+        """Получить все admin_settings с данным префиксом ключа. Возвращает {key: value}."""
+        with self._connect() as conn:
+            if self._use_pg:
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        f"SELECT key, value FROM {self._admin_settings_table} WHERE key LIKE %s",
+                        (prefix + "%",),
+                    )
+                    return {row["key"]: row["value"] for row in cur.fetchall()}
+            else:
+                cur = self._execute(conn, f"SELECT key, value FROM {self._admin_settings_table} WHERE key LIKE ?", (prefix + "%",))
+                return {row[0]: row[1] for row in cur.fetchall()}
+
+    def set_admin_setting(self, key: str, value: str) -> None:
+        """Upsert одной записи в admin_settings."""
+        with self._connect() as conn:
+            if self._use_pg:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        INSERT INTO {self._admin_settings_table} (key, value, updated_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                    """, (key, value))
+            else:
+                self._execute(conn, f"""
+                    INSERT INTO {self._admin_settings_table} (key, value, updated_at)
+                    VALUES (?, ?, datetime('now'))
+                    ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+                """, (key, value))
+            conn.commit()
+
+    def delete_admin_setting(self, key: str) -> None:
+        """Удалить запись из admin_settings (сброс override к дефолту)."""
+        with self._connect() as conn:
+            if self._use_pg:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {self._admin_settings_table} WHERE key = %s", (key,))
+            else:
+                self._execute(conn, f"DELETE FROM {self._admin_settings_table} WHERE key = ?", (key,))
+            conn.commit()
+
+    def set_admin_settings_bulk(self, settings: dict[str, str]) -> None:
+        """Upsert нескольких записей в admin_settings за одну транзакцию."""
+        if not settings:
+            return
+        with self._connect() as conn:
+            if self._use_pg:
+                with conn.cursor() as cur:
+                    for key, value in settings.items():
+                        cur.execute(f"""
+                            INSERT INTO {self._admin_settings_table} (key, value, updated_at)
+                            VALUES (%s, %s, NOW())
+                            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                        """, (key, str(value)))
+            else:
+                for key, value in settings.items():
+                    self._execute(conn, f"""
+                        INSERT INTO {self._admin_settings_table} (key, value, updated_at)
+                        VALUES (?, ?, datetime('now'))
+                        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+                    """, (key, str(value)))
+            conn.commit()
 
     @staticmethod
     def _calculate_fast_costs(
@@ -1159,6 +1243,12 @@ class PrismaLabStore:
                         conn.commit()
                     except Exception:
                         conn.rollback()
+                    # Добавить cost_usd в persona_styles если нет
+                    try:
+                        cur.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN cost_usd DECIMAL(10,4) DEFAULT 0")
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
                     # Миграция: перенести persona_styles.image_url → persona_style_previews
                     try:
                         cur.execute(f"""
@@ -1326,6 +1416,11 @@ class PrismaLabStore:
                     conn.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN credit_cost INTEGER DEFAULT 4")
                 except Exception:
                     pass
+                # Добавить cost_usd если нет (миграция)
+                try:
+                    conn.execute(f"ALTER TABLE {self._persona_styles_table} ADD COLUMN cost_usd REAL DEFAULT 0")
+                except Exception:
+                    pass
                 # Таблица превью стилей персоны (SQLite)
                 conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self._persona_style_previews_table} (
@@ -1484,6 +1579,14 @@ class PrismaLabStore:
                 """)
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gr_user ON {self._generation_requests_table}(user_id)")
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_gr_created ON {self._generation_requests_table}(created_at)")
+                # --- admin_settings (SQLite) ---
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self._admin_settings_table} (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
                 conn.commit()
 
     def init_admin_tables(self) -> None:
@@ -2688,7 +2791,7 @@ class PrismaLabStore:
 
     def update_persona_style(self, style_id: int, **kwargs) -> bool:
         """Обновить стиль. Допустимые поля: slug, title, description, gender, image_url, sort_order, is_active, credit_cost."""
-        allowed = {"slug", "title", "description", "gender", "image_url", "prompt", "sort_order", "is_active", "credit_cost"}
+        allowed = {"slug", "title", "description", "gender", "image_url", "prompt", "sort_order", "is_active", "credit_cost", "cost_usd"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return False
@@ -2800,6 +2903,42 @@ class PrismaLabStore:
                     url = row["image_url"] if isinstance(row, dict) else row[1]
                     result.setdefault(int(sid), []).append(url)
         return result
+
+    def get_persona_style_stats(self, date_from: str | None = None, date_to: str | None = None) -> dict[int, dict]:
+        """Генерации по стилям persona: {style_id: {generations: N}}.
+
+        log_event в bot.py пишет числовой style_id в event_data->>'style'.
+        """
+        if not self._use_pg:
+            return {}
+        with self._connect() as conn:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                sql = f"""
+                    SELECT event_data->>'style' AS style_id, COUNT(*) AS generations
+                    FROM {self._user_events_table}
+                    WHERE event_type = 'generation' AND event_data->>'mode' = 'persona'
+                """
+                params: list = []
+                if date_from:
+                    sql += " AND created_at >= %s"
+                    params.append(date_from)
+                if date_to:
+                    sql += " AND created_at <= %s"
+                    params.append(date_to)
+                sql += " GROUP BY style_id"
+                cur.execute(sql, params)
+                result: dict[int, dict] = {}
+                for row in cur.fetchall():
+                    sid = row.get("style_id")
+                    if sid and str(sid).isdigit():
+                        result[int(sid)] = {"generations": int(row["generations"])}
+                return result
+
+    def set_persona_style_costs_bulk(self, items: list[dict]) -> None:
+        """Batch update cost_usd for persona styles. items: [{style_id, cost_usd}]."""
+        for item in items:
+            self.update_persona_style(int(item["style_id"]), cost_usd=float(item.get("cost_usd", 0)))
 
     # ========================================
     # Express Styles (экспресс-фото стили из БД)

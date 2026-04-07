@@ -489,6 +489,35 @@ async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # Replicate train10 (_start_train10) удалён
 
 
+async def _save_style_job_history(store, user_id: int, style, images_bytes: list[bytes]) -> None:
+    """Best-effort: upload images to Supabase Storage + save to generation_history."""
+    try:
+        from prismalab.supabase_storage import upload_generation
+    except ImportError:
+        upload_generation = None
+
+    for img_bytes in images_bytes:
+        try:
+            image_url = None
+            if upload_generation and img_bytes:
+                try:
+                    image_url = await asyncio.to_thread(
+                        upload_generation, img_bytes, user_id, "png", "image/png",
+                    )
+                except Exception as e:
+                    logger.warning("History upload failed for style %s: %s", style.id, e)
+            store.save_generation_history(
+                user_id=user_id,
+                mode="photoset",
+                style_slug=str(style.id),
+                style_title=style.title,
+                provider="astria",
+                image_url=image_url,
+            )
+        except Exception as e:
+            logger.warning("Save style history failed for %s: %s", style.id, e)
+
+
 async def _run_style_job(
     *,
     bot,
@@ -682,7 +711,7 @@ async def _run_style_job(
             use_inpaint_faces = False
             use_seed = random_seed  # Поддерживается для Flux1.dev
             logger.info(f"[ASTRIA] LoRA на Flux1.dev: face_correct=false, face_swap=false, inpaint_faces=false, hires_fix=true, seed={use_seed}")
-            super_resolution = True  # Для лучшего качества
+            super_resolution = False  # DEV: тест без super_resolution
             # Для Flux negative_prompt не поддерживается
             neg = None  # Flux не поддерживает negative_prompt
         else:
@@ -707,7 +736,7 @@ async def _run_style_job(
             use_face_correct = True  # Обязательно для FaceID
             use_face_swap = True  # Обязательно для FaceID
             # super_resolution=true почти всегда улучшает лицо
-            super_resolution = True
+            super_resolution = False  # DEV: тест без super_resolution
             # inpaint_faces НЕ поддерживается для FaceID (Astria возвращает 422)
             # Для full-body/long-shot можно использовать только LoRA с inpaint_faces
             use_inpaint_faces = None
@@ -744,6 +773,7 @@ async def _run_style_job(
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
 
         # Скачиваем результаты (1 или N картинок)
+        _result_bytes_list: list[bytes] = []  # for history saving
         if num_images > 1 and len(astria_res.images) > 1:
             # Альбом: скачиваем все, отправляем sendMediaGroup
             all_bytes = []
@@ -759,6 +789,7 @@ async def _run_style_job(
 
             persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово: «{style.title}»"
 
+            _result_bytes_list = list(all_bytes)
             if all_bytes:
                 # Пробуем отправить альбомом
                 try:
@@ -792,12 +823,17 @@ async def _run_style_job(
             tune_type_label = "LoRA" if use_lora else "FaceID"
             persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
             await _safe_send_document(bot=bot, chat_id=chat_id, document=bio, caption=persona_caption)
+            _result_bytes_list = [out_bytes]
 
         # Логируем успешную генерацию для аналитики
         try:
             store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria", "num_images": num_images})
         except Exception:
             pass
+
+        # Сохраняем в историю генераций (best-effort upload + save)
+        if is_persona_style and _result_bytes_list:
+            await _save_style_job_history(store, user_id, style, _result_bytes_list)
 
         if is_persona_style and context:
             try:

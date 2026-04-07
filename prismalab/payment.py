@@ -122,10 +122,9 @@ INVOICE_AMOUNT_KOPECKS = int(os.getenv("INVOICE_AMOUNT_KOPECKS") or "8800")  # 8
 # Префикс payload для PreCheckout (валидный платёж). Формат: pl:product_type:credits:user_id
 INVOICE_PAYLOAD_PREFIX = "pl:"
 
-# Цены в рублях (для отображения и реальной оплаты если PAYMENT_TEST_AMOUNT=0)
-PRICES_FAST = {5: 199, 10: 299, 30: 699}
-PRICES_PERSONA_TOPUP = {10: 229, 20: 439, 30: 629}
-PRICES_PERSONA_CREATE = {5: 299, 20: 599, 40: 999}
+# Цены продажи — через единый сервис prismalab.tariffs
+# Не хардкодить цены здесь! Все PRICES_* перенесены в tariffs.py как _DEFAULT_*.
+from prismalab.tariffs import get_price as _tariffs_get_price
 
 
 def is_yookassa_configured() -> bool:
@@ -137,16 +136,14 @@ def is_telegram_payments_configured() -> bool:
     return bool(TELEGRAM_PROVIDER_TOKEN)
 
 
-def _amount_rub(product_type: str, credits: int) -> float:
-    """Сумма в рублях для создания платежа."""
+def _amount_rub(store, product_type: str, credits: int) -> float:
+    """Сумма в рублях для создания платежа. Читает цену из tariffs service."""
     if PAYMENT_TEST_AMOUNT > 0:
         return float(PAYMENT_TEST_AMOUNT)
-    if product_type == "fast":
-        return float(PRICES_FAST.get(credits, 199))
-    if product_type == "persona_topup":
-        return float(PRICES_PERSONA_TOPUP.get(credits, 229))
-    if product_type == "persona_create":
-        return float(PRICES_PERSONA_CREATE.get(credits, 599))
+    price = _tariffs_get_price(store, product_type, credits)
+    if price is not None:
+        return float(price)
+    logger.warning("No price found for %s/%s, fallback 10", product_type, credits)
     return 10.0
 
 
@@ -286,10 +283,17 @@ def _yookassa_success_content(
         text = (
             f"Оплата получена ✅\n\n"
             f"{_format_balance_express(credits_now)}\n\n"
-            f"<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n"
+            f"Вернитесь в приложение для генерации или <b>выберите стиль</b> ниже 👇\n\n"
             f"{STYLE_EXAMPLES_FOOTER}"
         )
         kb = _fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=0)
+        # Add Mini App button if URL configured
+        from prismalab.config import MINIAPP_URL
+        if MINIAPP_URL:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            existing_rows = list(kb.inline_keyboard) if kb else []
+            new_rows = [[InlineKeyboardButton("⚡ Открыть Экспресс", web_app=WebAppInfo(url=MINIAPP_URL))]] + existing_rows
+            kb = InlineKeyboardMarkup(new_rows)
         return text, kb
 
     if product_type == "persona_topup":

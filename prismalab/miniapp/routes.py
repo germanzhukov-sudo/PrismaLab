@@ -17,6 +17,14 @@ from starlette.templating import Jinja2Templates
 
 from .auth import validate_init_data
 
+from prismalab.payment import (
+    YOOKASSA_RETURN_URL,
+    apply_test_amount,
+    create_payment,
+    poll_payment_status,
+)
+from prismalab.tariffs import get_all_tariffs, get_pack_sell_price, get_price, get_valid_credits
+
 logger = logging.getLogger("prismalab.miniapp")
 
 BASE_DIR = Path(__file__).parent
@@ -125,6 +133,14 @@ async def api_auth(request: Request):
         return JSONResponse({"error": "Temporary backend error"}, status_code=503)
 
     user_id = user["user_id"]
+
+    # Тарифы из единого сервиса
+    try:
+        tariffs = get_all_tariffs(store)
+    except Exception as e:
+        logger.warning("Failed to load tariffs: %s", e)
+        tariffs = {}
+
     return JSONResponse({
         "user_id": user_id,
         "first_name": user["first_name"],
@@ -139,6 +155,8 @@ async def api_auth(request: Request):
             or getattr(profile, "astria_lora_pack_tune_id", None)
         ),
         "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
+        "tariffs": tariffs,
+        "discount_badge": store.get_admin_setting("photosets_discount_badge") or "",
     })
 
 
@@ -381,8 +399,10 @@ async def api_status(request: Request):
 
     response = {"task_id": task_id, "status": task["status"]}
     if task["status"] == "done":
-        response["result_url"] = task["result_url"]
-        response["image_url"] = task.get("image_url")
+        image_url = task.get("image_url")
+        # Prefer lightweight Supabase URL over heavy base64 data URL
+        response["result_url"] = image_url or task["result_url"]
+        response["image_url"] = image_url
         response["tg_sent"] = bool(task.get("tg_sent"))
     elif task["status"] == "error":
         response["error"] = task["error"]
@@ -402,7 +422,7 @@ async def api_packs(request: Request):
     user = _get_user_from_request(request)
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY)
+    packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=get_store())
     return JSONResponse({"packs": packs})
 
 
@@ -418,7 +438,7 @@ async def api_pack_detail(request: Request):
         pack_id = int(pack_id_str)
     except (ValueError, TypeError):
         return JSONResponse({"error": "Invalid pack_id"}, status_code=400)
-    detail = await get_pack_detail(pack_id, astria_api_key=ASTRIA_API_KEY)
+    detail = await get_pack_detail(pack_id, astria_api_key=ASTRIA_API_KEY, store=get_store())
     if not detail:
         return JSONResponse({"error": "Pack not found"}, status_code=404)
     return JSONResponse(detail)
@@ -460,10 +480,7 @@ async def api_pack_buy(request: Request):
     pack_cost_field, pack_cost_value = resolve_pack_cost_data(offer, pack_data)
 
     user_id = user["user_id"]
-    price_rub = offer["price_rub"]
-
-    from prismalab.payment import apply_test_amount, create_payment
-
+    price_rub = get_pack_sell_price(get_store(), pack_id, offer["price_rub"])
     amount = apply_test_amount(float(price_rub))
     return_url = MINIAPP_URL.rstrip("/") + f"?pack_paid={pack_id}" if MINIAPP_URL else ""
     if not MINIAPP_URL:
@@ -502,7 +519,6 @@ async def api_pack_buy(request: Request):
     bot = get_bot()
     application = get_application()
     if bot and application:
-        from prismalab.payment import poll_payment_status
         asyncio.get_event_loop().create_task(poll_payment_status(
             payment_id=payment_id_or_err,
             bot=bot,
@@ -593,24 +609,17 @@ async def api_persona_buy(request: Request):
     except (ValueError, TypeError):
         return JSONResponse({"error": "Invalid credits"}, status_code=400)
 
-    from prismalab.payment import (
-        PRICES_PERSONA_CREATE,
-        apply_test_amount,
-        create_payment,
-        poll_payment_status,
-    )
-
-    if credits not in PRICES_PERSONA_CREATE:
+    store = get_store()
+    valid_credits = get_valid_credits(store, "persona_create")
+    if credits not in valid_credits:
         return JSONResponse(
-            {"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_CREATE.keys())}"},
+            {"error": f"Invalid credits value: {credits}. Allowed: {valid_credits}"},
             status_code=400,
         )
 
     user_id = user["user_id"]
-    price_rub = PRICES_PERSONA_CREATE[credits]
+    price_rub = get_price(store, "persona_create", credits)
     amount = apply_test_amount(float(price_rub))
-
-    from prismalab.payment import YOOKASSA_RETURN_URL
 
     url, payment_id_or_err = create_payment(
         amount_rub=amount,
@@ -673,24 +682,17 @@ async def api_persona_topup(request: Request):
     except (ValueError, TypeError):
         return JSONResponse({"error": "Invalid credits"}, status_code=400)
 
-    from prismalab.payment import (
-        PRICES_PERSONA_TOPUP,
-        apply_test_amount,
-        create_payment,
-        poll_payment_status,
-    )
-
-    if credits not in PRICES_PERSONA_TOPUP:
+    store = get_store()
+    valid_credits = get_valid_credits(store, "persona_topup")
+    if credits not in valid_credits:
         return JSONResponse(
-            {"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_TOPUP.keys())}"},
+            {"error": f"Invalid credits value: {credits}. Allowed: {valid_credits}"},
             status_code=400,
         )
 
     user_id = user["user_id"]
-    price_rub = PRICES_PERSONA_TOPUP[credits]
+    price_rub = get_price(store, "persona_topup", credits)
     amount = apply_test_amount(float(price_rub))
-
-    from prismalab.payment import YOOKASSA_RETURN_URL
 
     url, payment_id_or_err = create_payment(
         amount_rub=amount,
@@ -731,6 +733,78 @@ async def api_persona_topup(request: Request):
         ))
     else:
         logger.warning("persona_topup: bot/application not set — payment polling skipped, webhook will handle")
+
+    return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
+
+
+async def api_fast_buy(request: Request):
+    """Покупка экспресс-кредитов (fast) из Mini App."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    init_data = body.get("init_data", "")
+    user = validate_init_data(str(init_data), BOT_TOKEN)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        credits = int(body.get("credits", 0))
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid credits"}, status_code=400)
+
+    store = get_store()
+    valid = get_valid_credits(store, "fast")
+    if credits not in valid:
+        return JSONResponse(
+            {"error": f"Invalid credits value: {credits}. Allowed: {valid}"},
+            status_code=400,
+        )
+
+    user_id = user["user_id"]
+    price_rub = get_price(store, "fast", credits)
+    amount = apply_test_amount(float(price_rub))
+
+    url, payment_id_or_err = create_payment(
+        amount_rub=amount,
+        description=f"PrismaLab — {credits} экспресс фото",
+        metadata={
+            "user_id": str(user_id),
+            "chat_id": str(user_id),
+            "product_type": "fast",
+            "credits": str(credits),
+        },
+        return_url=YOOKASSA_RETURN_URL,
+    )
+
+    if not url:
+        logger.error("fast_buy payment creation failed: user=%s err=%s", user_id, payment_id_or_err)
+        try:
+            from prismalab.alerts import alert_payment_error
+            asyncio.get_event_loop().create_task(
+                alert_payment_error(user_id, "fast", str(payment_id_or_err or "payment creation failed"))
+            )
+        except Exception:
+            pass
+        return JSONResponse({"error": "Payment creation failed"}, status_code=500)
+
+    bot = get_bot()
+    application = get_application()
+    if bot and application:
+        asyncio.get_event_loop().create_task(poll_payment_status(
+            payment_id=payment_id_or_err,
+            bot=bot,
+            store=get_store(),
+            user_id=user_id,
+            chat_id=user_id,
+            credits=credits,
+            product_type="fast",
+            amount_rub=amount,
+            application=application,
+        ))
+    else:
+        logger.warning("fast_buy: bot/application not set — polling skipped, webhook will handle")
 
     return JSONResponse({"payment_url": url, "payment_id": payment_id_or_err})
 
@@ -849,6 +923,26 @@ ALLOWED_TRACK_EVENTS = {
     "v2_nav_express",
     "v2_nav_photosets",
     "v2_nav_profile",
+    # V2 Info screens
+    "v2_express_info_open",
+    "v2_custom_info_open",
+    "v2_photosets_info_open",
+    "v2_photosets_modal_open",
+    # V2 Tariffs
+    "v2_tariff_screen_open",
+    "v2_tariff_buy",
+    "v2_go_to_tariffs",
+    "v2_tariff_screen",
+    # V2 Photoset batch
+    "v2_style_batch_start",
+    "v2_style_batch_sent",
+    "v2_style_create_persona",
+    "v2_photoset_style_select",
+    "v2_photoset_batch",
+    # V2 All tariffs
+    "v2_all_tariffs",
+    # V2 Custom generation
+    "v2_custom_generate_done",
 }
 
 
@@ -983,8 +1077,17 @@ async def api_v2_photosets(request: Request):
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-    packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY)
     store = get_store()
+    user_id = user["user_id"]
+    profile = store.get_user(user_id)
+    has_persona = bool(
+        getattr(profile, "astria_lora_tune_id", None)
+        or getattr(profile, "astria_lora_pack_tune_id", None)
+    )
+    credits = getattr(profile, "persona_credits_remaining", 0) or 0
+    use_credits = packs_use_credits()
+
+    packs = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store)
     styles = store.get_persona_styles(active_only=True)
     style_previews = store.get_all_style_previews_map()
 
@@ -992,6 +1095,25 @@ async def api_v2_photosets(request: Request):
     category = request.query_params.get("category", "")
     if category:
         packs = [p for p in packs if p.get("category") == category]
+
+    def _lock_info(credit_cost: int, item_type: str) -> dict:
+        """Lock logic (backend-only, frontend just renders).
+
+        - No persona → locked (need_persona)
+        - 0 credits → locked (need_credits)
+        - credits < cost → locked (need_credits)
+        - Packs with PACKS_USE_CREDITS=0 → locked only by persona
+        """
+        if not has_persona:
+            return {"is_locked": True, "unlock_reason": "need_persona"}
+        # Packs bought for ₽ — never locked by credits
+        if item_type == "pack" and not use_credits:
+            return {"is_locked": False}
+        if credits == 0:
+            return {"is_locked": True, "unlock_reason": "need_credits"}
+        if credits < credit_cost:
+            return {"is_locked": True, "unlock_cost": credit_cost, "unlock_reason": "need_credits"}
+        return {"is_locked": False}
 
     photosets: list[dict] = []
 
@@ -1001,14 +1123,17 @@ async def api_v2_photosets(request: Request):
         cover_url = str(pack.get("cover_url") or "").strip()
         if not preview_urls and cover_url:
             preview_urls = [cover_url]
+        cc = int(pack.get("credit_cost", pack.get("expected_images", 20)) or 20)
         photosets.append({
             "id": f"pack:{entity_id}",
             "entity_id": entity_id,
             "type": "pack",
             "title": str(pack.get("title") or f"Pack #{entity_id}"),
-            "credit_cost": int(pack.get("credit_cost", pack.get("expected_images", 20)) or 20),
+            "category": str(pack.get("category") or ""),
+            "credit_cost": cc,
             "preview_urls": preview_urls[:4],
             "num_images": int(pack.get("expected_images", 20) or 20),
+            **_lock_info(cc, "pack"),
         })
 
     for s in styles:
@@ -1017,6 +1142,7 @@ async def api_v2_photosets(request: Request):
         fallback_image = str(s.get("image_url") or "").strip()
         if not preview_urls and fallback_image:
             preview_urls = [fallback_image]
+        cc = int(s.get("credit_cost", 4) or 4)
         photosets.append({
             "id": f"style:{style_id}",
             "entity_id": style_id,
@@ -1024,15 +1150,17 @@ async def api_v2_photosets(request: Request):
             "slug": str(s.get("slug") or ""),
             "title": str(s.get("title") or ""),
             "description": str(s.get("description") or ""),
-            "credit_cost": int(s.get("credit_cost", 4) or 4),
+            "category": str(s.get("gender") or ""),
+            "credit_cost": cc,
             "preview_urls": preview_urls[:4],
             "num_images": 4,
+            **_lock_info(cc, "style"),
         })
 
     return JSONResponse({
         "photosets": photosets,
         "packs": packs,
-        "packs_use_credits": packs_use_credits(),
+        "packs_use_credits": use_credits,
     })
 
 
@@ -1285,7 +1413,7 @@ async def api_v3_history(request: Request):
     user_id = user["user_id"]
 
     mode = request.query_params.get("mode", "").strip() or None
-    if mode and mode not in ("express", "photoset"):
+    if mode and mode not in ("express", "photoset", "custom"):
         mode = None
 
     try:
@@ -1589,6 +1717,7 @@ routes = [
     Route("/app/api/persona-styles/{style_id:int}", api_persona_style_detail, methods=["GET"]),
     Route("/app/api/persona/buy", api_persona_buy, methods=["POST"]),
     Route("/app/api/persona/topup", api_persona_topup, methods=["POST"]),
+    Route("/app/api/fast/buy", api_fast_buy, methods=["POST"]),
     Route("/app/api/persona/generate", api_persona_generate, methods=["POST"]),
     Route("/app/api/track", api_track, methods=["POST"]),
     # V2 endpoints

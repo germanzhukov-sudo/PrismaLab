@@ -255,6 +255,15 @@ def test_v2_photosets_list(mock_auth, client, store):
 
 
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_v2_photosets_dto_has_category(mock_auth, client, store):
+    """Every photoset item has a 'category' field."""
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    assert resp.status_code == 200
+    for item in resp.json()["photosets"]:
+        assert "category" in item, f"Missing category in {item['id']}"
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
 def test_v2_photosets_filter_category(mock_auth, client, store):
     """Фильтр по category."""
     resp = client.get("/app/api/v2/photosets?category=female", headers=_auth_headers())
@@ -419,3 +428,188 @@ def test_v2_pack_buy_credits_not_found(mock_auth, mock_flag, client, store):
         json={"init_data": "fake"},
     )
     assert resp.status_code == 404
+
+
+# ── Phase 4: Lock info in photoset DTO ──────────────────────────────
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_no_persona_locked(mock_auth, client, store):
+    """Без персоны все фотосеты locked с reason=need_persona."""
+    style_id = store.create_persona_style(
+        slug="lock_test_1", title="Lock test", gender="female",
+        image_url="https://img.jpg", credit_cost=8,
+    )
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    for item in data["photosets"]:
+        assert item["is_locked"] is True
+        assert item["unlock_reason"] == "need_persona"
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_zero_credits_locked(mock_auth, client, store):
+    """Персона есть, 0 кредитов → стили locked, рублёвые паки unlocked."""
+    store.set_astria_lora_tune(user_id=12345, tune_id="tune_123", class_name="woman")
+    store.set_persona_credits(12345, 0)
+    style_id = store.create_persona_style(
+        slug="lock_test_2", title="Lock test 2", gender="female",
+        image_url="https://img.jpg", credit_cost=8,
+    )
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    for item in data["photosets"]:
+        if item["type"] == "style":
+            assert item["is_locked"] is True
+            assert item["unlock_reason"] == "need_credits"
+        elif item["type"] == "pack":
+            # Packs bought for ₽ (PACKS_USE_CREDITS=0) are never locked by credits
+            assert item["is_locked"] is False
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_locked_not_enough_credits(mock_auth, client, store):
+    """Персона + credits < cost → is_locked=True."""
+    store.set_astria_lora_tune(user_id=12345, tune_id="tune_123", class_name="woman")
+    store.set_persona_credits(12345, 4)
+    style_id = store.create_persona_style(
+        slug="lock_test_3", title="Expensive style", gender="female",
+        image_url="https://img.jpg", credit_cost=8,
+    )
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    style_item = next((p for p in data["photosets"] if p["type"] == "style" and p["entity_id"] == style_id), None)
+    assert style_item is not None
+    assert style_item["is_locked"] is True
+    assert style_item["unlock_cost"] == 8
+    assert style_item["unlock_reason"] == "need_credits"
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_unlocked_enough_credits(mock_auth, client, store):
+    """Персона + credits >= cost → is_locked=False."""
+    store.set_astria_lora_tune(user_id=12345, tune_id="tune_123", class_name="woman")
+    store.set_persona_credits(12345, 10)
+    style_id = store.create_persona_style(
+        slug="lock_test_4", title="Affordable style", gender="female",
+        image_url="https://img.jpg", credit_cost=4,
+    )
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    style_item = next((p for p in data["photosets"] if p["type"] == "style" and p["entity_id"] == style_id), None)
+    assert style_item is not None
+    assert style_item["is_locked"] is False
+    assert "unlock_cost" not in style_item
+
+
+@patch("prismalab.config.packs_use_credits", return_value=False)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_pack_not_locked_when_credits_off(mock_auth, mock_flag, client, store):
+    """Паки с PACKS_USE_CREDITS=0 → никогда не locked по кредитам."""
+    store.set_astria_lora_tune(user_id=12345, tune_id="tune_123", class_name="woman")
+    store.set_persona_credits(12345, 2)  # мало кредитов
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    packs_in_dto = [p for p in data["photosets"] if p["type"] == "pack"]
+    for p in packs_in_dto:
+        assert p["is_locked"] is False
+
+
+@patch("prismalab.config.packs_use_credits", return_value=True)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_photoset_dto_pack_locked_when_credits_on(mock_auth, mock_flag, client, store):
+    """Паки с PACKS_USE_CREDITS=1 + мало кредитов → locked."""
+    store.set_astria_lora_tune(user_id=12345, tune_id="tune_123", class_name="woman")
+    store.set_persona_credits(12345, 2)  # мало кредитов, паки стоят 20+
+    resp = client.get("/app/api/v2/photosets", headers=_auth_headers())
+    data = resp.json()
+    packs_in_dto = [p for p in data["photosets"] if p["type"] == "pack"]
+    # Все паки стоят >= 20 кредитов, а у юзера 2
+    locked_packs = [p for p in packs_in_dto if p["is_locked"]]
+    assert len(locked_packs) == len(packs_in_dto)
+
+
+# ── Phase 4: Admin features — get_admin_setting, cost_usd, discount badge ──
+
+
+def test_get_admin_setting(store):
+    """get_admin_setting returns value for existing key, None for missing."""
+    store.set_admin_setting("test_key_123", "hello")
+    assert store.get_admin_setting("test_key_123") == "hello"
+    assert store.get_admin_setting("nonexistent_key_xyz") is None
+
+
+def test_persona_style_cost_usd(store):
+    """cost_usd field is stored and retrieved."""
+    style_id = store.create_persona_style(
+        slug="cost_test", title="Cost Test", gender="female",
+        image_url="https://img.jpg",
+    )
+    # Default is 0
+    style = store.get_persona_style(style_id)
+    assert float(style.get("cost_usd", 0) or 0) == 0.0
+
+    # Update cost_usd
+    store.update_persona_style(style_id, cost_usd=1.25)
+    style = store.get_persona_style(style_id)
+    assert float(style["cost_usd"]) == 1.25
+
+
+def test_set_persona_style_costs_bulk(store):
+    """Bulk cost update works."""
+    s1 = store.create_persona_style(slug="bulk1", title="B1", gender="female", image_url="")
+    s2 = store.create_persona_style(slug="bulk2", title="B2", gender="male", image_url="")
+    store.set_persona_style_costs_bulk([
+        {"style_id": s1, "cost_usd": 0.50},
+        {"style_id": s2, "cost_usd": 1.75},
+    ])
+    assert float(store.get_persona_style(s1)["cost_usd"]) == 0.50
+    assert float(store.get_persona_style(s2)["cost_usd"]) == 1.75
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_auth_returns_discount_badge(mock_auth, client, store):
+    """Auth API returns discount_badge from admin_settings."""
+    store.set_admin_setting("photosets_discount_badge", "для вас -40%")
+    resp = client.post("/app/api/auth", json={"init_data": "fake"})
+    assert resp.status_code == 200
+    assert resp.json()["discount_badge"] == "для вас -40%"
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_auth_returns_empty_discount_badge(mock_auth, client, store):
+    """Auth API returns empty discount_badge when not set."""
+    resp = client.post("/app/api/auth", json={"init_data": "fake"})
+    assert resp.status_code == 200
+    assert resp.json()["discount_badge"] == ""
+
+
+# ── Phase 2: POST /app/api/fast/buy ─────────────────────────────
+
+
+@patch("prismalab.miniapp.routes.create_payment", return_value=("https://pay.example.com", "pay_123"))
+@patch("prismalab.miniapp.routes.poll_payment_status")
+@patch("prismalab.miniapp.routes.get_bot", return_value=None)
+@patch("prismalab.miniapp.routes.get_application", return_value=None)
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_fast_buy_success(mock_auth, mock_app, mock_bot, mock_poll, mock_pay, client, store):
+    """POST /app/api/fast/buy with valid credits returns payment_url."""
+    resp = client.post("/app/api/fast/buy", json={"init_data": "fake", "credits": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "payment_url" in data
+    assert data["payment_url"] == "https://pay.example.com"
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_fast_buy_invalid_credits(mock_auth, client, store):
+    """POST /app/api/fast/buy with invalid credits returns 400."""
+    resp = client.post("/app/api/fast/buy", json={"init_data": "fake", "credits": 99})
+    assert resp.status_code == 400
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=None)
+def test_fast_buy_unauthorized(mock_auth, client):
+    """POST /app/api/fast/buy without auth returns 401."""
+    resp = client.post("/app/api/fast/buy", json={"init_data": "bad"})
+    assert resp.status_code == 401

@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PrismaLab Studio</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/static/style_v2.css?v=4">
+    <link rel="stylesheet" href="/app/static/style_v2.css?v=11">
 </head>
 <body>
     <div id="app">
         <!-- Screen: Loading -->
         <div id="screen-loading" class="screen active">
             <div class="loading-container">
-                <div class="logo-pulse"><span class="logo-icon">&#10024;</span></div>
+                <div class="packs-prism loading-prism"></div>
                 <div class="loading-text">PrismaLab</div>
                 <div class="loading-dots"><span></span><span></span><span></span></div>
             </div>
@@ -41,48 +41,88 @@
             <div class="main-container">
                 <div class="main-header">
                     <h1 class="main-logo">PrismaLab</h1>
-                    <button class="profile-btn" onclick="goToProfile()">&#128100;</button>
+                    <div class="main-header-right">
+                        <button class="main-topup-btn" id="main-topup-btn"
+                                onclick="openAllTariffsScreen()">Тарифы</button>
+                        <button class="profile-btn" onclick="goToProfile()">&#128100;</button>
+                    </div>
                 </div>
                 <p class="main-tagline">AI-фотостудия в вашем телефоне</p>
 
                 <div class="section-cards">
-                    <button class="section-card express-card" onclick="goToExpress()">
+                    <div class="section-card express-card" role="button" tabindex="0" onclick="goToExpress()">
                         <div class="section-card-glow express-glow"></div>
-                        <div class="section-card-icon">&#9889;</div>
+                        <div class="section-card-icon">
+                            <svg class="card-icon-svg express-icon-svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#lightning-grad)"/>
+                                <circle class="sparkle" cx="30" cy="8" r="2" fill="#fbbf24"/>
+                                <defs><linearGradient id="lightning-grad" x1="8" y1="4" x2="30" y2="36">
+                                    <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </div>
                         <div class="section-card-title">Экспресс</div>
-                        <div class="section-card-desc">Одно фото в любом стиле за секунды</div>
+                        <div class="section-card-desc">Модели Seedream и Nano banana pro. Фото за секунды по готовым образам</div>
                         <div class="section-card-balance">
                             <span class="balance-icon">&#9889;</span>
-                            <span id="main-express-balance">0</span>
+                            <span id="main-express-balance">0</span> <span id="main-express-balance-word">кредитов</span>
                         </div>
-                        <div class="section-card-cta">Выбрать стиль</div>
-                    </button>
+                        <div class="section-card-cta-row">
+                            <div class="section-card-cta-secondary" onclick="openExpressInfo(event)">Подробнее</div>
+                            <div class="section-card-cta" onclick="event.stopPropagation(); goToExpress()">Выбрать стиль</div>
+                        </div>
+                    </div>
 
                     {% if custom_request_v1 %}
-                    <button class="section-card custom-card" onclick="goToCustomPrompt()">
+                    <div class="section-card custom-card" role="button" tabindex="0" onclick="goToCustomPrompt()">
                         <div class="section-card-glow custom-glow"></div>
-                        <div class="section-card-icon">&#9997;</div>
+                        <div class="section-card-icon">
+                            <svg class="card-icon-svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                                <path d="M24 10l6 6" stroke="url(#pen-grad)" stroke-width="2" stroke-linecap="round"/>
+                                <defs><linearGradient id="pen-grad" x1="8" y1="6" x2="34" y2="32">
+                                    <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </div>
                         <div class="section-card-title">Свой запрос</div>
-                        <div class="section-card-desc">Опишите что хотите, добавьте референсы</div>
+                        <div class="section-card-desc">Создайте фото по своему запросу. Можно просто по тексту, можно приложить исходное фото</div>
                         <div class="section-card-balance">
                             <span class="balance-icon">&#9889;</span>
-                            <span id="main-custom-balance">0</span>
+                            <span id="main-custom-balance">0</span> <span id="main-custom-balance-word">кредитов</span>
                         </div>
-                        <div class="section-card-cta">Создать</div>
-                    </button>
+                        <div class="section-card-cta-row">
+                            <div class="section-card-cta-secondary" onclick="openCustomInfo(event)">Подробнее</div>
+                            <div class="section-card-cta" onclick="event.stopPropagation(); goToCustomPrompt()">Создать свой запрос</div>
+                        </div>
+                    </div>
                     {% endif %}
 
-                    <button class="section-card photosets-card" onclick="goToPhotosets()">
+                    <div class="section-card photosets-card" role="button" tabindex="0" onclick="goToPhotosets()">
                         <div class="section-card-glow photosets-glow"></div>
-                        <div class="section-card-icon">&#128247;</div>
+                        <div class="section-card-icon">
+                            <svg class="card-icon-svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="6" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="2.5" fill="url(#cam-grad)"/>
+                                <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#cam-grad)" stroke-width="2"/>
+                                <defs><linearGradient id="cam-grad" x1="6" y1="7" x2="34" y2="32">
+                                    <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </div>
                         <div class="section-card-title">Фотосеты</div>
-                        <div class="section-card-desc">Серия фото в едином стиле</div>
+                        <div class="section-card-desc">Серия фото в одном стиле с полным сохранением лица. Создадим модель по вашим фото</div>
                         <div class="section-card-balance">
-                            <span class="balance-icon">&#128142;</span>
+                            <span class="balance-icon"><span class="badge-prism"></span></span>
                             <span id="main-photosets-balance">0</span> <span id="main-photosets-balance-word">кредитов</span>
                         </div>
-                        <div class="section-card-cta">Открыть каталог</div>
-                    </button>
+                        <div class="section-card-cta-row">
+                            <div class="section-card-cta-secondary" onclick="openPhotosetsInfo(event)">Подробнее</div>
+                            <div class="section-card-cta" onclick="event.stopPropagation(); goToPhotosets()">Выбрать фотосет</div>
+                        </div>
+                        <div class="discount-badge" id="photosets-discount-badge" style="display:none">для вас -40%</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -127,9 +167,12 @@
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title">Экспресс</h2>
-                <div class="credits-badge">
-                    <span class="credits-icon">&#9889;</span>
-                    <span id="v3-credits-count">0</span>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon">&#9889;</span>
+                        <span id="v3-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" onclick="openUnifiedTariffScreen('fast', 'express-catalog')">Докупить +</button>
                 </div>
             </div>
             <div class="category-pills" id="v3-category-pills">
@@ -141,6 +184,11 @@
             <div class="styles-grid" id="v3-styles-grid">
                 <!-- Стили загрузятся динамически -->
             </div>
+            <div class="persona-buy-footer" id="express-buy-footer" style="display:none">
+                <div class="footer-label">Докупите экспресс-кредиты</div>
+                <div class="persona-buy-footer-buttons" id="express-footer-buttons"></div>
+                <button class="persona-buy-pay-btn" id="express-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
         </div>
 
         <!-- Screen: Custom Prompt -->
@@ -150,9 +198,12 @@
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title">Свой запрос</h2>
-                <div class="credits-badge">
-                    <span class="credits-icon">&#9889;</span>
-                    <span id="custom-credits-count">0</span>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon">&#9889;</span>
+                        <span id="custom-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" onclick="openUnifiedTariffScreen('fast', 'custom-prompt')">Докупить +</button>
                 </div>
             </div>
             <div class="custom-prompt-body">
@@ -191,8 +242,13 @@
                 </div>
 
                 <button class="generate-btn" id="custom-generate-btn" onclick="startCustomGeneration()">
-                    <span class="btn-text">&#10024; Создать</span>
+                    <span class="btn-text">&#9889; Создать</span>
                 </button>
+            </div>
+            <div class="persona-buy-footer" id="custom-buy-footer" style="display:none">
+                <div class="footer-label">Докупите экспресс-кредиты</div>
+                <div class="persona-buy-footer-buttons" id="custom-footer-buttons"></div>
+                <button class="persona-buy-pay-btn" id="custom-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
             </div>
         </div>
 
@@ -220,7 +276,7 @@
                     <button class="preview-change" onclick="resetExpressUpload()">Сменить фото</button>
                 </div>
                 <button class="generate-btn" id="express-generate-btn" style="display:none" onclick="startExpressGeneration()">
-                    <span class="btn-text">&#10024; Создать</span>
+                    <span class="btn-text">&#9889; Создать</span>
                 </button>
                 <div class="provider-choice" id="provider-choice" style="display:none">
                     <div class="provider-options">
@@ -252,7 +308,7 @@
                     <div class="generating-ring"></div>
                     <div class="generating-ring ring-2"></div>
                     <div class="generating-ring ring-3"></div>
-                    <div class="generating-center"><span>&#127912;</span></div>
+                    <div class="generating-center"><div class="packs-prism"></div></div>
                 </div>
                 <h2 class="generating-title">Создаём шедевр</h2>
                 <p class="generating-subtitle">AI обрабатывает ваше фото...</p>
@@ -296,13 +352,49 @@
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title">Фотосеты</h2>
-                <div class="credits-badge">
-                    <span class="credits-icon">&#128142;</span>
-                    <span id="photosets-credits-count">0</span>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon"><span class="badge-prism"></span></span>
+                        <span id="photosets-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" onclick="openUnifiedTariffScreen(state.hasPersona ? 'persona_topup' : 'persona_create', 'photosets')">Докупить +</button>
                 </div>
+            </div>
+            <div class="category-tabs" id="photosets-filter-tabs">
+                <button class="category-tab active" data-filter="all" onclick="filterPhotosets('all')">Все</button>
+                <button class="category-tab" data-filter="available" onclick="filterPhotosets('available')">Доступные</button>
+                <button class="category-tab" data-filter="female" onclick="filterPhotosets('female')">Женские</button>
+                <button class="category-tab" data-filter="male" onclick="filterPhotosets('male')">Мужские</button>
+                <button class="category-tab" data-filter="child" onclick="filterPhotosets('child')">Детские</button>
+                <button class="category-tab" data-filter="animals" onclick="filterPhotosets('animals')">Животные</button>
             </div>
             <div class="photosets-grid" id="photosets-grid">
                 <!-- Каталог загрузится динамически -->
+            </div>
+
+            <!-- Generate footer: batch selected styles -->
+            <div class="persona-generate-footer" id="photosets-generate-footer" style="display:none">
+                <button class="persona-generate-btn" id="photosets-generate-btn" onclick="generatePhotosetBatch()">
+                    <span id="photosets-generate-btn-text">Сгенерировать</span>
+                </button>
+            </div>
+
+            <!-- Sticky footer: Persona Create (no persona yet) -->
+            <div class="persona-buy-footer" id="photosets-create-footer" style="display:none">
+                <div class="footer-label">Персона + кредиты для генерации</div>
+                <div class="persona-buy-footer-buttons" id="create-tariff-buttons">
+                    <!-- Rendered dynamically from state.tariffs.persona_create -->
+                </div>
+                <button class="persona-buy-pay-btn" id="create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+
+            <!-- Sticky footer: Persona Topup (has persona, 0 credits) -->
+            <div class="persona-buy-footer" id="photosets-topup-footer" style="display:none">
+                <div class="footer-label">Пополните кредиты — выгоднее пакетом</div>
+                <div class="persona-buy-footer-buttons" id="topup-tariff-buttons">
+                    <!-- Rendered dynamically from state.tariffs.persona_topup -->
+                </div>
+                <button class="persona-buy-pay-btn" id="topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
             </div>
         </div>
 
@@ -313,7 +405,10 @@
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title" id="photoset-pack-title">Фотопак</h2>
-                <div></div>
+                <div class="credits-badge">
+                    <span class="credits-icon"><span class="badge-prism"></span></span>
+                    <span class="detail-credits-count">0</span>
+                </div>
             </div>
             <div class="pack-detail-container">
                 <div class="pack-gallery" id="photoset-pack-gallery"></div>
@@ -326,6 +421,16 @@
                 <button class="generate-btn" id="photoset-pack-buy-btn" onclick="buyPhotosetPack()">
                     <span class="btn-text" id="photoset-pack-buy-text">Купить 990 &#8381;</span>
                 </button>
+                <div class="no-persona-block" id="pack-no-persona" style="display:none">
+                    <p class="no-persona-text">Для покупки нужна Персона</p>
+                    <div class="persona-buy-footer-buttons" id="pack-create-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="pack-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+                <div id="pack-topup" class="photoset-inline-topup" style="display:none">
+                    <p class="topup-hint" id="pack-topup-hint">Не хватает кредитов</p>
+                    <div class="persona-buy-footer-buttons" id="pack-topup-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="pack-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
             </div>
         </div>
 
@@ -336,14 +441,17 @@
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <h2 class="header-title" id="photoset-style-title">Образ</h2>
-                <div></div>
+                <div class="credits-badge">
+                    <span class="credits-icon"><span class="badge-prism"></span></span>
+                    <span class="detail-credits-count">0</span>
+                </div>
             </div>
             <div class="photoset-style-container">
                 <div class="photoset-style-preview" id="photoset-style-preview"></div>
                 <div class="photoset-style-info">
                     <div class="photoset-style-desc" id="photoset-style-desc"></div>
                     <div class="photoset-style-cost">
-                        <span class="cost-icon">&#128142;</span>
+                        <span class="cost-icon"><span class="badge-prism"></span></span>
                         <span id="photoset-style-cost-value">4</span> <span id="photoset-style-cost-word">кредита</span>
                         <span class="cost-arrow">&#8594;</span>
                         <span>4 фото</span>
@@ -353,10 +461,14 @@
                     <span class="btn-text">&#10024; Сгенерировать (4 фото)</span>
                 </button>
                 <div class="no-persona-block" id="photoset-no-persona" style="display:none">
-                    <p class="no-persona-text">Для генерации нужна Персона. Загрузите 10 фото в бот.</p>
-                    <button class="generate-btn secondary" onclick="closeMiniApp()">
-                        <span class="btn-text">Перейти в бот</span>
-                    </button>
+                    <p class="no-persona-text">Для генерации нужна Персона</p>
+                    <div class="persona-buy-footer-buttons" id="style-create-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="style-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+                <div id="photoset-style-topup" class="photoset-inline-topup" style="display:none">
+                    <p class="topup-hint">Не хватает кредитов. Пополните:</p>
+                    <div class="persona-buy-footer-buttons" id="style-topup-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="style-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
                 </div>
             </div>
         </div>
@@ -374,7 +486,7 @@
         <!-- Screen: No Credits -->
         <div id="screen-nocredits" class="screen">
             <div class="nocredits-container">
-                <div class="nocredits-icon">&#128142;</div>
+                <div class="nocredits-icon"><span class="badge-prism prism-lg"></span></div>
                 <h2 class="nocredits-title">Нужны кредиты</h2>
                 <p class="nocredits-text" id="nocredits-text">Купите кредиты, чтобы продолжить.</p>
                 <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
@@ -382,25 +494,20 @@
             </div>
         </div>
 
-        <!-- Screen: Tariffs (Persona Create) -->
-        <div id="screen-tariffs" class="screen">
-            <div class="nocredits-container">
-                <div class="nocredits-icon">&#10024;</div>
-                <h2 class="nocredits-title">Выберите тариф</h2>
-                <p class="nocredits-text">Персона + кредиты для генерации фото</p>
-                <button class="tariff-btn" onclick="buyTariff(5)">
-                    <span class="tariff-title">&#10024; 5 фото</span>
-                    <span class="tariff-price">299 &#8381;</span>
+        <!-- Screen: Tariffs Page (from credits badge click) -->
+        <div id="screen-tariffs-page" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBackTariffs()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
-                <button class="tariff-btn" onclick="buyTariff(20)">
-                    <span class="tariff-title">&#10024; 20 фото</span>
-                    <span class="tariff-price">599 &#8381;</span>
-                </button>
-                <button class="tariff-btn" onclick="buyTariff(40)">
-                    <span class="tariff-title">&#10024; 40 фото</span>
-                    <span class="tariff-price">999 &#8381;</span>
-                </button>
-                <button class="action-btn secondary" onclick="goBack('main')">Назад</button>
+                <h2 class="header-title">Тарифы</h2>
+                <div></div>
+            </div>
+            <div class="tariffs-page-container">
+                <div class="tariffs-page-info" id="tariffs-page-info"></div>
+                <div id="tariffs-page-sections"></div>
+                <div class="persona-buy-footer-buttons" id="tariffs-page-buttons"></div>
+                <button class="persona-buy-pay-btn" id="tariffs-page-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
             </div>
         </div>
 
@@ -420,7 +527,7 @@
                         <span class="profile-value" id="profile-express-credits">0</span>
                     </div>
                     <div class="profile-row">
-                        <span class="profile-label">&#128142; Фотосеты</span>
+                        <span class="profile-label"><span class="badge-prism"></span> Фотосеты</span>
                         <span class="profile-value" id="profile-photosets-credits">0</span>
                     </div>
                     <div class="profile-row">
@@ -432,6 +539,12 @@
                     <div class="profile-history-header">
                         <h3>Мои фото</h3>
                     </div>
+                    <div class="history-tabs" id="history-tabs">
+                        <button class="history-tab active" data-mode="" onclick="filterHistory(null)">Все</button>
+                        <button class="history-tab" data-mode="express" onclick="filterHistory('express')">Экспресс</button>
+                        <button class="history-tab" data-mode="custom" onclick="filterHistory('custom')">Свой запрос</button>
+                        <button class="history-tab" data-mode="photoset" onclick="filterHistory('photoset')">Фотосеты</button>
+                    </div>
                     <div class="profile-history-grid" id="profile-history-grid">
                         <div class="empty-state">История пока пустая</div>
                     </div>
@@ -439,6 +552,56 @@
                         Показать ещё
                     </button>
                 </div>
+            </div>
+        </div>
+        <!-- Screen: Express Info -->
+        <div id="screen-express-info" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Экспресс</h2>
+                <div></div>
+            </div>
+            <div class="info-screen-container">
+                <p>Тестовый текст об Экспрессе. Будет заменён.</p>
+                <button class="generate-btn" onclick="goToExpress()">
+                    <span class="btn-text">Выбрать стиль</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Custom Info -->
+        <div id="screen-custom-info" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Свой запрос</h2>
+                <div></div>
+            </div>
+            <div class="info-screen-container">
+                <p>Тестовый текст о Своём запросе. Будет заменён.</p>
+                <button class="generate-btn" onclick="goToCustomPrompt()">
+                    <span class="btn-text">Создать</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Screen: Photosets Info -->
+        <div id="screen-photosets-info" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Фотосеты</h2>
+                <div></div>
+            </div>
+            <div class="info-screen-container">
+                <p>Нам будет нужно 10 ваших фото для обучения модели. Но оно того стоит &ndash; вы удивитесь результату. На фотосетах будете именно вы.</p>
+                <button class="generate-btn" onclick="goToPhotosets()">
+                    <span class="btn-text">Открыть каталог</span>
+                </button>
             </div>
         </div>
     </div>
@@ -453,6 +616,6 @@
         window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};
         window.CUSTOM_REQUEST_V1 = {{ 'true' if custom_request_v1 else 'false' }};
     </script>
-    <script src="/app/static/app_v2.js?v=14"></script>
+    <script src="/app/static/app_v2.js?v=23"></script>
 </body>
 </html>

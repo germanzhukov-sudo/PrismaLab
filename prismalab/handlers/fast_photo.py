@@ -228,7 +228,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
         pass
 
     if _bot.use_yookassa():
-        amount = _amount_rub("fast", count)
+        amount = _amount_rub(_bot.store, "fast", count)
         me = await context.bot.get_me()
         return_url = f"https://t.me/{me.username}" if me and me.username else None
         url, payment_id = create_payment(

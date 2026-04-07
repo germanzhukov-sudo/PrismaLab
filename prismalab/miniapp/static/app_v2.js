@@ -12,6 +12,14 @@ function pluralCredits(n) {
     return 'кредитов';
 }
 
+function renderSectionLoading(text) {
+    return `<div class="packs-loading">
+        <div class="packs-prism"></div>
+        <p class="packs-loading-text">${text}</p>
+        <div class="packs-loading-dots"><span></span><span></span><span></span></div>
+    </div>`;
+}
+
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
         const r = Math.random() * 16 | 0;
@@ -56,13 +64,23 @@ const state = {
     personaStyles: [],
     selectedPack: null,
     selectedPersonaStyle: null,
+    selectedPersonaStyles: [],
+    personaCreditsOriginal: 0,
+    photosetsCreditsPreview: 0,
+    photosetsFilter: 'all',
     // General
     hasPersona: false,
     packsUseCredits: false,
+    discountBadge: '',
+    // Tariffs from API
+    tariffs: {},
+    selectedTariff: null,  // { mode: 'persona_create'|'persona_topup'|'fast', credits: N }
+    _tariffReturnTo: 'main',
     // Profile history
     historyItems: [],
     historyTotal: 0,
     historyOffset: 0,
+    historyMode: null,
     // Custom prompt
     customCapabilities: null,
     customProvider: 'seedream',
@@ -84,6 +102,16 @@ document.addEventListener('DOMContentLoaded', () => {
         state.initData = tg.initData || '';
     }
     setupDragDrop();
+    // Keyboard accessibility for div[role=button] cards
+    document.querySelectorAll('.section-card[role="button"]').forEach(card => {
+        card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                const cta = card.querySelector('.section-card-cta');
+                if (cta) cta.click();
+            }
+        });
+    });
     authenticate();
 });
 
@@ -105,6 +133,8 @@ async function authenticate() {
                 state.expressCredits = data.credits || { fast: 0, free_used: false };
                 state.hasPersona = !!data.has_persona;
                 state.photosetsCredits = data.persona_credits || 0;
+                state.tariffs = data.tariffs || {};
+                state.discountBadge = data.discount_badge || '';
                 updateBalanceDisplays();
 
                 // Check pack payment return
@@ -170,12 +200,16 @@ function updateBalanceDisplays() {
     if (mainPhotosets) mainPhotosets.textContent = state.photosetsCredits;
     const mainPhotosetsWord = document.getElementById('main-photosets-balance-word');
     if (mainPhotosetsWord) mainPhotosetsWord.textContent = pluralCredits(state.photosetsCredits);
+    const mainExpressWord = document.getElementById('main-express-balance-word');
+    if (mainExpressWord) mainExpressWord.textContent = pluralCredits(expressBalance);
 
     // Custom balance (same as express)
     const mainCustom = document.getElementById('main-custom-balance');
     if (mainCustom) mainCustom.textContent = expressBalance;
     const customCredits = document.getElementById('custom-credits-count');
     if (customCredits) customCredits.textContent = expressBalance;
+    const mainCustomWord = document.getElementById('main-custom-balance-word');
+    if (mainCustomWord) mainCustomWord.textContent = pluralCredits(expressBalance);
 
     // Headers
     ['express-credits-count', 'express-styles-credits'].forEach(id => {
@@ -192,6 +226,20 @@ function updateBalanceDisplays() {
     if (pp) pp.textContent = state.photosetsCredits;
     const pg = document.getElementById('profile-gender');
     if (pg) pg.textContent = state.gender === 'male' ? 'Мужской' : state.gender === 'female' ? 'Женский' : '—';
+
+    // Discount badge
+    const discountBadge = document.getElementById('photosets-discount-badge');
+    if (discountBadge) {
+        if (state.discountBadge && !state.hasPersona) {
+            discountBadge.textContent = state.discountBadge;
+            discountBadge.style.display = '';
+        } else {
+            discountBadge.style.display = 'none';
+        }
+    }
+
+    // Main topup button
+    // "Тарифы" button always visible — no conditional hide
 }
 
 // === Navigation ===
@@ -208,6 +256,8 @@ function showScreen(name) {
             setTimeout(() => s.classList.remove('active', 'slide-out'), 300);
         }
     });
+    // Centralized footer management
+    renderScreenFooters(name);
     setTimeout(() => {
         target.classList.add('active');
     }, 50);
@@ -236,6 +286,24 @@ async function selectGender(gender) {
 }
 
 // === Main Screen Navigation ===
+
+function openExpressInfo(e) {
+    if (e) e.stopPropagation();
+    trackEvent('v2_express_info_open');
+    showScreen('express-info');
+}
+
+function openCustomInfo(e) {
+    if (e) e.stopPropagation();
+    trackEvent('v2_custom_info_open');
+    showScreen('custom-info');
+}
+
+function openPhotosetsInfo(e) {
+    if (e) e.stopPropagation();
+    trackEvent('v2_photosets_info_open');
+    showScreen('photosets-info');
+}
 
 function goToExpress() {
     trackEvent('v2_nav_express');
@@ -280,7 +348,7 @@ const THEME_ICONS = {
 async function loadExpressThemes() {
     showScreen('express-themes');
     const grid = document.getElementById('themes-grid');
-    grid.innerHTML = Array(6).fill('<div class="theme-card skeleton"><div style="height:100%"></div></div>').join('');
+    grid.innerHTML = renderSectionLoading('Нужно немного времени для загрузки, пожалуйста, никуда не убегайте');
 
     try {
         const resp = await fetch(`/app/api/v2/express-themes?gender=${state.gender || 'female'}`, {
@@ -318,7 +386,7 @@ async function selectExpressTheme(theme) {
     showScreen('express-styles');
 
     const grid = document.getElementById('express-styles-grid');
-    grid.innerHTML = Array(6).fill('<div class="style-card skeleton"><div style="height:100%"></div></div>').join('');
+    grid.innerHTML = renderSectionLoading('Нужно немного времени для загрузки, пожалуйста, никуда не убегайте');
 
     try {
         const resp = await fetch(`/app/api/v2/express-styles?gender=${state.gender || 'female'}&theme=${theme}`, {
@@ -367,7 +435,6 @@ function renderExpressStyles() {
 
 function selectExpressStyle(style) {
     state.selectedExpressStyle = style;
-    state.expressFile = null;
     trackEvent('v2_express_style_select', { style_id: style.id });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
@@ -375,7 +442,21 @@ function selectExpressStyle(style) {
     // Hide provider choice in V2
     const providerChoice = document.getElementById('provider-choice');
     if (providerChoice) providerChoice.style.display = 'none';
-    resetExpressUpload();
+
+    // Restore preview if photo already uploaded, else fresh upload
+    if (state.expressFile) {
+        document.getElementById('express-upload-zone').style.display = 'none';
+        document.getElementById('express-preview').style.display = 'block';
+        document.getElementById('express-generate-btn').style.display = 'block';
+        const previewImg = document.getElementById('express-preview-image');
+        if (previewImg && !previewImg.src.startsWith('data:')) {
+            const reader = new FileReader();
+            reader.onload = (e) => { previewImg.src = e.target.result; };
+            reader.readAsDataURL(state.expressFile);
+        }
+    } else {
+        resetExpressUpload();
+    }
     showScreen('express-upload');
 }
 
@@ -473,7 +554,7 @@ async function pollExpressStatus() {
             }
             updateBalanceDisplays();
 
-            document.getElementById('express-result-image').src = data.result_url;
+            document.getElementById('express-result-image').src = data.image_url || data.result_url;
             const note = document.getElementById('express-result-note');
             if (note) {
                 note.textContent = data.tg_sent
@@ -496,14 +577,68 @@ async function pollExpressStatus() {
     }
 }
 
-function downloadExpressResult() {
+async function pollCustomStatus() {
+    if (!state.customTaskId) return;
+    try {
+        const resp = await fetch(`/app/api/status/${state.customTaskId}`, {
+            headers: { 'X-Telegram-Init-Data': state.initData },
+        });
+        const data = await resp.json();
+
+        if (data.status === 'done') {
+            stopProgressAnimation('express-progress-bar');
+            trackEvent('v2_custom_generate_done');
+
+            if (!state.expressCredits.free_used) {
+                state.expressCredits.free_used = true;
+            } else {
+                state.expressCredits.fast = Math.max(0, state.expressCredits.fast - 1);
+            }
+            updateBalanceDisplays();
+
+            document.getElementById('express-result-image').src = data.image_url || data.result_url;
+            const note = document.getElementById('express-result-note');
+            if (note) {
+                note.textContent = data.tg_sent
+                    ? 'Фото отправлено в Telegram и сохранено в профиле.'
+                    : 'Фото сохранено в профиле. В Telegram отправить не удалось.';
+            }
+            showScreen('express-result');
+            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        } else if (data.status === 'error') {
+            stopProgressAnimation('express-progress-bar');
+            alert('Ошибка генерации. Попробуйте ещё раз.');
+            showScreen('custom-prompt');
+            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+        } else {
+            setTimeout(pollCustomStatus, 2000);
+        }
+    } catch (e) {
+        console.error('Poll custom error:', e);
+        setTimeout(pollCustomStatus, 3000);
+    }
+}
+
+async function downloadExpressResult() {
     const img = document.getElementById('express-result-image');
-    if (!img.src) return;
+    if (!img?.src) return;
     trackEvent('v2_express_download', { style_id: state.selectedExpressStyle?.id });
-    const link = document.createElement('a');
-    link.href = img.src;
-    link.download = `prismalab_express_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
-    link.click();
+    const note = document.getElementById('express-result-note');
+    try {
+        const resp = await fetch(img.src);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `prismalab_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (note) note.textContent = 'Фото подготовлено к скачиванию';
+    } catch (e) {
+        if (tg?.openLink) { tg.openLink(img.src); }
+        else { window.open(img.src, '_blank'); }
+        if (note) note.textContent = 'Фото открыто в браузере для скачивания';
+    }
     if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
 }
 
@@ -520,14 +655,13 @@ async function loadProfileHistory(reset = true) {
     if (!grid || !moreBtn) return;
 
     if (reset) {
-        grid.innerHTML = Array(6)
-            .fill('<div class="style-card skeleton"><div style="height:100%"></div></div>')
-            .join('');
+        grid.innerHTML = renderSectionLoading('Нужно немного времени для загрузки, пожалуйста, никуда не убегайте');
     }
 
     try {
         const limit = 18;
-        const url = `/app/api/v3/history?mode=express&limit=${limit}&offset=${state.historyOffset}`;
+        const modeParam = state.historyMode ? `&mode=${state.historyMode}` : '';
+        const url = `/app/api/v3/history?limit=${limit}&offset=${state.historyOffset}${modeParam}`;
         const resp = await fetch(url, {
             headers: { 'X-Telegram-Init-Data': state.initData },
         });
@@ -568,15 +702,33 @@ function renderProfileHistory() {
         img.addEventListener('click', () => openLightbox(item.image_url));
         wrapper.appendChild(img);
 
-        const provider = document.createElement('div');
-        provider.className = 'profile-history-provider';
-        provider.textContent = item.provider === 'nano-banana-pro' ? 'Nano' : 'Seedream';
-        wrapper.appendChild(provider);
+        const badge = document.createElement('div');
+        badge.className = 'profile-history-badge';
+        const modeLabels = {
+            express: `Экспресс: ${item.style_title || ''}`,
+            custom: 'Свой запрос',
+            photoset: `Фотосет: ${item.style_title || ''}`,
+        };
+        badge.textContent = modeLabels[item.mode] || item.mode || 'Экспресс';
+        wrapper.appendChild(badge);
         grid.appendChild(wrapper);
     });
     if (!grid.children.length) {
         grid.innerHTML = '<div class="empty-state">История пока пустая</div>';
     }
+}
+
+function filterHistory(mode) {
+    state.historyMode = mode;
+    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+
+    // Update tab active state
+    document.querySelectorAll('#history-tabs .history-tab').forEach(btn => {
+        const btnMode = btn.dataset.mode || null;  // "" → null
+        btn.classList.toggle('active', btnMode === mode);
+    });
+
+    loadProfileHistory(true);
 }
 
 // === EXPRESS V3 FLOW ===
@@ -588,7 +740,7 @@ async function loadExpressCatalog(keepFilters) {
         state.v3SelectedCategory = 'all';
         state.v3SelectedTags = [];
     }
-    grid.innerHTML = Array(6).fill('<div class="style-card skeleton"><div style="height:100%"></div></div>').join('');
+    grid.innerHTML = renderSectionLoading('Нужно немного времени для загрузки, пожалуйста, никуда не убегайте');
 
     try {
         let url = '/app/api/v3/express/catalog';
@@ -620,6 +772,7 @@ async function loadExpressCatalog(keepFilters) {
         const bal = data.credits?.balance ?? 0;
         const el = document.getElementById('v3-credits-count');
         if (el) el.textContent = bal;
+        renderScreenFooters('express-catalog');
     } catch (e) {
         console.error('Load catalog error:', e);
         grid.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
@@ -718,12 +871,26 @@ function toggleV3Tag(slug) {
 
 function selectV3Style(style) {
     state.selectedExpressStyle = style;
-    state.expressFile = null;
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     document.getElementById('express-selected-style').textContent = `${style.emoji || ''} ${style.label}`;
-    document.getElementById('express-upload-zone').style.display = '';
-    document.getElementById('express-preview').style.display = 'none';
-    document.getElementById('express-generate-btn').style.display = 'none';
+
+    // Restore preview if photo already uploaded
+    if (state.expressFile) {
+        document.getElementById('express-upload-zone').style.display = 'none';
+        document.getElementById('express-preview').style.display = 'block';
+        document.getElementById('express-generate-btn').style.display = 'block';
+        const previewImg = document.getElementById('express-preview-image');
+        if (previewImg && !previewImg.src.startsWith('data:')) {
+            const reader = new FileReader();
+            reader.onload = (e) => { previewImg.src = e.target.result; };
+            reader.readAsDataURL(state.expressFile);
+        }
+    } else {
+        document.getElementById('express-upload-zone').style.display = '';
+        document.getElementById('express-preview').style.display = 'none';
+        document.getElementById('express-generate-btn').style.display = 'none';
+    }
+
     // Show provider choice in V3
     const providerChoice = document.getElementById('provider-choice');
     if (providerChoice) {
@@ -759,7 +926,7 @@ function hideProviderInfo() {
 async function loadPhotosets() {
     showScreen('photosets');
     const grid = document.getElementById('photosets-grid');
-    grid.innerHTML = Array(4).fill('<div class="photoset-card skeleton"><div class="photoset-card-cover-placeholder"></div><div class="photoset-card-info"><div style="height:14px;width:80%;background:var(--bg-glass);border-radius:4px"></div></div></div>').join('');
+    grid.innerHTML = renderSectionLoading('Нужно немного времени, чтобы загрузить фотосеты. Пожалуйста, никуда не убегайте');
 
     try {
         const resp = await fetch('/app/api/v2/photosets', {
@@ -788,7 +955,11 @@ async function loadPhotosets() {
                 image_url: item.preview_urls?.[0] || '',
             }));
 
+        state.personaCreditsOriginal = state.photosetsCredits;
+        state.photosetsCreditsPreview = state.photosetsCredits;
+        state.selectedPersonaStyles = [];
         renderPhotosets();
+        renderScreenFooters('photosets');
     } catch (e) {
         console.error('Load photosets error:', e);
         grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Ошибка загрузки</div>';
@@ -803,21 +974,54 @@ function renderPhotosetCardPreview(item) {
     return `<div class="photoset-card-cover-placeholder">📸</div>`;
 }
 
+function filterPhotosets(filter) {
+    state.photosetsFilter = filter;
+    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    document.querySelectorAll('#photosets-filter-tabs .category-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    renderPhotosets();
+}
+
 function renderPhotosets() {
     const grid = document.getElementById('photosets-grid');
-    const items = state.photosets || [];
+    let items = state.photosets || [];
+
+    // Client-side filtering
+    if (state.photosetsFilter === 'available') {
+        items = items.filter(item => !item.is_locked);
+    } else if (state.photosetsFilter && state.photosetsFilter !== 'all') {
+        items = items.filter(item => item.category === state.photosetsFilter);
+    }
 
     if (!items.length) {
         grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);grid-column:1/-1">Фотосеты скоро появятся</div>';
         return;
     }
 
+    const lockSvg = '<svg viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="10" rx="2" fill="#fff"/><path d="M8 11V7a4 4 0 018 0v4" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
+    const showCheckboxes = state.hasPersona && state.personaCreditsOriginal > 0;
+
     grid.innerHTML = items.map((item, i) => {
         const creditCost = Number(item.credit_cost || 0);
         const numImages = Number(item.num_images || 0);
+        const isLocked = !!item.is_locked;
         const openAction = item.type === 'pack' ? `openPackDetail(${item.entity_id})` : `openStyleDetail(${item.entity_id})`;
+
+        // Badge: checkbox on unlocked styles, lock on locked items
+        let badgeHtml = '';
+        if (item.type === 'style' && showCheckboxes && !isLocked) {
+            const isSelected = state.selectedPersonaStyles.some(s => s.id === item.entity_id);
+            const isDisabled = !isSelected && state.photosetsCreditsPreview < creditCost;
+            badgeHtml = `<div class="photoset-card-checkbox ${isSelected ? 'checked' : ''} ${isDisabled ? 'disabled' : ''}"
+                onclick="event.stopPropagation(); togglePhotosetStyle(${item.entity_id})">${isSelected ? '✓' : ''}</div>`;
+        } else if (isLocked) {
+            badgeHtml = `<div class="photoset-card-lock-badge">${lockSvg}</div>`;
+        }
+
         return `
             <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="${openAction}">
+                ${badgeHtml}
                 ${renderPhotosetCardPreview(item)}
                 <div class="photoset-card-info">
                     <div class="photoset-card-title">${item.title || ''}</div>
@@ -832,6 +1036,9 @@ function renderPhotosets() {
 // Pack Detail
 async function openPackDetail(packId) {
     trackEvent('v2_photoset_detail', { kind: 'pack', id: packId });
+    document.querySelectorAll('.detail-credits-count').forEach(el => {
+        el.textContent = state.photosetsCreditsPreview;
+    });
     showScreen('photoset-pack-detail');
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
@@ -856,6 +1063,34 @@ async function openPackDetail(packId) {
         gallery.innerHTML = (pack.examples || []).slice(0, 10).map(url =>
             `<img src="${url}" alt="" loading="lazy" onclick="openLightbox('${url}')">`
         ).join('');
+
+        // Locked pack gating
+        const buyBtn = document.getElementById('photoset-pack-buy-btn');
+        const packNoPersona = document.getElementById('pack-no-persona');
+        const packTopup = document.getElementById('pack-topup');
+        buyBtn.style.display = '';
+        if (packNoPersona) packNoPersona.style.display = 'none';
+        if (packTopup) packTopup.style.display = 'none';
+
+        if (!state.hasPersona) {
+            buyBtn.style.display = 'none';
+            if (packNoPersona) {
+                packNoPersona.style.display = '';
+                _renderTariffButtonsInto('pack-create-buttons', 'pack-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+            }
+        } else if (state.packsUseCredits) {
+            const cc = pack.credit_cost || pack.expected_images;
+            if (state.photosetsCredits < cc) {
+                buyBtn.style.display = 'none';
+                if (packTopup) {
+                    packTopup.style.display = '';
+                    const packDeficit = cc - state.photosetsCredits;
+                    document.getElementById('pack-topup-hint').innerHTML = `<strong>Стоимость:</strong> ${cc} ${pluralCredits(cc)}<br>` +
+                        `<strong>Не хватает:</strong> ${packDeficit} ${pluralCredits(packDeficit)}<br>Выберите тариф:`;
+                    _renderTariffButtonsInto('pack-topup-buttons', 'pack-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
+                }
+            }
+        }
     } catch (e) {
         console.error('Pack detail error:', e);
     }
@@ -927,6 +1162,9 @@ function openStyleDetail(styleId) {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
     document.getElementById('photoset-style-title').textContent = style.title;
+    document.querySelectorAll('.detail-credits-count').forEach(el => {
+        el.textContent = state.photosetsCreditsPreview;
+    });
     document.getElementById('photoset-style-desc').textContent = style.description || '';
 
     const creditCost = style.credit_cost;
@@ -942,23 +1180,44 @@ function openStyleDetail(styleId) {
     }
     preview.innerHTML = previewTiles.join('');
 
-    // Gate on the generate button — user always sees the detail screen
+    // Gate: generate / no-persona / not-enough-credits
     const generateBtn = document.getElementById('photoset-generate-btn');
     const noPersonaBlock = document.getElementById('photoset-no-persona');
+    const topupBlock = document.getElementById('photoset-style-topup');
     generateBtn.style.display = 'none';
     noPersonaBlock.style.display = 'none';
+    topupBlock.style.display = 'none';
 
-    if (state.photosetsCredits < creditCost) {
-        // Not enough credits — show tariff button, opens tariffs screen
-        generateBtn.style.display = '';
-        generateBtn.onclick = function() { showScreen('tariffs'); };
-        generateBtn.querySelector('.btn-text').textContent = `\u{1F48E} Нужно ${creditCost} ${pluralCredits(creditCost)}`;
-    } else if (!state.hasPersona) {
+    const inCheckboxMode = state.hasPersona && state.personaCreditsOriginal > 0;
+
+    if (!state.hasPersona) {
         noPersonaBlock.style.display = '';
+        _renderTariffButtonsInto('style-create-buttons', 'style-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+    } else if (inCheckboxMode) {
+        // Checkbox mode: always use preview balance for consistency with catalog
+        const isSelected = state.selectedPersonaStyles.some(s => s.id === styleId);
+        const canAfford = state.photosetsCreditsPreview >= creditCost;
+        if (isSelected || canAfford) {
+            generateBtn.style.display = '';
+            generateBtn.querySelector('.btn-text').textContent = isSelected ? 'Убрать из выбранных' : 'Выбрать';
+            generateBtn.onclick = () => { togglePhotosetStyle(styleId); goBack('photosets'); };
+        } else {
+            // Can't afford with preview balance — show topup
+            topupBlock.style.display = '';
+            const topupHint = document.getElementById('photoset-style-topup')?.querySelector('.topup-hint');
+            if (topupHint) {
+                const deficit = creditCost - state.photosetsCreditsPreview;
+                topupHint.innerHTML = `<strong>Стоимость:</strong> ${creditCost} ${pluralCredits(creditCost)}<br>` +
+                    `<strong>Не хватает:</strong> ${deficit} ${pluralCredits(deficit)}<br>Выберите тариф:`;
+            }
+            _renderTariffButtonsInto('style-topup-buttons', 'style-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
+        }
     } else {
-        generateBtn.style.display = '';
-        generateBtn.onclick = startStyleBatchGeneration;
-        generateBtn.querySelector('.btn-text').textContent = `\u2728 Сгенерировать (${style.num_images || 4} фото)`;
+        // Has persona but 0 credits original — show topup
+        topupBlock.style.display = '';
+        const topupHint = document.getElementById('photoset-style-topup')?.querySelector('.topup-hint');
+        if (topupHint) topupHint.innerHTML = `<strong>Стоимость:</strong> ${creditCost} ${pluralCredits(creditCost)}<br>Выберите тариф:`;
+        _renderTariffButtonsInto('style-topup-buttons', 'style-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
     }
 
     showScreen('photoset-style-detail');
@@ -1028,17 +1287,256 @@ function goToCreatePersona() {
     closeMiniApp();
 }
 
-function goToTariffs() {
-    trackEvent('v2_go_to_tariffs');
-    showScreen('tariffs');
+// === Photoset Multi-Select (Checkboxes) ===
+
+function togglePhotosetStyle(entityId) {
+    const idx = state.selectedPersonaStyles.findIndex(s => s.id === entityId);
+    if (idx >= 0) {
+        const style = state.selectedPersonaStyles[idx];
+        state.selectedPersonaStyles.splice(idx, 1);
+        state.photosetsCreditsPreview += (style.credit_cost || 1);
+        if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    } else {
+        const style = state.personaStyles.find(s => s.id === entityId);
+        if (!style) return;
+        const cost = style.credit_cost || 1;
+        if (state.photosetsCreditsPreview < cost) {
+            if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+            return;
+        }
+        state.selectedPersonaStyles.push(style);
+        state.photosetsCreditsPreview -= cost;
+        trackEvent('v2_photoset_style_select', { style_id: entityId });
+        if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    }
+    updatePhotosetsPreviewBalance();
+    updatePhotosetsGenerateButton();
+    renderPhotosets();
 }
 
-async function buyTariff(credits) {
-    trackEvent('v2_tariff_buy', { credits });
+function updatePhotosetsPreviewBalance() {
+    // ONLY update photosets catalog header — not main screen or profile
+    const pCredits = document.getElementById('photosets-credits-count');
+    if (pCredits) pCredits.textContent = state.photosetsCreditsPreview;
+}
+
+function updatePhotosetsGenerateButton() {
+    const footer = document.getElementById('photosets-generate-footer');
+    if (!footer) return;
+    const selected = state.selectedPersonaStyles || [];
+    if (state.hasPersona && selected.length > 0) {
+        footer.style.display = 'flex';
+        document.getElementById('photosets-generate-btn-text').textContent = `Сгенерировать (${selected.length})`;
+        // Hide tariff footers when generate is shown
+        const cf = document.getElementById('photosets-create-footer');
+        const tf = document.getElementById('photosets-topup-footer');
+        if (cf) cf.style.display = 'none';
+        if (tf) tf.style.display = 'none';
+    } else {
+        footer.style.display = 'none';
+    }
+}
+
+async function generatePhotosetBatch() {
+    const selected = state.selectedPersonaStyles || [];
+    if (!selected.length) return;
+    trackEvent('v2_photoset_batch', { count: selected.length });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
+    const btn = document.getElementById('photosets-generate-btn');
+    btn.disabled = true;
+    document.getElementById('photosets-generate-btn-text').textContent = 'Отправляю...';
+
     try {
-        const resp = await fetch('/app/api/persona/buy', {
+        const resp = await fetch('/app/api/persona/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData, styles: selected.map(s => ({ slug: s.slug })) }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (resp.status === 402) { showScreen('nocredits'); return; }
+            throw new Error(data.error || 'Failed');
+        }
+
+        if (data.bot_link && tg?.openTelegramLink) { tg.openTelegramLink(data.bot_link); }
+        else if (data.bot_link) { window.open(data.bot_link, '_blank'); }
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    } catch (e) {
+        console.error('Batch error:', e);
+        alert('Ошибка: ' + e.message);
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+    } finally {
+        btn.disabled = false;
+        document.getElementById('photosets-generate-btn-text').textContent = `Сгенерировать (${selected.length})`;
+    }
+}
+
+// === Unified Tariff System ===
+
+function renderScreenFooters(screen) {
+    // 1. Hide ALL footers + reset tariff selection
+    ['photosets-create-footer', 'photosets-topup-footer', 'photosets-generate-footer',
+     'express-buy-footer', 'custom-buy-footer'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    document.querySelectorAll('.has-footer').forEach(el => el.classList.remove('has-footer'));
+    if (screen !== 'tariffs-page') state.selectedTariff = null;
+    ['create-pay-btn', 'express-footer-pay-btn', 'custom-footer-pay-btn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) { btn.style.display = 'none'; btn.disabled = false; }
+    });
+    ['photosets-create-footer', 'express-buy-footer', 'custom-buy-footer'].forEach(id => {
+        const footer = document.getElementById(id);
+        if (footer) footer.querySelectorAll('.persona-buy-btn.selected').forEach(b => b.classList.remove('selected'));
+    });
+
+    // 2. Show footers for current screen
+    if (screen === 'photosets') {
+        const createFooter = document.getElementById('photosets-create-footer');
+        if (createFooter) {
+            if (!state.hasPersona) {
+                _renderTariffButtonsInto('create-tariff-buttons', 'create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+                createFooter.style.display = '';
+                const grid = document.getElementById('photosets-grid');
+                if (grid) grid.classList.add('has-footer');
+            }
+        }
+        updatePhotosetsGenerateButton();
+    }
+
+    // Express / Custom — show buy footer when no credits
+    const hasExpressCredits = state.expressCredits.fast > 0 || !state.expressCredits.free_used;
+    if (screen === 'express-catalog' && !hasExpressCredits) {
+        const f = document.getElementById('express-buy-footer');
+        if (f) {
+            _renderTariffButtonsInto('express-footer-buttons', 'express-footer-pay-btn', 'fast', state.tariffs.fast || []);
+            f.style.display = '';
+            const grid = document.getElementById('v3-styles-grid');
+            if (grid) grid.classList.add('has-footer');
+        }
+    }
+    if (screen === 'custom-prompt' && !hasExpressCredits) {
+        const f = document.getElementById('custom-buy-footer');
+        if (f) {
+            _renderTariffButtonsInto('custom-footer-buttons', 'custom-footer-pay-btn', 'fast', state.tariffs.fast || []);
+            f.style.display = '';
+            const body = document.querySelector('.custom-prompt-body');
+            if (body) body.classList.add('has-footer');
+        }
+    }
+}
+
+// Render tariff buttons into any container
+function _renderTariffButtonsInto(containerId, payBtnId, mode, tariffs) {
+    const container = document.getElementById(containerId);
+    const payBtn = document.getElementById(payBtnId);
+    if (!container) return;
+    if (payBtn) payBtn.style.display = 'none';
+    const items = [...tariffs].sort((a, b) => a.credits - b.credits);
+    if (!items.length) { container.innerHTML = '<div style="color:var(--text-secondary);text-align:center">Тарифы загружаются...</div>'; return; }
+    container.innerHTML = items.map(t => `
+        <button class="persona-buy-btn" data-credits="${t.credits}"
+                onclick="selectInlineTariff(this, ${t.credits}, ${t.price}, '${payBtnId}', '${mode}')">
+            <span class="persona-buy-btn-price">${t.price} ₽</span>
+            <span class="persona-buy-btn-credits">${t.credits} ${pluralCredits(t.credits)}</span>
+        </button>
+    `).join('');
+}
+
+function selectInlineTariff(btn, credits, price, payBtnId, mode) {
+    state.selectedTariff = { mode, credits };
+    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    btn.parentElement.querySelectorAll('.persona-buy-btn').forEach(b => {
+        b.classList.toggle('selected', Number(b.dataset.credits) === credits);
+    });
+    // Deselect buttons in other sections (for all-tariffs page)
+    const sectionsContainer = document.getElementById('tariffs-page-sections');
+    if (sectionsContainer) {
+        sectionsContainer.querySelectorAll('.persona-buy-btn.selected').forEach(b => {
+            if (b.parentElement !== btn.parentElement) b.classList.remove('selected');
+        });
+    }
+    const payBtn = document.getElementById(payBtnId);
+    if (payBtn) { payBtn.textContent = `Оплатить ${price} ₽`; payBtn.style.display = ''; }
+}
+
+// All tariffs screen (from main "Тарифы" button)
+function openAllTariffsScreen() {
+    state._tariffReturnTo = 'main';
+    state.selectedTariff = null;
+    trackEvent('v2_all_tariffs');
+    const sections = document.getElementById('tariffs-page-sections');
+    const singleButtons = document.getElementById('tariffs-page-buttons');
+    if (singleButtons) singleButtons.innerHTML = '';
+    document.getElementById('tariffs-page-info').textContent = '';
+    let html = '';
+    html += `<div class="tariff-section"><h3 class="tariff-section-title">Экспресс</h3>
+        <div class="persona-buy-footer-buttons" id="all-fast-buttons"></div></div>`;
+    if (!state.hasPersona) {
+        html += `<div class="tariff-section"><h3 class="tariff-section-title">Создание Персоны</h3>
+            <div class="persona-buy-footer-buttons" id="all-create-buttons"></div></div>`;
+    } else {
+        html += `<div class="tariff-section"><h3 class="tariff-section-title">Фотосеты — пополнение</h3>
+            <div class="persona-buy-footer-buttons" id="all-topup-buttons"></div></div>`;
+    }
+    sections.innerHTML = html;
+    const payBtnId = 'tariffs-page-pay-btn';
+    const payBtn = document.getElementById(payBtnId);
+    if (payBtn) { payBtn.style.display = 'none'; payBtn.disabled = false; }
+    _renderTariffButtonsInto('all-fast-buttons', payBtnId, 'fast', state.tariffs.fast || []);
+    if (!state.hasPersona) {
+        _renderTariffButtonsInto('all-create-buttons', payBtnId, 'persona_create', state.tariffs.persona_create || []);
+    } else {
+        _renderTariffButtonsInto('all-topup-buttons', payBtnId, 'persona_topup', state.tariffs.persona_topup || []);
+    }
+    showScreen('tariffs-page');
+}
+
+// Unified tariff screen (persona_create / persona_topup / fast)
+function openUnifiedTariffScreen(mode, returnTo) {
+    state.selectedTariff = null;
+    state._tariffReturnTo = returnTo || 'main';
+    trackEvent('v2_tariff_screen', { mode });
+
+    // Clear sections (used by openAllTariffsScreen)
+    const sections = document.getElementById('tariffs-page-sections');
+    if (sections) sections.innerHTML = '';
+
+    const titles = {
+        persona_create: 'Персона + кредиты для генерации',
+        persona_topup: 'Пополните кредиты — выгоднее пакетом',
+        fast: 'Докупите фото для экспресс-генерации',
+    };
+    document.getElementById('tariffs-page-info').textContent = titles[mode] || '';
+    _renderTariffButtonsInto('tariffs-page-buttons', 'tariffs-page-pay-btn', mode, state.tariffs[mode] || []);
+    showScreen('tariffs-page');
+}
+
+function goBackTariffs() {
+    goBack(state._tariffReturnTo || 'main');
+}
+
+async function buyTariffPage() {
+    if (!state.selectedTariff) return;
+    const { mode, credits } = state.selectedTariff;
+    const endpoints = {
+        persona_create: '/app/api/persona/buy',
+        persona_topup: '/app/api/persona/topup',
+        fast: '/app/api/fast/buy',
+    };
+    const endpoint = endpoints[mode];
+    if (!endpoint) return;
+
+    trackEvent('v2_tariff_buy', { mode, credits });
+    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
+
+    const payBtn = document.getElementById('tariffs-page-pay-btn');
+    if (payBtn) payBtn.disabled = true;
+
+    try {
+        const resp = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ init_data: state.initData, credits }),
@@ -1053,10 +1551,10 @@ async function buyTariff(credits) {
     } catch (e) {
         console.error('Tariff buy error:', e);
         alert('Ошибка оплаты: ' + e.message);
+    } finally {
+        if (payBtn) payBtn.disabled = false;
     }
 }
-
-
 
 // === Progress Animation ===
 
@@ -1148,7 +1646,7 @@ async function loadCustomCapabilities() {
     } catch (e) {
         console.error('Load capabilities error:', e);
         state.customCapabilities = {
-            providers: { seedream: { max_photos: 14 }, 'nano-banana-pro': { max_photos: 8 } },
+            providers: { seedream: { max_photos: 5 }, 'nano-banana-pro': { max_photos: 8 } },
             max_prompt_length: 2000, allowed_mime: ['image/jpeg','image/png','image/webp'], max_file_size_mb: 15,
         };
     }
@@ -1159,6 +1657,7 @@ function goToCustomPrompt() {
     loadCustomCapabilities().then(() => {
         updateCustomMaxPhotos();
         updateBalanceDisplays();
+        renderScreenFooters('custom-prompt');
     });
     state.customFiles = [];
     state.customProvider = 'seedream';
@@ -1292,12 +1791,12 @@ async function startCustomGeneration() {
 
         state.customTaskId = data.task_id;
         showScreen('express-generating');
-        pollGenerationStatus(data.task_id);
+        pollCustomStatus();
 
     } catch (e) {
         console.error('Custom generation error:', e);
         alert('Ошибка: ' + e.message);
     } finally {
-        if (btn) { btn.disabled = false; btn.querySelector('.btn-text').textContent = '✨ Создать'; }
+        if (btn) { btn.disabled = false; btn.querySelector('.btn-text').textContent = '⚡ Создать'; }
     }
 }

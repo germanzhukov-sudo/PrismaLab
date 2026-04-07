@@ -45,6 +45,7 @@ from prismalab.messages import (
 )
 from prismalab.keyboards import _persona_app_keyboard
 from prismalab.pack_offers import _find_pack_offer, _pack_offers
+from prismalab.tariffs import get_pack_sell_price
 from prismalab.telegram_utils import _acquire_user_generation_lock, _safe_edit_status, _safe_get_file_bytes, _safe_send_document
 from prismalab.image_utils import _prepare_image_for_photomaker
 from prismalab.alerts import alert_pack_error, alert_payment_error
@@ -66,6 +67,34 @@ from prismalab.payment import (
 logger = logging.getLogger("prismalab")
 
 import prismalab.bot as _bot  # noqa: E402
+
+
+async def _save_pack_history(user_id: int, pack_title: str, pack_id: int, image_bytes: bytes) -> None:
+    """Best-effort: upload to Supabase (non-blocking) + save to generation_history."""
+    try:
+        from prismalab.supabase_storage import upload_generation
+    except ImportError:
+        upload_generation = None
+
+    try:
+        image_url = None
+        if upload_generation and image_bytes:
+            try:
+                image_url = await asyncio.to_thread(
+                    upload_generation, image_bytes, user_id, "png", "image/png",
+                )
+            except Exception as e:
+                logger.warning("Pack history upload failed for pack %s: %s", pack_id, e)
+        _bot.store.save_generation_history(
+            user_id=user_id,
+            mode="photoset",
+            style_slug=f"pack_{pack_id}",
+            style_title=pack_title,
+            provider="astria",
+            image_url=image_url,
+        )
+    except Exception as e:
+        logger.warning("Save pack history failed for pack %s: %s", pack_id, e)
 
 
 def _persona_pack_class_name(gender: str | None) -> str:
@@ -478,6 +507,7 @@ async def _recover_pending_pack_runs(context: ContextTypes.DEFAULT_TYPE) -> None
                             caption=caption,
                         )
                         sent_count += 1
+                        await _save_pack_history(user_id, pack_title, pack_id, out_bytes)
                     await asyncio.sleep(0.1)
                 except Exception as e:
                     logger.warning("pack recovery: download/send failed %s: %s", url[:50], e)
@@ -610,6 +640,7 @@ async def _pack_fallback_polling(
                         caption = f"Фотосет «{pack_title}» ({sent_count + 1}/{len(urls)})" if sent_count == 0 else ""
                         await _safe_send_document(bot=context.bot, chat_id=chat_id, document=bio, caption=caption)
                         sent_count += 1
+                        await _save_pack_history(user_id, pack_title, pack_id, out_bytes)
                         await asyncio.sleep(0.1)
                 except Exception as e:
                     logger.warning("pack fallback: download/send failed %s: %s", url[:50], e)
@@ -994,6 +1025,7 @@ async def _run_persona_pack_generation(
                         caption=caption,
                     )
                     sent_count += 1
+                    await _save_pack_history(user_id, offer.get("title", ""), pack_id, out_bytes)
                 except Exception as e:
                     logger.warning("Pack image %s/%s send failed, skipping: %s", i, total, e)
                 await asyncio.sleep(0.1)
@@ -1106,7 +1138,7 @@ async def _poll_persona_pack_payment_and_run(
         if status == "succeeded":
             if _bot.store.is_payment_processed(payment_id):
                 return
-            amount_rub = apply_test_amount(float(offer["price_rub"]))
+            amount_rub = apply_test_amount(get_pack_sell_price(_bot.store, int(offer.get("id", 0)), float(offer["price_rub"])))
             expected_images = int(offer.get("expected_images") or 0)
             try:
                 payment_log_id = _bot.store.log_payment(
@@ -1293,7 +1325,7 @@ async def handle_persona_pack_buy_callback(update: Update, context: ContextTypes
         )
         return
 
-    amount = apply_test_amount(float(offer["price_rub"]))
+    amount = apply_test_amount(get_pack_sell_price(_bot.store, pack_id, float(offer["price_rub"])))
     me = await context.bot.get_me()
     return_url = f"https://t.me/{me.username}" if me and me.username else None
     logger.info("persona_pack_buy: creating payment amount=%s", amount)

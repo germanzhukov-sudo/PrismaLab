@@ -18,14 +18,12 @@ logger = logging.getLogger("prismalab.miniapp.services.photosets")
 
 # ── Константы ──────────────────────────────────────────────────────────
 
-DEFAULT_PACKS: list[dict] = [
-    {"id": 4345, "title": "8 марта", "price_rub": 319, "expected_images": 20, "credit_cost": 20, "class_name": "woman", "category": "female"},
-    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 319, "expected_images": 16, "credit_cost": 16, "class_name": "woman", "category": "female"},
-]
+# Дефолтные паки — единый источник в pack_offers.py
+from prismalab.pack_offers import _DEFAULT_PACK_OFFERS as DEFAULT_PACKS, _pack_offers
+from prismalab.tariffs import get_pack_sell_price
 
 PACK_ID_CATEGORIES: dict[int, str] = {
-    4345: "female",
-    4344: "female",
+    p["id"]: p.get("category", "female") for p in DEFAULT_PACKS
 }
 
 PACK_COVER_OVERRIDES: dict[int, str] = {
@@ -105,46 +103,20 @@ def clear_caches() -> None:
 # ── Офферы ─────────────────────────────────────────────────────────────
 
 def load_pack_offers() -> list[dict]:
-    """Парсит PRISMALAB_ASTRIA_PACK_OFFERS из env + добавляет DEFAULT_PACKS."""
-    seen_ids: set[int] = set()
-    result: list[dict] = []
+    """Загрузка офферов паков — единый источник из pack_offers.py.
 
-    raw = os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS", "")
-    if raw:
-        try:
-            offers = json.loads(raw)
-            if isinstance(offers, list):
-                for o in offers:
-                    if not isinstance(o, dict):
-                        continue
-                    pack_id = int(o.get("id") or 0)
-                    if not pack_id:
-                        continue
-                    seen_ids.add(pack_id)
-                    category = PACK_ID_CATEGORIES.get(pack_id)
-                    if not category:
-                        category = str(o.get("category") or "").strip().lower()
-                    if category not in ("female", "child", "animals"):
-                        category = "female"
-                    expected = int(o.get("expected_images") or 20)
-                    result.append({
-                        "id": pack_id,
-                        "title": str(o.get("title") or f"Pack #{pack_id}"),
-                        "price_rub": int(o.get("price_rub") or 0),
-                        "expected_images": expected,
-                        "credit_cost": int(o.get("credit_cost") or expected),
-                        "class_name": str(o.get("class_name") or "woman"),
-                        "category": category,
-                    })
-        except (json.JSONDecodeError, ValueError, TypeError) as e:
-            logger.warning("Ошибка парсинга PRISMALAB_ASTRIA_PACK_OFFERS: %s", e)
-
-    for p in DEFAULT_PACKS:
-        if p["id"] not in seen_ids:
-            result.append(dict(p))
-            seen_ids.add(p["id"])
-
-    return result
+    Делегирует парсинг env + дефолтов в pack_offers._pack_offers(),
+    добавляет credit_cost fallback (= expected_images) если отсутствует.
+    """
+    offers = _pack_offers()
+    for o in offers:
+        # credit_cost: если не задан в env/defaults, = expected_images
+        if "credit_cost" not in o:
+            o["credit_cost"] = o.get("expected_images", 20)
+        # category: если не задан, определяем по PACK_ID_CATEGORIES или fallback
+        if "category" not in o or not o["category"]:
+            o["category"] = PACK_ID_CATEGORIES.get(o["id"], "female")
+    return offers
 
 
 # ── Resolve helpers ────────────────────────────────────────────────────
@@ -481,8 +453,11 @@ async def fetch_gallery_pack_index(*, astria_api_key: str, use_cache: bool = Tru
         return {}
 
 
-async def get_packs_list(*, astria_api_key: str) -> list[dict]:
-    """Полный список паков для API: offers + Astria data."""
+async def get_packs_list(*, astria_api_key: str, store=None) -> list[dict]:
+    """Полный список паков для API: offers + Astria data.
+
+    store: если передан, цены берутся из tariffs service (admin override).
+    """
     offers = load_pack_offers()
     if not offers:
         return []
@@ -536,10 +511,15 @@ async def get_packs_list(*, astria_api_key: str) -> list[dict]:
             cover_url = str(pack_data.get("cover_url") or "").strip()
             if cover_url:
                 preview_urls = [cover_url]
+        # Цена: tariffs override → env → default
+        pack_price = offer["price_rub"]
+        if store is not None:
+            pack_price = get_pack_sell_price(store, int(offer["id"]), pack_price)
+
         result.append({
             "id": offer["id"],
             "title": offer["title"],
-            "price_rub": offer["price_rub"],
+            "price_rub": pack_price,
             "expected_images": expected_images,
             "credit_cost": offer.get("credit_cost", expected_images),
             "cover_url": pack_data.get("cover_url", ""),
@@ -549,8 +529,11 @@ async def get_packs_list(*, astria_api_key: str) -> list[dict]:
     return result
 
 
-async def get_pack_detail(pack_id: int, *, astria_api_key: str) -> dict | None:
-    """Детали пака с галереей. None если пак не найден."""
+async def get_pack_detail(pack_id: int, *, astria_api_key: str, store=None) -> dict | None:
+    """Детали пака с галереей. None если пак не найден.
+
+    store: если передан, цена берётся из tariffs service (с учётом admin override).
+    """
     offers = load_pack_offers()
     offer = next((o for o in offers if o["id"] == pack_id), None)
     if not offer:
@@ -560,10 +543,16 @@ async def get_pack_detail(pack_id: int, *, astria_api_key: str) -> dict | None:
         filter_class=str(offer.get("class_name") or ""),
     )
     expected_images = resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
+
+    # Цена из tariffs service (admin override → env → default)
+    price_rub = offer["price_rub"]
+    if store is not None:
+        price_rub = get_pack_sell_price(store, pack_id, price_rub)
+
     return {
         "id": offer["id"],
         "title": offer["title"],
-        "price_rub": offer["price_rub"],
+        "price_rub": price_rub,
         "expected_images": expected_images,
         "credit_cost": offer.get("credit_cost", expected_images),
         "cover_url": pack_data["cover_url"],

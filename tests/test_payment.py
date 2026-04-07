@@ -44,9 +44,11 @@ def test_build_pack_callback_url():
 
 
 def test_amount_rub():
-    """_amount_rub возвращает числовое значение."""
+    """_amount_rub возвращает числовое значение через tariffs service."""
     from prismalab.payment import _amount_rub
-    amount = _amount_rub("fast", 5)
+    from prismalab.storage import PrismaLabStore
+    store = PrismaLabStore()
+    amount = _amount_rub(store, "fast", 5)
     assert isinstance(amount, (int, float))
     assert amount > 0
 

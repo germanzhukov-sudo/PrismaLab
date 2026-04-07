@@ -56,7 +56,7 @@ _PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
 CUSTOM_CAPABILITIES: dict[str, Any] = {
     "providers": {
         "seedream": {
-            "max_photos": 14,
+            "max_photos": 5,
             "models": {"text_only": "seedream/4.5", "with_refs": "seedream/4.5-edit"},
         },
         "nano-banana-pro": {

@@ -255,3 +255,51 @@ class TestRunGenerationFailPaths:
         store.update_generation_history_url(hid, "https://cdn/retry.jpg")
         rows = store.get_generation_history(uid)
         assert rows[0]["image_url"] == "https://cdn/retry.jpg"
+
+
+# ── Phase 5: History modes (express / custom / photoset) ──────────
+
+class TestHistoryModes:
+    """Tests for all generation history modes."""
+
+    @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+    def test_history_mode_custom(self, mock_auth, client, store):
+        """Custom mode is returned and filterable."""
+        uid = FAKE_USER["user_id"]
+        store.get_user(uid)
+        store.save_generation_history(uid, "custom", "__custom__", "My prompt", "seedream", "https://img.jpg")
+        store.save_generation_history(uid, "express", "wedding", "Wedding", "seedream", "https://img2.jpg")
+
+        resp = client.get("/app/api/v3/history?mode=custom", headers=AUTH_HEADER)
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["mode"] == "custom"
+        assert items[0]["style_slug"] == "__custom__"
+
+    @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+    def test_history_mode_photoset(self, mock_auth, client, store):
+        """Photoset mode is returned and filterable."""
+        uid = FAKE_USER["user_id"]
+        store.get_user(uid)
+        store.save_generation_history(uid, "photoset", "glamour_01", "Glamour", "astria", "https://img.jpg")
+        store.save_generation_history(uid, "express", "wedding", "Wedding", "seedream", "https://img2.jpg")
+
+        resp = client.get("/app/api/v3/history?mode=photoset", headers=AUTH_HEADER)
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["mode"] == "photoset"
+
+    @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+    def test_history_all_modes(self, mock_auth, client, store):
+        """Without mode filter, all 3 modes are returned."""
+        uid = FAKE_USER["user_id"]
+        store.get_user(uid)
+        store.save_generation_history(uid, "express", "s1", "S1", "seedream")
+        store.save_generation_history(uid, "custom", "__custom__", "Prompt", "seedream")
+        store.save_generation_history(uid, "photoset", "pack_123", "Pack", "astria")
+
+        resp = client.get("/app/api/v3/history", headers=AUTH_HEADER)
+        items = resp.json()["items"]
+        assert len(items) == 3
+        modes = {item["mode"] for item in items}
+        assert modes == {"express", "custom", "photoset"}

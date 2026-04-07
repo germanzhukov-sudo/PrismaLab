@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Цены продажи — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-tags me-2"></i>Цены продажи</h2>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Цены сохранены
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<form method="POST">
+<div class="row">
+    <!-- Экспресс-фото -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-lightning me-2"></i>Экспресс-фото
+            </div>
+            <div class="card-body">
+                {% for item in tariffs.fast %}
+                <div class="mb-3">
+                    <label class="form-label">{{ item.credits }} фото</label>
+                    <div class="input-group">
+                        <input type="number" step="1" min="1" class="form-control"
+                               name="fast_{{ item.credits }}" value="{{ item.price }}">
+                        <span class="input-group-text">&#8381;</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Персона — создание -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-person-plus me-2"></i>Персона — создание
+            </div>
+            <div class="card-body">
+                {% for item in tariffs.persona_create %}
+                <div class="mb-3">
+                    <label class="form-label">{{ item.credits }} фото</label>
+                    <div class="input-group">
+                        <input type="number" step="1" min="1" class="form-control"
+                               name="persona_create_{{ item.credits }}" value="{{ item.price }}">
+                        <span class="input-group-text">&#8381;</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Персона — пополнение -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-plus-circle me-2"></i>Персона — пополнение
+            </div>
+            <div class="card-body">
+                {% for item in tariffs.persona_topup %}
+                <div class="mb-3">
+                    <label class="form-label">{{ item.credits }} фото</label>
+                    <div class="input-group">
+                        <input type="number" step="1" min="1" class="form-control"
+                               name="persona_topup_{{ item.credits }}" value="{{ item.price }}">
+                        <span class="input-group-text">&#8381;</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Паки (фотосеты) -->
+{% if packs %}
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="bi bi-images me-2"></i>Паки (фотосеты) — цены продажи
+        <small class="text-muted ms-2">Пустое поле = цена из env/дефолт</small>
+    </div>
+    <div class="card-body">
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Название</th>
+                    <th>Класс</th>
+                    <th>Фото</th>
+                    <th>Цена по умолчанию</th>
+                    <th>Override (&#8381;)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pack in packs %}
+                <tr>
+                    <td>{{ pack.id }}</td>
+                    <td>{{ pack.title }}</td>
+                    <td><span class="badge bg-secondary">{{ pack.class_name }}</span></td>
+                    <td>{{ pack.expected_images }}</td>
+                    <td>{{ pack.default_price }} &#8381;</td>
+                    <td>
+                        <input type="number" step="1" min="0" class="form-control form-control-sm"
+                               name="pack_price_{{ pack.id }}"
+                               value="{{ pack.override_price if pack.override_price else '' }}"
+                               placeholder="{{ pack.default_price }}">
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Бейдж на фотосетах -->
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="bi bi-tag me-2"></i>Бейдж на карточке фотосетов
+    </div>
+    <div class="card-body">
+        <div class="mb-0">
+            <label class="form-label">Текст бейджа <small class="text-muted">(пусто = скрыт)</small></label>
+            <input type="text" class="form-control" name="photosets_discount_badge"
+                   value="{{ discount_badge or '' }}" placeholder="для вас -40%"
+                   style="max-width: 300px;">
+            <div class="form-text">Показывается на главном экране Mini App у юзеров без персоны.</div>
+        </div>
+    </div>
+</div>
+
+<button type="submit" class="btn btn-primary mb-4">
+    <i class="bi bi-check-lg me-1"></i>Сохранить цены
+</button>
+</form>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="bi bi-info-circle me-2"></i>Как это работает
+    </div>
+    <div class="card-body">
+        <p>Все цены хранятся в <code>admin_settings</code>. Если значение не задано, используется дефолт из кода.</p>
+        <p>Изменения вступают в силу мгновенно — следующий платёж пойдёт по новой цене.</p>
+        <p class="mb-0"><strong>Потребители:</strong> Mini App (API auth), бот (хэндлеры оплаты), YuKassa (сумма платежа).</p>
+    </div>
+</div>
+{% endblock %}

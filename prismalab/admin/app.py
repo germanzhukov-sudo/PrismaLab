@@ -474,128 +474,214 @@ async def settings_post(request: Request):
     return RedirectResponse(url=f"{ADMIN_BASE}/settings?saved=1", status_code=303)
 
 
-_DEFAULT_PACK_OFFERS: list[dict] = [
-    {"id": 4345, "title": "8 марта", "price_rub": 599, "expected_images": 20, "class_name": "woman"},
-    {"id": 4344, "title": "Алиса в стране чудес", "price_rub": 599, "expected_images": 16, "class_name": "woman"},
-    {"id": 248, "title": "Собачий арт", "price_rub": 499, "expected_images": 16, "class_name": "dog"},
-    {"id": 682, "title": "Котомагия", "price_rub": 799, "expected_images": 43, "class_name": "cat"},
-    {"id": 593, "title": "Детский хэллоуин", "price_rub": 499, "expected_images": 19, "class_name": "boy"},
-    {"id": 859, "title": "Детская праздничная коллекция", "price_rub": 799, "expected_images": 40, "class_name": "girl"},
-    {"id": 2152, "title": "Скандинавская мягкость", "price_rub": 799, "expected_images": 44, "class_name": "girl"},
-    {"id": 2501, "title": "Нежная съёмка для новорождённых", "price_rub": 1499, "expected_images": 80, "class_name": "girl"},
-]
-
-
-def _load_pack_offers() -> list[dict]:
-    """Парсинг PRISMALAB_ASTRIA_PACK_OFFERS из env + дефолтные паки."""
-    import json
-    seen_ids: set[int] = set()
-    offers: list[dict] = []
-
-    raw = (os.getenv("PRISMALAB_ASTRIA_PACK_OFFERS") or "").strip()
-    if raw:
-        try:
-            items = json.loads(raw)
-            if isinstance(items, list):
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    try:
-                        pack_id = int(it.get("id") or 0)
-                        if not pack_id:
-                            continue
-                        seen_ids.add(pack_id)
-                        offers.append({
-                            "id": pack_id,
-                            "title": str(it.get("title") or f"Пак #{pack_id}"),
-                            "price_rub": float(it.get("price_rub") or 0),
-                            "expected_images": int(it.get("expected_images") or 0),
-                            "class_name": str(it.get("class_name") or ""),
-                        })
-                    except Exception:
-                        continue
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    for p in _DEFAULT_PACK_OFFERS:
-        if p["id"] not in seen_ids:
-            offers.append(dict(p))
-            seen_ids.add(p["id"])
-
-    return offers
+# ===== Pricing (sell prices) =====
 
 
 @require_auth
-async def pack_costs_page(request: Request):
-    """Страница управления себестоимостью паков."""
+async def pricing_page(request: Request):
+    """Страница управления ценами продажи."""
     store = get_store()
     saved = request.query_params.get("saved") == "1"
 
-    # Получаем все паки из env
-    offers = _load_pack_offers()
-    # Получаем сохранённые себестоимости
-    saved_costs = {r["pack_id"]: r for r in store.get_pack_costs()}
-    # Получаем статистику генераций
-    pack_stats_all = store.get_pack_stats()
-    stats_map = {int(s["pack_id"]): s for s in pack_stats_all if s["pack_id"] and str(s["pack_id"]).isdigit()}
-    # Получаем настройки курса
-    cost_settings = store.get_cost_settings()
-    usd_rub = cost_settings["usd_rub"]
+    from prismalab.tariffs import get_all_tariffs, get_pack_price_overrides
 
-    # Собираем данные для шаблона
+    tariffs = get_all_tariffs(store)
+
+    # Pack offers with override info
+    offers = _load_pack_offers()
+    pack_overrides = get_pack_price_overrides(store)
+
     packs = []
     for offer in offers:
         pid = int(offer.get("id", 0))
-        cost_usd = float(saved_costs.get(pid, {}).get("cost_usd", 0))
-        price_rub = float(offer.get("price_rub", 0))
-        generations = int(stats_map.get(pid, {}).get("generations", 0))
-        total_images = int(stats_map.get(pid, {}).get("total_images", 0))
-        cost_rub = cost_usd * usd_rub
-        margin_rub = price_rub - cost_rub if cost_usd > 0 else 0
-        margin_pct = round((margin_rub / price_rub) * 100, 1) if price_rub > 0 and cost_usd > 0 else 0
-
+        override_val = pack_overrides.get(pid)
         packs.append({
             "id": pid,
             "title": offer.get("title", f"Pack {pid}"),
-            "price_rub": price_rub,
             "class_name": offer.get("class_name", ""),
             "expected_images": offer.get("expected_images", 0),
-            "cost_usd": cost_usd,
-            "cost_rub": round(cost_rub, 2),
-            "margin_rub": round(margin_rub, 2),
-            "margin_pct": margin_pct,
-            "generations": generations,
-            "total_images": total_images,
+            "default_price": float(offer.get("price_rub", 0)),
+            "override_price": override_val,
         })
 
-    return templates.TemplateResponse("pack_costs.html", {
+    discount_badge = store.get_admin_setting("photosets_discount_badge") or ""
+
+    return templates.TemplateResponse("pricing.html", {
         "request": request,
         "admin": request.state.admin,
+        "tariffs": tariffs,
         "packs": packs,
-        "usd_rub": usd_rub,
         "saved": saved,
+        "discount_badge": discount_badge,
     })
 
 
 @require_auth
-async def pack_costs_post(request: Request):
-    """Сохранение себестоимости паков."""
+async def pricing_post(request: Request):
+    """Сохранение цен продажи."""
     store = get_store()
     form = await request.form()
-    offers = _load_pack_offers()
 
-    items = []
+    from prismalab.tariffs import (
+        get_all_product_types,
+        get_default_credits,
+        set_tariff_prices,
+        set_pack_sell_price,
+        reset_pack_sell_price,
+    )
+
+    # Credit-based tariffs
+    for product_type in get_all_product_types():
+        prices = {}
+        for credits in get_default_credits(product_type):
+            field_name = f"{product_type}_{credits}"
+            val = form.get(field_name)
+            if val:
+                try:
+                    prices[credits] = int(float(val))
+                except (ValueError, TypeError):
+                    pass
+        if prices:
+            set_tariff_prices(store, product_type, prices)
+
+    # Discount badge
+    badge_val = (form.get("photosets_discount_badge") or "").strip()
+    if badge_val:
+        store.set_admin_setting("photosets_discount_badge", badge_val)
+    else:
+        store.delete_admin_setting("photosets_discount_badge")
+
+    # Pack sell prices — пустое поле = сброс override к дефолту
+    offers = _load_pack_offers()
     for offer in offers:
         pid = int(offer.get("id", 0))
-        cost_usd = float(form.get(f"cost_{pid}", 0))
-        items.append({
-            "pack_id": pid,
-            "pack_title": offer.get("title", ""),
-            "cost_usd": cost_usd,
+        val = form.get(f"pack_price_{pid}")
+        if val and val.strip():
+            try:
+                set_pack_sell_price(store, pid, float(val))
+            except (ValueError, TypeError):
+                pass
+        else:
+            # Пустое/отсутствующее поле — сбрасываем override, вернётся к дефолту
+            reset_pack_sell_price(store, pid)
+
+    return RedirectResponse(url=f"{ADMIN_BASE}/pricing?saved=1", status_code=303)
+
+
+def _load_pack_offers() -> list[dict]:
+    """Загрузка офферов паков — единый источник из pack_offers.py."""
+    from prismalab.pack_offers import _pack_offers
+    return _pack_offers()
+
+
+@require_auth
+async def photosets_unified_page(request: Request):
+    """Unified страница Фотосеты: табы Паки + Стили."""
+    store = get_store()
+    tab = request.query_params.get("tab", "packs")
+    category_filter = request.query_params.get("category", "")
+    saved = request.query_params.get("saved") == "1"
+
+    cost_settings = store.get_cost_settings()
+    usd_rub = cost_settings["usd_rub"]
+
+    if tab == "styles":
+        styles = store.get_persona_styles(active_only=False, gender=category_filter or None)
+        style_stats = store.get_persona_style_stats()
+        for s in styles:
+            sid = int(s.get("id", 0))
+            st = style_stats.get(sid, {})
+            s["generations"] = st.get("generations", 0)
+            s["cost_usd"] = float(s.get("cost_usd", 0) or 0)
+        return templates.TemplateResponse("photosets.html", {
+            "request": request,
+            "admin": request.state.admin,
+            "tab": "styles",
+            "styles": styles,
+            "category_filter": category_filter,
+            "usd_rub": usd_rub,
+            "saved": saved,
+            "admin_base": ADMIN_BASE,
+        })
+    else:
+        offers = _load_pack_offers()
+        saved_costs = {r["pack_id"]: r for r in store.get_pack_costs()}
+        pack_stats_all = store.get_pack_stats()
+        stats_map = {int(s["pack_id"]): s for s in pack_stats_all if s["pack_id"] and str(s["pack_id"]).isdigit()}
+
+        packs = []
+        for offer in offers:
+            pid = int(offer.get("id", 0))
+            cat = offer.get("category", "")
+            if category_filter and cat != category_filter:
+                continue
+            cost_usd = float(saved_costs.get(pid, {}).get("cost_usd", 0))
+            price_rub = float(offer.get("price_rub", 0))
+            generations = int(stats_map.get(pid, {}).get("generations", 0))
+            total_images = int(stats_map.get(pid, {}).get("total_images", 0))
+            cost_rub = cost_usd * usd_rub
+            margin_rub = price_rub - cost_rub if cost_usd > 0 else 0
+            margin_pct = round((margin_rub / price_rub) * 100, 1) if price_rub > 0 and cost_usd > 0 else 0
+            packs.append({
+                "id": pid, "title": offer.get("title", f"Pack {pid}"),
+                "price_rub": price_rub, "class_name": offer.get("class_name", ""),
+                "expected_images": offer.get("expected_images", 0),
+                "cost_usd": cost_usd, "cost_rub": round(cost_rub, 2),
+                "margin_rub": round(margin_rub, 2), "margin_pct": margin_pct,
+                "generations": generations, "total_images": total_images,
+            })
+        return templates.TemplateResponse("photosets.html", {
+            "request": request,
+            "admin": request.state.admin,
+            "tab": "packs",
+            "packs": packs,
+            "category_filter": category_filter,
+            "usd_rub": usd_rub,
+            "saved": saved,
+            "admin_base": ADMIN_BASE,
         })
 
-    store.set_pack_costs_bulk(items)
-    return RedirectResponse(url=f"{ADMIN_BASE}/pack-costs?saved=1", status_code=303)
+
+@require_auth
+async def photosets_unified_post(request: Request):
+    """Сохранение себестоимости паков или стилей."""
+    store = get_store()
+    form = await request.form()
+    save_type = form.get("save_type", "packs")
+
+    if save_type == "styles":
+        items = []
+        for key, val in form.multi_items():
+            if key.startswith("style_cost_") and val.strip():
+                style_id = int(key.replace("style_cost_", ""))
+                items.append({"style_id": style_id, "cost_usd": float(val)})
+        store.set_persona_style_costs_bulk(items)
+        return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=styles&saved=1", status_code=303)
+    else:
+        offers = _load_pack_offers()
+        items = []
+        for offer in offers:
+            pid = int(offer.get("id", 0))
+            cost_usd = float(form.get(f"cost_{pid}", 0))
+            items.append({"pack_id": pid, "pack_title": offer.get("title", ""), "cost_usd": cost_usd})
+        store.set_pack_costs_bulk(items)
+        return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=packs&saved=1", status_code=303)
+
+
+@require_auth
+async def pack_costs_redirect(request: Request):
+    """Legacy redirect /admin/pack-costs → /admin/photosets?tab=packs."""
+    return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=packs", status_code=303)
+
+
+@require_auth
+async def persona_styles_list_redirect(request: Request):
+    """Legacy redirect /admin/persona-styles → /admin/photosets?tab=styles."""
+    return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=styles", status_code=303)
+
+
+
+
 
 
 # ========== Рассылка ==========
@@ -1362,13 +1448,16 @@ routes = [
     Route("/admin/payments", payments_list, methods=["GET"]),
     Route("/admin/analytics", analytics_page, methods=["GET"]),
     Route("/admin/export", export_csv, methods=["GET"]),
-    Route("/admin/pack-costs", pack_costs_page, methods=["GET"]),
-    Route("/admin/pack-costs", pack_costs_post, methods=["POST"]),
+    Route("/admin/photosets", photosets_unified_page, methods=["GET"]),
+    Route("/admin/photosets", photosets_unified_post, methods=["POST"]),
+    Route("/admin/pack-costs", pack_costs_redirect, methods=["GET"]),
+    Route("/admin/persona-styles", persona_styles_list_redirect, methods=["GET"]),
     Route("/admin/broadcast", broadcast_page, methods=["GET"]),
     Route("/admin/broadcast", broadcast_post, methods=["POST"]),
+    Route("/admin/pricing", pricing_page, methods=["GET"]),
+    Route("/admin/pricing", pricing_post, methods=["POST"]),
     Route("/admin/settings", settings_page, methods=["GET"]),
     Route("/admin/settings", settings_post, methods=["POST"]),
-    Route("/admin/persona-styles", persona_styles_page, methods=["GET"]),
     Route("/admin/persona-styles/new", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/{style_id:int}/edit", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
