@@ -45,6 +45,21 @@ _application = None
 _bot_username: str = ""
 
 
+async def _send_followup_miniapp_button(user_id: int, task_id: str) -> None:
+    """Send a follow-up message with Mini App button after generation."""
+    if not MINIAPP_URL or not _bot:
+        return
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+        from prismalab.messages import GENERATION_FOLLOWUP_TEXT, MINIAPP_BUTTON_LABEL
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(MINIAPP_BUTTON_LABEL, web_app=WebAppInfo(url=MINIAPP_URL))
+        ]])
+        await _bot.send_message(chat_id=user_id, text=GENERATION_FOLLOWUP_TEXT, reply_markup=kb)
+    except Exception as e:
+        logger.warning("Follow-up miniapp button failed (task=%s): %s", task_id, e)
+
+
 def get_store():
     global _store
     if _store is None:
@@ -141,6 +156,57 @@ async def api_auth(request: Request):
         logger.warning("Failed to load tariffs: %s", e)
         tariffs = {}
 
+    # Featured express styles for main screen preview rail
+    featured_styles = []
+    try:
+        featured_titles = [
+            "Вечерний гламур", "Свадебный образ", "Студийный дым", "Клеопатра",
+            "Бордовый бархат", "Лавандовый шёлк", "Кофе в отеле", "Драматический свет",
+            "Дождливое окно",
+        ]
+        # No gender filter — featured styles are universal showcase
+        all_styles = store.get_persona_styles(active_only=True)
+        previews_map = store.get_all_style_previews_map()
+        title_to_style = {str(s.get("title") or "").strip(): s for s in all_styles}
+        for title in featured_titles:
+            s = title_to_style.get(title)
+            if not s:
+                continue
+            sid = int(s["id"])
+            urls = previews_map.get(sid) or []
+            url = urls[0] if urls else str(s.get("image_url") or "").strip()
+            if url:
+                featured_styles.append({"id": sid, "title": title, "image_url": url})
+    except Exception as e:
+        logger.warning("Failed to load featured styles: %s", e)
+
+    # Featured photosets for main screen preview rail
+    featured_packs = []
+    try:
+        featured_pack_titles = [
+            "Деловые портреты", "Фото, которые притягивают", "Барби",
+            "Алиса в стране чудес", "Обложка модельного агентства",
+            "Сияющая сказка", "Studio Noir",
+        ]
+        from .services.photosets import get_packs_list
+        packs_list = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store)
+        title_to_pack = {str(p.get("title") or "").strip(): p for p in packs_list}
+        for title in featured_pack_titles:
+            p = title_to_pack.get(title)
+            if not p:
+                continue
+            preview_urls = p.get("preview_urls") or []
+            cover = preview_urls[0] if preview_urls else str(p.get("cover_url") or "").strip()
+            if cover:
+                featured_packs.append({
+                    "id": int(p.get("id") or 0),
+                    "title": title,
+                    "image_url": cover,
+                    "num_images": int(p.get("expected_images") or 0),
+                })
+    except Exception as e:
+        logger.warning("Failed to load featured packs: %s", e)
+
     return JSONResponse({
         "user_id": user_id,
         "first_name": user["first_name"],
@@ -157,6 +223,8 @@ async def api_auth(request: Request):
         "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
         "tariffs": tariffs,
         "discount_badge": store.get_admin_setting("photosets_discount_badge") or "",
+        "featured_styles": featured_styles,
+        "featured_packs": featured_packs,
     })
 
 
@@ -364,6 +432,7 @@ async def _run_generation(
                     connect_timeout=30,
                 )
                 tg_sent = True
+                await _send_followup_miniapp_button(user_id, task_id)
             except Exception as tg_err:
                 logger.warning("TG send_document failed (task=%s, user=%s): %s", task_id, user_id, tg_err)
 
@@ -1188,14 +1257,14 @@ async def api_v2_pack_buy_credits(request: Request):
     except (ValueError, TypeError):
         return JSONResponse({"error": "Invalid pack_id"}, status_code=400)
 
-    buy_data = get_pack_buy_data(pack_id)
+    store = get_store()
+    buy_data = get_pack_buy_data(pack_id, store=store)
     if not buy_data:
         return JSONResponse({"error": "Pack not found"}, status_code=404)
     offer = buy_data["offer"]
-    credit_cost = int(offer.get("credit_cost", offer.get("expected_images", 20)))
+    credit_cost = buy_data["credit_cost"]
 
     user_id = user["user_id"]
-    store = get_store()
     profile = store.get_user(user_id)
 
     if profile.persona_credits_remaining < credit_cost:
@@ -1673,6 +1742,7 @@ async def _run_custom_generation(
                     caption=f"✨ {prompt_preview}",
                     read_timeout=60, write_timeout=60, connect_timeout=30,
                 )
+                await _send_followup_miniapp_button(user_id, task_id)
             except Exception as e:
                 logger.warning("TG send custom failed (task=%s): %s", task_id, e)
 

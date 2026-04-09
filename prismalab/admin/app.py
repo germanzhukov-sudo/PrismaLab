@@ -616,6 +616,8 @@ async def photosets_unified_page(request: Request):
             if category_filter and cat != category_filter:
                 continue
             cost_usd = float(saved_costs.get(pid, {}).get("cost_usd", 0))
+            saved_cc = saved_costs.get(pid, {}).get("credit_cost")
+            credit_cost = int(saved_cc) if saved_cc is not None else int(offer.get("credit_cost", offer.get("expected_images", 0)))
             price_rub = float(offer.get("price_rub", 0))
             generations = int(stats_map.get(pid, {}).get("generations", 0))
             total_images = int(stats_map.get(pid, {}).get("total_images", 0))
@@ -626,6 +628,7 @@ async def photosets_unified_page(request: Request):
                 "id": pid, "title": offer.get("title", f"Pack {pid}"),
                 "price_rub": price_rub, "class_name": offer.get("class_name", ""),
                 "expected_images": offer.get("expected_images", 0),
+                "credit_cost": credit_cost,
                 "cost_usd": cost_usd, "cost_rub": round(cost_rub, 2),
                 "margin_rub": round(margin_rub, 2), "margin_pct": margin_pct,
                 "generations": generations, "total_images": total_images,
@@ -663,7 +666,9 @@ async def photosets_unified_post(request: Request):
         for offer in offers:
             pid = int(offer.get("id", 0))
             cost_usd = float(form.get(f"cost_{pid}", 0))
-            items.append({"pack_id": pid, "pack_title": offer.get("title", ""), "cost_usd": cost_usd})
+            cc_raw = form.get(f"credit_cost_{pid}", "")
+            cc_val = int(cc_raw) if cc_raw.strip() else None
+            items.append({"pack_id": pid, "pack_title": offer.get("title", ""), "cost_usd": cost_usd, "credit_cost": cc_val})
         store.set_pack_costs_bulk(items)
         return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=packs&saved=1", status_code=303)
 

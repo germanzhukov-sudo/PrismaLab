@@ -32,6 +32,7 @@
                     <th style="width: 60px">№</th>
                     <th style="width: 80px">Фото</th>
                     <th>Название</th>
+                    <th>Описание</th>
                     <th>Пол</th>
                     <th>Статус</th>
                     <th style="width: 200px">Действия</th>
@@ -52,8 +53,12 @@
                     </td>
                     <td>
                         <strong>{{ s.title }}</strong>
+                    </td>
+                    <td>
                         {% if s.description %}
-                        <br><small class="text-muted">{{ s.description[:60] }}{% if s.description|length > 60 %}...{% endif %}</small>
+                        <small class="text-muted">{{ s.description[:80] }}{% if s.description|length > 80 %}...{% endif %}</small>
+                        {% else %}
+                        <small class="text-muted">—</small>
                         {% endif %}
                     </td>
                     <td>
@@ -105,7 +110,7 @@
                 {% endfor %}
                 {% if not styles %}
                 <tr>
-                    <td colspan="6" class="text-center text-muted py-4">
+                    <td colspan="7" class="text-center text-muted py-4">
                         Стилей пока нет. <a href="{{ admin_base }}/persona-styles/new">Добавить первый</a>
                     </td>
                 </tr>

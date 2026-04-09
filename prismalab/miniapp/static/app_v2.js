@@ -68,6 +68,10 @@ const state = {
     personaCreditsOriginal: 0,
     photosetsCreditsPreview: 0,
     photosetsFilter: 'all',
+    // Tab switcher
+    activeMainTab: 'express',
+    featuredStyles: [],
+    featuredPacks: [],
     // General
     hasPersona: false,
     packsUseCredits: false,
@@ -102,15 +106,22 @@ document.addEventListener('DOMContentLoaded', () => {
         state.initData = tg.initData || '';
     }
     setupDragDrop();
-    // Keyboard accessibility for div[role=button] cards
-    document.querySelectorAll('.section-card[role="button"]').forEach(card => {
-        card.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                const cta = card.querySelector('.section-card-cta');
-                if (cta) cta.click();
-            }
-        });
+    // Initialize tab switcher
+    switchMainTab(state.activeMainTab || 'express', true);
+    _initTabSwipe();
+    // Keyboard accessibility: arrow keys on tab bar
+    document.getElementById('main-tab-bar')?.addEventListener('keydown', (e) => {
+        const tabs = Array.from(document.querySelectorAll('#main-tab-bar .tab-btn'));
+        const currentIdx = tabs.findIndex(t => t.classList.contains('active'));
+        if (e.key === 'ArrowRight' && currentIdx < tabs.length - 1) {
+            e.preventDefault();
+            tabs[currentIdx + 1].focus();
+            switchMainTab(tabs[currentIdx + 1].dataset.tab);
+        } else if (e.key === 'ArrowLeft' && currentIdx > 0) {
+            e.preventDefault();
+            tabs[currentIdx - 1].focus();
+            switchMainTab(tabs[currentIdx - 1].dataset.tab);
+        }
     });
     authenticate();
 });
@@ -135,6 +146,10 @@ async function authenticate() {
                 state.photosetsCredits = data.persona_credits || 0;
                 state.tariffs = data.tariffs || {};
                 state.discountBadge = data.discount_badge || '';
+                state.featuredStyles = data.featured_styles || [];
+                state.featuredPacks = data.featured_packs || [];
+                renderFeaturedStyles();
+                renderFeaturedPacks();
                 updateBalanceDisplays();
 
                 // Check pack payment return
@@ -193,6 +208,12 @@ function showBlocked(message) {
 function updateBalanceDisplays() {
     const expressBalance = state.expressCredits.free_used ? state.expressCredits.fast : (state.expressCredits.fast + 1);
 
+    // Header balance pill
+    const hExpress = document.getElementById('header-express-bal');
+    if (hExpress) hExpress.textContent = expressBalance;
+    const hPhotosets = document.getElementById('header-photosets-bal');
+    if (hPhotosets) hPhotosets.textContent = state.photosetsCredits;
+
     // Main screen
     const mainExpress = document.getElementById('main-express-balance');
     if (mainExpress) mainExpress.textContent = expressBalance;
@@ -240,6 +261,264 @@ function updateBalanceDisplays() {
 
     // Main topup button
     // "Тарифы" button always visible — no conditional hide
+}
+
+// === Featured Styles Carousel ===
+
+const _FEATURED_STYLE_FALLBACK_TITLES = [
+    'Вечерний гламур',
+    'Свадебный образ',
+    'Студийный дым',
+    'Клеопатра',
+    'Бордовый бархат',
+    'Лавандовый шёлк',
+    'Кофе в отеле',
+    'Драматический свет',
+    'Дождливое окно',
+];
+
+function renderFeaturedStyles() {
+    const container = document.getElementById('main-express-showcase');
+    if (!container) return;
+
+    const byTitle = new Map((state.featuredStyles || []).map((s) => [String(s.title || '').trim(), s]));
+    const items = _FEATURED_STYLE_FALLBACK_TITLES.map((title) => {
+        const fromApi = byTitle.get(title);
+        return {
+            title,
+            image_url: fromApi ? String(fromApi.image_url || '').trim() : '',
+        };
+    });
+
+    container.textContent = '';
+
+    items.forEach((style) => {
+        const item = document.createElement('div');
+        item.className = 'express-showcase-item';
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            goToExpress();
+        });
+
+        const thumb = document.createElement('div');
+        thumb.className = 'express-showcase-thumb';
+        const imageUrl = String(style.image_url || '').trim();
+        if (imageUrl) {
+            const img = document.createElement('img');
+            img.src = imageUrl;
+            img.alt = style.title || '';
+            img.loading = 'lazy';
+            thumb.appendChild(img);
+        } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'express-showcase-thumb-placeholder';
+            thumb.appendChild(placeholder);
+        }
+
+        const title = document.createElement('div');
+        title.className = 'express-showcase-title';
+        title.textContent = style.title || '';
+
+        item.appendChild(thumb);
+        item.appendChild(title);
+        container.appendChild(item);
+    });
+
+    const moreItem = document.createElement('div');
+    moreItem.className = 'express-showcase-item express-showcase-more';
+    moreItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        goToExpress();
+    });
+    const moreThumb = document.createElement('div');
+    moreThumb.className = 'express-showcase-thumb';
+    moreThumb.textContent = '→';
+    const moreTitle = document.createElement('div');
+    moreTitle.className = 'express-showcase-title';
+    moreTitle.textContent = 'Все стили';
+    moreItem.appendChild(moreThumb);
+    moreItem.appendChild(moreTitle);
+    container.appendChild(moreItem);
+}
+
+function renderFeaturedPacks() {
+    const container = document.getElementById('main-photosets-showcase');
+    if (!container) return;
+
+    const packs = state.featuredPacks || [];
+    container.textContent = '';
+
+    packs.forEach((pack) => {
+        const item = document.createElement('div');
+        item.className = 'express-showcase-item';
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            goToPhotosets();
+        });
+
+        const thumb = document.createElement('div');
+        thumb.className = 'express-showcase-thumb';
+        const imageUrl = String(pack.image_url || '').trim();
+        if (imageUrl) {
+            const img = document.createElement('img');
+            img.src = imageUrl;
+            img.alt = pack.title || '';
+            img.loading = 'lazy';
+            thumb.appendChild(img);
+        } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'express-showcase-thumb-placeholder';
+            thumb.appendChild(placeholder);
+        }
+
+        const title = document.createElement('div');
+        title.className = 'express-showcase-title';
+        title.textContent = pack.title || '';
+
+        const meta = document.createElement('div');
+        meta.className = 'express-showcase-meta';
+        meta.textContent = `${pack.num_images} фото`;
+
+        item.appendChild(thumb);
+        item.appendChild(title);
+        item.appendChild(meta);
+        container.appendChild(item);
+    });
+
+    const moreItem = document.createElement('div');
+    moreItem.className = 'express-showcase-item express-showcase-more';
+    moreItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        goToPhotosets();
+    });
+    const moreThumb = document.createElement('div');
+    moreThumb.className = 'express-showcase-thumb';
+    moreThumb.textContent = '→';
+    const moreTitle = document.createElement('div');
+    moreTitle.className = 'express-showcase-title';
+    moreTitle.textContent = 'Все фотосеты';
+    moreItem.appendChild(moreThumb);
+    moreItem.appendChild(moreTitle);
+    container.appendChild(moreItem);
+}
+
+// === Tab Switcher ===
+
+const _tabAccentColors = {
+    express: 'linear-gradient(135deg, #FF6B35, #dc2626)',
+    custom: 'linear-gradient(135deg, #00B4D8, #3b82f6)',
+    photosets: 'linear-gradient(135deg, #9B5DE5, #ec4899)',
+};
+
+function switchMainTab(tab, force) {
+    if (!force && state.activeMainTab === tab) return;
+    state.activeMainTab = tab;
+    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+
+    // Update tab buttons
+    document.querySelectorAll('#main-tab-bar .tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+
+    // Slide to card
+    const tabs = Array.from(document.querySelectorAll('#tab-cards-track .tab-card'));
+    const idx = tabs.findIndex(c => c.dataset.tab === tab);
+    const track = document.getElementById('tab-cards-track');
+    if (track && idx >= 0) {
+        track.style.transform = `translateX(-${idx * 92}%)`;
+    }
+
+    // Update ambient glow
+    const glow = document.getElementById('ambient-glow');
+    if (glow && _tabAccentColors[tab]) {
+        glow.style.background = _tabAccentColors[tab];
+    }
+}
+
+function handleCardClick(card, navigateFn) {
+    const tab = card.dataset.tab;
+    if (tab !== state.activeMainTab) {
+        // Inactive card — just switch to it
+        switchMainTab(tab);
+    } else {
+        // Active card — navigate into it
+        navigateFn();
+    }
+}
+
+function _initTabSwipe() {
+    const area = document.getElementById('tab-content-area');
+    const track = document.getElementById('tab-cards-track');
+    if (!area || !track) return;
+
+    let startX = 0, startY = 0, currentX = 0;
+    let isDragging = false, directionLocked = false, isHorizontal = false;
+    const THRESHOLD = 40;
+    const CARD_WIDTH_PCT = 92;
+
+    function _getBaseOffset() {
+        const tabs = Array.from(track.querySelectorAll('.tab-card'));
+        const idx = tabs.findIndex(c => c.dataset.tab === state.activeMainTab);
+        return idx >= 0 ? -idx * CARD_WIDTH_PCT : 0;
+    }
+
+    area.addEventListener('touchstart', (e) => {
+        // Don't capture if starting inside showcase horizontal scroll
+        if (e.target.closest('.express-showcase-rail')) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        currentX = startX;
+        isDragging = true;
+        directionLocked = false;
+        isHorizontal = false;
+        track.style.transition = 'none';
+    }, { passive: true });
+
+    area.addEventListener('touchmove', (e) => {
+        if (!isDragging) return;
+        currentX = e.touches[0].clientX;
+        const dx = currentX - startX;
+        const dy = e.touches[0].clientY - startY;
+
+        // Lock direction after 10px movement
+        if (!directionLocked && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+            directionLocked = true;
+            isHorizontal = Math.abs(dx) > Math.abs(dy);
+        }
+        if (!isHorizontal) return;
+
+        // Drag the track
+        const basePct = _getBaseOffset();
+        const dragPx = dx;
+        const areaWidth = area.offsetWidth;
+        const dragPct = (dragPx / areaWidth) * 100;
+        track.style.transform = `translateX(${basePct + dragPct}%)`;
+    }, { passive: true });
+
+    area.addEventListener('touchend', () => {
+        if (!isDragging) return;
+        isDragging = false;
+        track.style.transition = '';
+
+        if (!isHorizontal) {
+            // Snap back
+            track.style.transform = `translateX(${_getBaseOffset()}%)`;
+            return;
+        }
+
+        const dx = currentX - startX;
+        const tabs = Array.from(track.querySelectorAll('.tab-card'));
+        const currentIdx = tabs.findIndex(c => c.dataset.tab === state.activeMainTab);
+
+        if (dx < -THRESHOLD && currentIdx < tabs.length - 1) {
+            switchMainTab(tabs[currentIdx + 1].dataset.tab);
+        } else if (dx > THRESHOLD && currentIdx > 0) {
+            switchMainTab(tabs[currentIdx - 1].dataset.tab);
+        } else {
+            // Snap back to current
+            track.style.transform = `translateX(${_getBaseOffset()}%)`;
+        }
+    }, { passive: true });
 }
 
 // === Navigation ===
@@ -925,6 +1204,9 @@ function hideProviderInfo() {
 
 async function loadPhotosets() {
     showScreen('photosets');
+    // Hide "Докупить +" immediately — state.hasPersona is known from auth
+    const topupBtn = document.getElementById('photosets-topup-btn');
+    if (topupBtn) topupBtn.style.display = state.hasPersona ? '' : 'none';
     const grid = document.getElementById('photosets-grid');
     grid.innerHTML = renderSectionLoading('Нужно немного времени, чтобы загрузить фотосеты. Пожалуйста, никуда не убегайте');
 
@@ -959,7 +1241,8 @@ async function loadPhotosets() {
         state.photosetsCreditsPreview = state.photosetsCredits;
         state.selectedPersonaStyles = [];
         renderPhotosets();
-        renderScreenFooters('photosets');
+        ensurePhotosetsFooter();
+        updatePhotosetsPreviewBalance();
     } catch (e) {
         console.error('Load photosets error:', e);
         grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Ошибка загрузки</div>';
@@ -1025,8 +1308,9 @@ function renderPhotosets() {
                 ${renderPhotosetCardPreview(item)}
                 <div class="photoset-card-info">
                     <div class="photoset-card-title">${item.title || ''}</div>
-                    <div class="photoset-card-meta">
-                        <span class="photoset-card-price">${numImages} фото · &#128142; ${creditCost}</span>
+                    <div class="photoset-card-meta">${numImages} фото</div>
+                    <div class="photoset-card-cost">
+                        <span class="badge-prism"></span> ${creditCost} ${pluralCredits(creditCost)}
                     </div>
                 </div>
             </div>`;
@@ -1310,7 +1594,7 @@ function togglePhotosetStyle(entityId) {
         if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     }
     updatePhotosetsPreviewBalance();
-    updatePhotosetsGenerateButton();
+    ensurePhotosetsFooter();
     renderPhotosets();
 }
 
@@ -1318,23 +1602,53 @@ function updatePhotosetsPreviewBalance() {
     // ONLY update photosets catalog header — not main screen or profile
     const pCredits = document.getElementById('photosets-credits-count');
     if (pCredits) pCredits.textContent = state.photosetsCreditsPreview;
+    // Hide "Докупить +" when no persona — footer handles that state
+    const topupBtn = document.getElementById('photosets-topup-btn');
+    if (topupBtn) topupBtn.style.display = state.hasPersona ? '' : 'none';
 }
 
-function updatePhotosetsGenerateButton() {
-    const footer = document.getElementById('photosets-generate-footer');
-    if (!footer) return;
+/**
+ * Single source of truth for all photosets footers.
+ * Declarative: sets correct state based on current conditions.
+ * Called after any photosets state change (load, toggle style, navigate).
+ */
+function ensurePhotosetsFooter() {
+    const createFooter = document.getElementById('photosets-create-footer');
+    const topupFooter = document.getElementById('photosets-topup-footer');
+    const generateFooter = document.getElementById('photosets-generate-footer');
+    const grid = document.getElementById('photosets-grid');
+
+    // Default: hide all photosets footers
+    if (createFooter) createFooter.style.display = 'none';
+    if (topupFooter) topupFooter.style.display = 'none';
+    if (generateFooter) generateFooter.style.display = 'none';
+    if (grid) grid.classList.remove('has-footer');
+
     const selected = state.selectedPersonaStyles || [];
+
+    // Priority 1: Generate button (persona + selected styles)
     if (state.hasPersona && selected.length > 0) {
-        footer.style.display = 'flex';
-        document.getElementById('photosets-generate-btn-text').textContent = `Сгенерировать (${selected.length})`;
-        // Hide tariff footers when generate is shown
-        const cf = document.getElementById('photosets-create-footer');
-        const tf = document.getElementById('photosets-topup-footer');
-        if (cf) cf.style.display = 'none';
-        if (tf) tf.style.display = 'none';
-    } else {
-        footer.style.display = 'none';
+        if (generateFooter) {
+            generateFooter.style.display = 'flex';
+            const btnText = document.getElementById('photosets-generate-btn-text');
+            if (btnText) btnText.textContent = `Сгенерировать (${selected.length})`;
+        }
+        if (grid) grid.classList.add('has-footer');
+        return;
     }
+
+    // Priority 2: No persona — show create tariff pills
+    if (!state.hasPersona) {
+        if (createFooter) {
+            _renderTariffButtonsInto('create-tariff-buttons', 'create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+            createFooter.style.display = '';
+            if (grid) grid.classList.add('has-footer');
+        }
+        return;
+    }
+
+    // Has persona (with or without credits, no selection) → no sticky footer
+    // User uses header "Докупить +" button instead
 }
 
 async function generatePhotosetBatch() {
@@ -1394,16 +1708,7 @@ function renderScreenFooters(screen) {
 
     // 2. Show footers for current screen
     if (screen === 'photosets') {
-        const createFooter = document.getElementById('photosets-create-footer');
-        if (createFooter) {
-            if (!state.hasPersona) {
-                _renderTariffButtonsInto('create-tariff-buttons', 'create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
-                createFooter.style.display = '';
-                const grid = document.getElementById('photosets-grid');
-                if (grid) grid.classList.add('has-footer');
-            }
-        }
-        updatePhotosetsGenerateButton();
+        ensurePhotosetsFooter();
     }
 
     // Express / Custom — show buy footer when no credits
@@ -1471,23 +1776,75 @@ function openAllTariffsScreen() {
     const singleButtons = document.getElementById('tariffs-page-buttons');
     if (singleButtons) singleButtons.innerHTML = '';
     document.getElementById('tariffs-page-info').textContent = '';
-    let html = '';
-    html += `<div class="tariff-section"><h3 class="tariff-section-title">Экспресс</h3>
-        <div class="persona-buy-footer-buttons" id="all-fast-buttons"></div></div>`;
-    if (!state.hasPersona) {
-        html += `<div class="tariff-section"><h3 class="tariff-section-title">Создание Персоны</h3>
-            <div class="persona-buy-footer-buttons" id="all-create-buttons"></div></div>`;
-    } else {
-        html += `<div class="tariff-section"><h3 class="tariff-section-title">Фотосеты — пополнение</h3>
-            <div class="persona-buy-footer-buttons" id="all-topup-buttons"></div></div>`;
-    }
-    sections.innerHTML = html;
     const payBtnId = 'tariffs-page-pay-btn';
     const payBtn = document.getElementById(payBtnId);
     if (payBtn) { payBtn.style.display = 'none'; payBtn.disabled = false; }
+
+    let html = '';
+
+    // Section 1: Express & Custom
+    html += `<div class="tariff-section">
+        <h3 class="tariff-section-title">Экспресс и Свой запрос</h3>
+        <div class="tariff-text">
+            <strong>Экспресс</strong> и <strong>Свой запрос</strong> используют общий баланс.
+            Вы пополняете кредиты один раз и дальше тратите их в любом из этих разделов:<br><br>
+            — выбираете готовые стили в <strong>Экспресс</strong><br>
+            — или создаёте фото по своему описанию в <strong>Свой запрос</strong><br><br>
+            <span class="tariff-highlight">1 кредит = 1 фото</span><br>
+            в любой доступной модели: Seedream или Nano Banana Pro<br><br>
+            Ниже — тарифы на пополнение.
+        </div>
+        <div class="persona-buy-footer-buttons" id="all-fast-buttons"></div>
+    </div>`;
+
+    // Section 2: Photosets
+    html += `<div class="tariff-section">
+        <h3 class="tariff-section-title">Фотосеты</h3>
+        <div class="tariff-text">
+            <strong>Фотосеты</strong> — это премиальный формат для тех, кто хочет не просто красивые картинки, а узнаваемый результат с высоким сходством.<br><br>
+            Стоимость зависит от тематики и количества фото в пакете.
+            Перед первым заказом мы попросим 10 ваших фото и на их основе создадим <strong>персональную модель</strong>.<br><br>
+            Это позволяет добиться более точной передачи лица:
+            черты, взгляд, форма лица, мимика и общее ощущение "это действительно я".<br><br>
+            <strong>Обучение модели уже входит в стоимость первого фотосета.</strong>
+        </div>`;
+
+    if (!state.hasPersona) {
+        html += `<div class="tariff-subsection">
+            <div class="tariff-subsection-label">Создание модели + кредиты</div>
+            <div class="persona-buy-footer-buttons" id="all-create-buttons"></div>
+        </div>
+        <div class="tariff-text tariff-text-spaced">
+            После создания модели следующие заказы будут <strong>существенно дешевле</strong> — останется только выбрать новый сет и получить готовую серию фото.
+        </div>
+        <div class="tariff-subsection tariff-pills-disabled">
+            <div class="tariff-subsection-label">Пополнение кредитов для фотосетов</div>
+            <div class="persona-buy-footer-buttons" id="all-topup-buttons-preview"></div>
+            <div class="tariff-disabled-note">Доступно после создания модели</div>
+        </div>`;
+    } else {
+        html += `<div class="tariff-subsection">
+            <div class="tariff-subsection-label">Пополнение кредитов</div>
+            <div class="persona-buy-footer-buttons" id="all-topup-buttons"></div>
+        </div>`;
+    }
+
+    html += `</div>`;
+    sections.innerHTML = html;
+
+    // Render tariff pills
     _renderTariffButtonsInto('all-fast-buttons', payBtnId, 'fast', state.tariffs.fast || []);
     if (!state.hasPersona) {
         _renderTariffButtonsInto('all-create-buttons', payBtnId, 'persona_create', state.tariffs.persona_create || []);
+        _renderTariffButtonsInto('all-topup-buttons-preview', payBtnId, 'persona_topup', state.tariffs.persona_topup || []);
+        // Disable preview topup buttons
+        const previewContainer = document.getElementById('all-topup-buttons-preview');
+        if (previewContainer) {
+            previewContainer.querySelectorAll('.persona-buy-btn').forEach(btn => {
+                btn.disabled = true;
+                btn.style.pointerEvents = 'none';
+            });
+        }
     } else {
         _renderTariffButtonsInto('all-topup-buttons', payBtnId, 'persona_topup', state.tariffs.persona_topup || []);
     }
@@ -1547,6 +1904,10 @@ async function buyTariffPage() {
         if (data.payment_url) {
             if (tg) { tg.openLink(data.payment_url); }
             else { window.open(data.payment_url, '_blank'); }
+            // For persona_create: close Mini App — bot will guide photo upload
+            if (mode === 'persona_create' && tg) {
+                tg.close();
+            }
         }
     } catch (e) {
         console.error('Tariff buy error:', e);

@@ -271,10 +271,17 @@ class PrismaLabStore:
                     CREATE TABLE IF NOT EXISTS {self._admin_pack_costs_table} (
                         pack_id INTEGER PRIMARY KEY,
                         pack_title TEXT,
-                        cost_usd DECIMAL(10,4) DEFAULT 0
+                        cost_usd DECIMAL(10,4) DEFAULT 0,
+                        credit_cost INTEGER DEFAULT NULL
                     )
                     """,
                 )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            # Migration: add credit_cost column if missing
+            try:
+                self._execute(conn, f"ALTER TABLE {self._admin_pack_costs_table} ADD COLUMN IF NOT EXISTS credit_cost INTEGER DEFAULT NULL")
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -478,13 +485,18 @@ class PrismaLabStore:
         with self._connect() as conn:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"SELECT pack_id, pack_title, cost_usd FROM {self._admin_pack_costs_table} ORDER BY pack_id")
+                cur.execute(f"SELECT pack_id, pack_title, cost_usd, credit_cost FROM {self._admin_pack_costs_table} ORDER BY pack_id")
                 return [dict(row) for row in cur.fetchall()]
 
     def get_pack_costs_map(self) -> dict[int, float]:
         """Получить словарь {pack_id: cost_usd} для расчёта себестоимости."""
         rows = self.get_pack_costs()
         return {int(r["pack_id"]): float(r["cost_usd"] or 0) for r in rows}
+
+    def get_pack_credit_costs_map(self) -> dict[int, int]:
+        """Получить словарь {pack_id: credit_cost} — только admin overrides."""
+        rows = self.get_pack_costs()
+        return {int(r["pack_id"]): int(r["credit_cost"]) for r in rows if r.get("credit_cost") is not None}
 
     def set_pack_costs_bulk(self, items: list[dict]) -> None:
         """Массовое обновление себестоимости паков. items = [{pack_id, pack_title, cost_usd}, ...]"""
@@ -494,13 +506,16 @@ class PrismaLabStore:
             from psycopg2.extras import RealDictCursor
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 for item in items:
+                    cc = item.get("credit_cost")
+                    cc_val = int(cc) if cc is not None and str(cc).strip() else None
                     cur.execute(f"""
-                        INSERT INTO {self._admin_pack_costs_table} (pack_id, pack_title, cost_usd)
-                        VALUES (%s, %s, %s)
+                        INSERT INTO {self._admin_pack_costs_table} (pack_id, pack_title, cost_usd, credit_cost)
+                        VALUES (%s, %s, %s, %s)
                         ON CONFLICT (pack_id) DO UPDATE SET
                             pack_title = EXCLUDED.pack_title,
-                            cost_usd = EXCLUDED.cost_usd
-                    """, (int(item["pack_id"]), str(item.get("pack_title", "")), float(item.get("cost_usd", 0))))
+                            cost_usd = EXCLUDED.cost_usd,
+                            credit_cost = EXCLUDED.credit_cost
+                    """, (int(item["pack_id"]), str(item.get("pack_title", "")), float(item.get("cost_usd", 0)), cc_val))
                 conn.commit()
 
     def get_pack_stats(self, date_from: str | None = None, date_to: str | None = None) -> list[dict]:

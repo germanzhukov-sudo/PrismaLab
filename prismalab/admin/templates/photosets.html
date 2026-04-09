@@ -54,6 +54,7 @@
                         <th>Название</th>
                         <th>Класс</th>
                         <th>Фото</th>
+                        <th>Кредиты</th>
                         <th>Цена</th>
                         <th>Себест. ($)</th>
                         <th>Себест. (₽)</th>
@@ -69,6 +70,11 @@
                         <td><strong>{{ p.title }}</strong></td>
                         <td><code>{{ p.class_name }}</code></td>
                         <td>{{ p.expected_images }}</td>
+                        <td>
+                            <input type="number" min="1" class="form-control form-control-sm"
+                                   name="credit_cost_{{ p.id }}" value="{{ p.credit_cost }}"
+                                   style="width: 80px;">
+                        </td>
                         <td>₽{{ "%.0f"|format(p.price_rub) }}</td>
                         <td>
                             <input type="number" step="0.01" min="0" class="form-control form-control-sm"
@@ -131,6 +137,7 @@
                         <th>№</th>
                         <th>Фото</th>
                         <th>Название</th>
+                        <th>Описание</th>
                         <th>Пол</th>
                         <th>Кредиты</th>
                         <th>Себест. ($)</th>
@@ -155,6 +162,13 @@
                             {% endif %}
                         </td>
                         <td><strong>{{ s.title }}</strong></td>
+                        <td style="max-width:200px">
+                            {% if s.description %}
+                            <small class="text-muted">{{ s.description[:80] }}{% if s.description|length > 80 %}...{% endif %}</small>
+                            {% else %}
+                            <small class="text-muted">&mdash;</small>
+                            {% endif %}
+                        </td>
                         <td>
                             {% if s.gender == 'female' %}<span class="badge bg-danger">Жен</span>
                             {% elif s.gender == 'male' %}<span class="badge bg-primary">Муж</span>

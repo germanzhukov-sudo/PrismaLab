@@ -516,16 +516,29 @@ async def get_packs_list(*, astria_api_key: str, store=None) -> list[dict]:
         if store is not None:
             pack_price = get_pack_sell_price(store, int(offer["id"]), pack_price)
 
+        cc = int(offer.get("credit_cost", expected_images))
         result.append({
             "id": offer["id"],
             "title": offer["title"],
             "price_rub": pack_price,
             "expected_images": expected_images,
-            "credit_cost": offer.get("credit_cost", expected_images),
+            "credit_cost": cc,
             "cover_url": pack_data.get("cover_url", ""),
             "preview_urls": preview_urls,
             "category": offer.get("category", "female"),
         })
+
+    # Apply admin credit_cost overrides (single source of truth)
+    if store is not None:
+        try:
+            cc_map = store.get_pack_credit_costs_map()
+            for item in result:
+                override = cc_map.get(int(item["id"]))
+                if override is not None:
+                    item["credit_cost"] = override
+        except Exception:
+            pass  # DB unavailable — use env defaults
+
     return result
 
 
@@ -549,26 +562,51 @@ async def get_pack_detail(pack_id: int, *, astria_api_key: str, store=None) -> d
     if store is not None:
         price_rub = get_pack_sell_price(store, pack_id, price_rub)
 
+    cc = int(offer.get("credit_cost", expected_images))
+    # Admin credit_cost override
+    if store is not None:
+        try:
+            cc_map = store.get_pack_credit_costs_map()
+            override = cc_map.get(pack_id)
+            if override is not None:
+                cc = override
+        except Exception:
+            pass
+
     return {
         "id": offer["id"],
         "title": offer["title"],
         "price_rub": price_rub,
         "expected_images": expected_images,
-        "credit_cost": offer.get("credit_cost", expected_images),
+        "credit_cost": cc,
         "cover_url": pack_data["cover_url"],
         "examples": pack_data["examples"],
     }
 
 
-def get_pack_buy_data(pack_id: int) -> dict | None:
-    """Возвращает offer + class_key для покупки. None если пак не найден."""
+def get_pack_buy_data(pack_id: int, *, store=None) -> dict | None:
+    """Возвращает offer + class_key для покупки. None если пак не найден.
+
+    store: если передан, credit_cost берётся с учётом admin override.
+    """
     offers = load_pack_offers()
     offer = next((o for o in offers if o["id"] == pack_id), None)
     if not offer:
         return None
+    # Apply admin credit_cost override
+    cc = int(offer.get("credit_cost", offer.get("expected_images", 20)))
+    if store is not None:
+        try:
+            cc_map = store.get_pack_credit_costs_map()
+            override = cc_map.get(pack_id)
+            if override is not None:
+                cc = override
+        except Exception:
+            pass
     return {
         "offer": offer,
         "class_key": resolve_pack_class_key(offer),
+        "credit_cost": cc,
     }
 
 
