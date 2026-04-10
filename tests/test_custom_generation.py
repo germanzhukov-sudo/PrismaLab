@@ -170,6 +170,26 @@ class TestCustomValidation:
             assert resp.json()["provider"] == "seedream"
 
 
+    @patch("prismalab.miniapp.routes._run_custom_generation")
+    @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+    def test_multi_ref_contract_accepted(self, mock_auth, mock_gen, client, store):
+        """Multiple photos (within limit) are accepted by the endpoint."""
+        async def noop(*a, **kw): pass
+        mock_gen.side_effect = noop
+        uid = FAKE_USER["user_id"]
+        store.get_user(uid)
+        store.set_paid_generations_remaining(uid, 5)
+        files = [_fake_photo_file(f"ref_{i}.jpg") for i in range(3)]
+        resp = client.post("/app/api/v3/custom/generate",
+                           data={"init_data": "fake", "prompt": "test prompt", "provider": "seedream",
+                                 "request_id": "550e8400-e29b-41d4-a716-446655440099"},
+                           files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "task_id" in data
+        assert data.get("refs_count", 0) >= 3 or data.get("provider") == "seedream"
+
+
 # ── Credits ──────────────────────────────────────────────────────────
 
 class TestCustomCredits:

@@ -264,6 +264,16 @@ function updateBalanceDisplays() {
 
     // Main topup button
     // "Тарифы" button always visible — no conditional hide
+
+    // Sync generate button visibility with current credits state
+    const hasCredits = canGenerateExpress();
+    const expressGenBtn = document.getElementById('express-generate-btn');
+    if (expressGenBtn && expressGenBtn.style.display !== 'none') {
+        // Only hide if it was supposed to be visible (photo uploaded) but credits ran out
+        if (!hasCredits && state.expressFile) expressGenBtn.style.display = 'none';
+    }
+    const customGenBtn = document.getElementById('custom-generate-btn');
+    if (customGenBtn) customGenBtn.style.display = hasCredits ? '' : 'none';
 }
 
 // === Featured Styles Carousel ===

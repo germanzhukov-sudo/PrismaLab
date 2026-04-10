@@ -612,6 +612,35 @@ def test_auth_returns_featured_styles_and_packs(mock_auth, client, store):
     assert isinstance(data["featured_packs"], list)
 
 
+# ── Analytics: cost calculation helpers ─────────────────────────
+
+def test_generation_costs_by_provider_includes_custom():
+    """New helper includes seedream, nano, and legacy buckets."""
+    from prismalab.storage import PrismaLabStore
+    result = PrismaLabStore.calculate_generation_costs_by_provider(
+        seedream_count=10, nano_count=5, legacy_count=3,
+        cost_seedream=0.035, cost_nano=0.035, usd_rub=90.0,
+    )
+    assert result["seedream"] == round(10 * 0.035 * 90, 2)
+    assert result["nano"] == round(5 * 0.035 * 90, 2)
+    assert result["legacy"] == round(3 * 0.035 * 90, 2)  # legacy at seedream rate
+    assert result["total"] == result["seedream"] + result["nano"] + result["legacy"]
+
+
+def test_legacy_provider_normalized_to_seedream_rate():
+    """Unknown/legacy providers should be costed at seedream rate, not zero."""
+    from prismalab.storage import PrismaLabStore
+    result = PrismaLabStore.calculate_generation_costs_by_provider(
+        seedream_count=0, nano_count=0, legacy_count=7,
+        cost_seedream=0.035, cost_nano=0.05, usd_rub=90.0,
+    )
+    # Legacy uses seedream rate (0.035), not nano rate (0.05)
+    assert result["legacy"] == round(7 * 0.035 * 90, 2)
+    assert result["seedream"] == 0
+    assert result["nano"] == 0
+    assert result["total"] == result["legacy"]
+
+
 # ── Phase 2: POST /app/api/fast/buy ─────────────────────────────
 
 

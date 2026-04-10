@@ -2154,7 +2154,7 @@ class PrismaLabStore:
                         stats["pack_purchases"] = cnt
                 stats["persona_purchases"] = stats["persona_create_purchases"] + stats["persona_topup_purchases"] + stats["pack_purchases"]
 
-                # Для маржи: генерации по типам и создания персон
+                # Для маржи: генерации по типам, провайдерам (fast + custom)
                 cur.execute(f"""SELECT
                     COUNT(*) FILTER (
                         WHERE event_type = 'generation'
@@ -2166,14 +2166,47 @@ class PrismaLabStore:
                           AND event_data->>'mode' = 'fast'
                           AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
                     ) as fast_seedream,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'fast'
+                          AND event_data->>'provider' IS NOT NULL
+                          AND event_data->>'provider' NOT IN ('seedream', 'nano-banana-pro')
+                    ) as fast_legacy,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'custom'
+                          AND event_data->>'provider' = 'nano-banana-pro'
+                    ) as custom_nano,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'custom'
+                          AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
+                    ) as custom_seedream,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'generation'
+                          AND event_data->>'mode' = 'custom'
+                          AND event_data->>'provider' IS NOT NULL
+                          AND event_data->>'provider' NOT IN ('seedream', 'nano-banana-pro')
+                    ) as custom_legacy,
                     COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
                 FROM {self._user_events_table} WHERE event_type = 'generation'""")
                 row = cur.fetchone()
                 fast_nano = int(row["fast_nano"] or 0) if row else 0
                 fast_seedream = int(row["fast_seedream"] or 0) if row else 0
+                fast_legacy = int(row["fast_legacy"] or 0) if row else 0
+                custom_nano = int(row["custom_nano"] or 0) if row else 0
+                custom_seedream = int(row["custom_seedream"] or 0) if row else 0
+                custom_legacy = int(row["custom_legacy"] or 0) if row else 0
                 persona_gens = int(row["persona"] or 0) if row else 0
                 stats["fast_generations_by_provider"]["seedream"] = fast_seedream
                 stats["fast_generations_by_provider"]["nano_banana"] = fast_nano
+                stats["fast_generations_by_provider"]["legacy"] = fast_legacy
+                stats["custom_generations_by_provider"] = {
+                    "seedream": custom_seedream,
+                    "nano_banana": custom_nano,
+                    "legacy": custom_legacy,
+                    "total": custom_seedream + custom_nano + custom_legacy,
+                }
 
                 cur.execute(f"SELECT COUNT(*) as cnt FROM {self._payments_table} WHERE product_type = 'persona_create'")
                 row = cur.fetchone()
@@ -2197,7 +2230,7 @@ class PrismaLabStore:
                 except Exception:
                     pass
 
-                # Расчёт себестоимости и маржи
+                # Расчёт себестоимости и маржи (fast + custom)
                 fast_costs = self._calculate_fast_costs(
                     fast_seedream=fast_seedream,
                     fast_nano=fast_nano,
@@ -2205,11 +2238,26 @@ class PrismaLabStore:
                     cost_nano_banana=COST_NANO_BANANA,
                     usd_rub=USD_RUB,
                 )
+                custom_costs = self.calculate_generation_costs_by_provider(
+                    seedream_count=custom_seedream,
+                    nano_count=custom_nano,
+                    legacy_count=custom_legacy,
+                    cost_seedream=COST_FAST_PHOTO,
+                    cost_nano=COST_NANO_BANANA,
+                    usd_rub=USD_RUB,
+                )
+                fast_legacy_costs = self.calculate_generation_costs_by_provider(
+                    seedream_count=0, nano_count=0, legacy_count=fast_legacy,
+                    cost_seedream=COST_FAST_PHOTO, cost_nano=COST_NANO_BANANA, usd_rub=USD_RUB,
+                )
                 stats["fast_costs_by_provider"]["seedream"] = fast_costs["fast_seedream"]
                 stats["fast_costs_by_provider"]["nano_banana"] = fast_costs["fast_nano"]
+                stats["fast_costs_by_provider"]["legacy"] = fast_legacy_costs["legacy"]
+                stats["custom_costs_by_provider"] = custom_costs
                 total_cost = (
                     persona_creates * COST_PERSONA_CREATE * USD_RUB
-                    + fast_costs["fast_total"]
+                    + fast_costs["fast_total"] + fast_legacy_costs["legacy"]
+                    + custom_costs["total"]
                     + persona_gens * COST_PERSONA_PHOTO * USD_RUB
                     + pack_cost_total_usd * USD_RUB
                 )
@@ -2424,46 +2472,34 @@ class PrismaLabStore:
 
                 # Генерации по типам (fast / persona)
                 if has_dates:
-                    cur.execute(
-                        f"""SELECT
+                    _gen_sql = f"""SELECT
                             COUNT(*) as total,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
-                            COUNT(*) FILTER (
-                                WHERE event_data->>'mode' = 'fast'
-                                  AND event_data->>'provider' = 'nano-banana-pro'
-                            ) as fast_nano,
-                            COUNT(*) FILTER (
-                                WHERE event_data->>'mode' = 'fast'
-                                  AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
-                            ) as fast_seedream,
-                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
-                        FROM {self._user_events_table}
-                        WHERE event_type = 'generation' AND created_at >= %s AND created_at <= %s""",
-                        (d_from, d_to),
-                    )
-                else:
-                    cur.execute(
-                        f"""SELECT
-                            COUNT(*) as total,
-                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast') as fast,
-                            COUNT(*) FILTER (
-                                WHERE event_data->>'mode' = 'fast'
-                                  AND event_data->>'provider' = 'nano-banana-pro'
-                            ) as fast_nano,
-                            COUNT(*) FILTER (
-                                WHERE event_data->>'mode' = 'fast'
-                                  AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')
-                            ) as fast_seedream,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast' AND event_data->>'provider' = 'nano-banana-pro') as fast_nano,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast' AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')) as fast_seedream,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'fast' AND event_data->>'provider' IS NOT NULL AND event_data->>'provider' NOT IN ('seedream', 'nano-banana-pro')) as fast_legacy,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'custom') as custom_total,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'custom' AND event_data->>'provider' = 'nano-banana-pro') as custom_nano,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'custom' AND (event_data->>'provider' IS NULL OR event_data->>'provider' = 'seedream')) as custom_seedream,
+                            COUNT(*) FILTER (WHERE event_data->>'mode' = 'custom' AND event_data->>'provider' IS NOT NULL AND event_data->>'provider' NOT IN ('seedream', 'nano-banana-pro')) as custom_legacy,
                             COUNT(*) FILTER (WHERE event_data->>'mode' = 'persona') as persona
                         FROM {self._user_events_table}
                         WHERE event_type = 'generation'"""
-                    )
+                    if has_dates:
+                        cur.execute(_gen_sql + " AND created_at >= %s AND created_at <= %s", (d_from, d_to))
+                    else:
+                        cur.execute(_gen_sql)
                 row = cur.fetchone()
                 if row:
                     stats["generations"]["total"] = int(row["total"] or 0)
                     stats["generations"]["fast"] = int(row["fast"] or 0)
                     stats["generations"]["fast_nano"] = int(row["fast_nano"] or 0)
                     stats["generations"]["fast_seedream"] = int(row["fast_seedream"] or 0)
+                    stats["generations"]["fast_legacy"] = int(row["fast_legacy"] or 0)
+                    stats["generations"]["custom_total"] = int(row["custom_total"] or 0)
+                    stats["generations"]["custom_nano"] = int(row["custom_nano"] or 0)
+                    stats["generations"]["custom_seedream"] = int(row["custom_seedream"] or 0)
+                    stats["generations"]["custom_legacy"] = int(row["custom_legacy"] or 0)
                     stats["generations"]["persona"] = int(row["persona"] or 0)
 
                 # Бесплатные генерации (юзеры без платежей) — LEFT JOIN вместо NOT EXISTS
@@ -2524,24 +2560,39 @@ class PrismaLabStore:
                 except Exception:
                     pass
 
-                # Расчёт себестоимости
+                # Расчёт себестоимости (fast + custom + legacy)
                 cost_persona_create = persona_creates * COST_PERSONA_CREATE * USD_RUB
                 fast_costs = self._calculate_fast_costs(
-                    fast_seedream=stats["generations"]["fast_seedream"],
-                    fast_nano=stats["generations"]["fast_nano"],
+                    fast_seedream=stats["generations"].get("fast_seedream", 0),
+                    fast_nano=stats["generations"].get("fast_nano", 0),
                     cost_fast_photo=COST_FAST_PHOTO,
                     cost_nano_banana=COST_NANO_BANANA,
                     usd_rub=USD_RUB,
                 )
-                cost_fast_photos = fast_costs["fast_total"]
+                custom_costs = self.calculate_generation_costs_by_provider(
+                    seedream_count=stats["generations"].get("custom_seedream", 0),
+                    nano_count=stats["generations"].get("custom_nano", 0),
+                    legacy_count=stats["generations"].get("custom_legacy", 0),
+                    cost_seedream=COST_FAST_PHOTO,
+                    cost_nano=COST_NANO_BANANA,
+                    usd_rub=USD_RUB,
+                )
+                fast_legacy_cost = float(stats["generations"].get("fast_legacy", 0)) * COST_FAST_PHOTO * USD_RUB
+                cost_fast_photos = fast_costs["fast_total"] + fast_legacy_cost
+                cost_custom_photos = custom_costs["total"]
                 cost_persona_photos = stats["generations"]["persona"] * COST_PERSONA_PHOTO * USD_RUB
                 cost_packs = pack_cost_usd * USD_RUB
-                total_cost = cost_persona_create + cost_fast_photos + cost_persona_photos + cost_packs
+                total_cost = cost_persona_create + cost_fast_photos + cost_custom_photos + cost_persona_photos + cost_packs
 
                 stats["costs"]["persona_create"] = round(cost_persona_create, 2)
                 stats["costs"]["fast_photos"] = round(cost_fast_photos, 2)
                 stats["costs"]["fast_seedream"] = fast_costs["fast_seedream"]
                 stats["costs"]["fast_nano"] = fast_costs["fast_nano"]
+                stats["costs"]["fast_legacy"] = round(fast_legacy_cost, 2)
+                stats["costs"]["custom_photos"] = round(cost_custom_photos, 2)
+                stats["costs"]["custom_seedream"] = custom_costs["seedream"]
+                stats["costs"]["custom_nano"] = custom_costs["nano"]
+                stats["costs"]["custom_legacy"] = custom_costs["legacy"]
                 stats["costs"]["persona_photos"] = round(cost_persona_photos, 2)
                 stats["costs"]["packs"] = round(cost_packs, 2)
                 stats["costs"]["total"] = round(total_cost, 2)
