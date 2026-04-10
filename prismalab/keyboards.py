@@ -192,9 +192,9 @@ FAST_STYLES_PER_PAGE = 8
 
 
 def _fast_style_label(style_id: str) -> str:
-    """Подпись стиля для Экспресс-фото; для custom возвращает «Свой запрос»."""
+    """Подпись стиля для Экспресс-фото; для custom возвращает «Своя идея»."""
     if style_id == "custom":
-        return "Свой запрос"
+        return "Своя идея"
     return next((l for l, s in FAST_STYLES_MALE + FAST_STYLES_FEMALE if s == style_id), style_id)
 
 
@@ -213,7 +213,7 @@ def _fast_style_choice_keyboard(
     from_profile: bool = False,
     page: int = 0,
 ) -> InlineKeyboardMarkup:
-    """Стили по страницам (как в Персоне) + Свой запрос + навигация + Тарифы/Назад."""
+    """Стили по страницам (как в Персоне) + Своя идея + навигация + Тарифы/Назад."""
     styles = FAST_STYLES_FEMALE if gender == "female" else FAST_STYLES_MALE
     total = len(styles)
     total_pages = max(1, (total + FAST_STYLES_PER_PAGE - 1) // FAST_STYLES_PER_PAGE)
@@ -224,7 +224,7 @@ def _fast_style_choice_keyboard(
     page_styles = styles[start:end]
 
     rows = [[InlineKeyboardButton(label, callback_data=f"pl_fast_style:{sid}")] for label, sid in page_styles]
-    rows.append([InlineKeyboardButton("✏️ Свой запрос", callback_data="pl_fast_style:custom")])
+    rows.append([InlineKeyboardButton("✏️ Своя идея", callback_data="pl_fast_style:custom")])
 
     # ctx: 0=main(pl_fast_back), 1=back_to_ready(pl_fast_show_ready), 2=from_profile(pl_profile)
     ctx = 2 if from_profile else (1 if back_to_ready else 0)

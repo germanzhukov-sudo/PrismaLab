@@ -65,7 +65,7 @@ import prismalab.bot as _bot  # noqa: E402
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Приём своего запроса в Экспресс-фото (стиль «Свой запрос»)."""
+    """Приём своей идеи в Экспресс-фото (стиль «Своя идея»)."""
     if not update.message or not update.message.text:
         return
     user_id = int(update.effective_user.id) if update.effective_user else 0
@@ -107,7 +107,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                         chat_id=chat_id,
                         user_id=user_id,
                         style_id="custom",
-                        style_label="Свой запрос",
+                        style_label="Своя идея",
                         prompt=text[:2000],
                         photo_file_ids=photo_file_ids,
                         profile=profile,
@@ -127,7 +127,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
     else:
         await update.message.reply_text(
-            "Чтобы отправить свой запрос, нажмите «✏️ Свой запрос» в меню стилей.",
+            "Чтобы отправить свою идею, нажмите «✏️ Своя идея» в меню стилей.",
         )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -352,7 +352,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 if not prompt:
                     gen_lock.release()
                     await update.message.reply_text(
-                        "Сначала напишите текстом описание картинки (выберите «✏️ Свой запрос» и отправьте сообщение).",
+                        "Сначала напишите текстом описание картинки (выберите «✏️ Своя идея» и отправьте сообщение).",
                     )
                     context.user_data[USERDATA_FAST_SELECTED_STYLE] = style_id
                     return
@@ -391,7 +391,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             credits = _generations_count_fast(profile)
             credits_word = _fast_credits_word(credits)
             page = context.user_data.get(USERDATA_FAST_STYLE_PAGE, 0)
-            text = f"Отлично! <b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n{STYLE_EXAMPLES_FOOTER}"
+            text = f"Отлично! <b>Выберите стиль</b> или введите <b>свою идею</b> 👇\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n{STYLE_EXAMPLES_FOOTER}"
             msg = await update.message.reply_text(
                 text,
                 reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, page=page),
@@ -602,7 +602,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 if not prompt:
                     gen_lock.release()
                     await update.message.reply_text(
-                        "Сначала напишите текстом описание картинки (выберите «✏️ Свой запрос» и отправьте сообщение).",
+                        "Сначала напишите текстом описание картинки (выберите «✏️ Своя идея» и отправьте сообщение).",
                     )
                     context.user_data[USERDATA_FAST_SELECTED_STYLE] = style_id
                     return
@@ -640,7 +640,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             credits = _generations_count_fast(_profile)
             credits_word = _fast_credits_word(credits)
             page = context.user_data.get(USERDATA_FAST_STYLE_PAGE, 0)
-            text = f"Отлично! <b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n{STYLE_EXAMPLES_FOOTER}"
+            text = f"Отлично! <b>Выберите стиль</b> или введите <b>свою идею</b> 👇\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n{STYLE_EXAMPLES_FOOTER}"
             msg = await update.message.reply_text(
                 text,
                 reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, page=page),

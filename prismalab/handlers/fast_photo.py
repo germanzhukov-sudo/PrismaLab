@@ -118,7 +118,7 @@ def _fast_style_screen_text(credits: int, credits_word: str, *, has_photo: bool 
     if has_photo:
         base = f"<b>Можете не загружать фото заново</b> – просто выберите другой стиль для этого же снимка\n\nЕсли хотите – <b>загрузите новое</b> 👇\n\n{credit_line}"
     else:
-        base = f"{credit_line}\n\n<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇"
+        base = f"{credit_line}\n\n<b>Выберите стиль</b> или введите <b>свою идею</b> 👇"
     return f"{base}\n\n{STYLE_EXAMPLES_FOOTER}"
 def _fast_after_gender_content(profile: Any, gender: str | None = None, *, has_photo: bool = False) -> tuple[str | None, InlineKeyboardMarkup | None]:
     """Текст и клавиатура после выбора пола. При 0 кредитов — (None, None), вызывающий делает двухсообщенный экран."""
@@ -319,7 +319,7 @@ async def handle_fast_buy_callback(update: Update, context: ContextTypes.DEFAULT
             )
             return
         page = context.user_data.get(USERDATA_FAST_STYLE_PAGE, 0)
-        text = f"Оплата получена ✅\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n{STYLE_EXAMPLES_FOOTER}"
+        text = f"Оплата получена ✅\n\n{_format_balance_express(credits)}\n\n<b>1 кредит = 1 фото</b>\n\n<b>Выберите стиль</b> или введите <b>свою идею</b> 👇\n\n{STYLE_EXAMPLES_FOOTER}"
         await query.edit_message_text(
             text,
             reply_markup=_fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=page),
@@ -415,7 +415,7 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             profile = _bot.store.get_user(user_id)
             new_total = profile.paid_generations_remaining + credits
             _bot.store.set_paid_generations_remaining(user_id, new_total)
-            text = f"Оплата получена ✅\n\n{_format_balance_express(_generations_count_fast(_bot.store.get_user(user_id)))}\n\n<b>1 кредит = 1 фото</b>\n\n<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n{STYLE_EXAMPLES_FOOTER}"
+            text = f"Оплата получена ✅\n\n{_format_balance_express(_generations_count_fast(_bot.store.get_user(user_id)))}\n\n<b>1 кредит = 1 фото</b>\n\n<b>Выберите стиль</b> или введите <b>свою идею</b> 👇\n\n{STYLE_EXAMPLES_FOOTER}"
             gender = context.user_data.get(USERDATA_SUBJECT_GENDER) or _bot.store.get_user(user_id).subject_gender or "female"
             reply_msg = await msg.reply_text(
                 text,
@@ -681,7 +681,7 @@ async def _run_fast_generation_impl(
             except Exception as send_err:
                 logger.error("Быстрое фото: не удалось отправить сообщение об ошибке: %s", send_err)
 async def handle_fast_style_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Выбор стиля: либо «загрузите фото» (если фото нет), либо генерация с имеющимся фото. Для «Свой запрос» — сначала ввод текста."""
+    """Выбор стиля: либо «загрузите фото» (если фото нет), либо генерация с имеющимся фото. Для «Своя идея» — сначала ввод текста."""
     query = update.callback_query
     if not query or not query.data or "pl_fast_style:" not in query.data:
         return

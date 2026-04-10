@@ -72,6 +72,7 @@ const state = {
     activeMainTab: 'express',
     featuredStyles: [],
     featuredPacks: [],
+    featuredCustom: [],
     // General
     hasPersona: false,
     packsUseCredits: false,
@@ -148,8 +149,10 @@ async function authenticate() {
                 state.discountBadge = data.discount_badge || '';
                 state.featuredStyles = data.featured_styles || [];
                 state.featuredPacks = data.featured_packs || [];
+                state.featuredCustom = data.featured_custom || [];
                 renderFeaturedStyles();
                 renderFeaturedPacks();
+                renderFeaturedCustom();
                 updateBalanceDisplays();
 
                 // Check pack payment return
@@ -277,6 +280,23 @@ const _FEATURED_STYLE_FALLBACK_TITLES = [
     'Дождливое окно',
 ];
 
+function _makeShowcaseThumb(imageUrl, alt) {
+    const thumb = document.createElement('div');
+    thumb.className = 'express-showcase-thumb';
+    if (imageUrl) {
+        const img = document.createElement('img');
+        img.src = imageUrl;
+        img.alt = alt || '';
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+    } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'express-showcase-thumb-placeholder';
+        thumb.appendChild(placeholder);
+    }
+    return thumb;
+}
+
 function renderFeaturedStyles() {
     const container = document.getElementById('main-express-showcase');
     if (!container) return;
@@ -295,24 +315,20 @@ function renderFeaturedStyles() {
     items.forEach((style) => {
         const item = document.createElement('div');
         item.className = 'express-showcase-item';
+        // Click on item (padding/title) → navigate to section
         item.addEventListener('click', (e) => {
             e.stopPropagation();
             goToExpress();
         });
 
-        const thumb = document.createElement('div');
-        thumb.className = 'express-showcase-thumb';
         const imageUrl = String(style.image_url || '').trim();
+        const thumb = _makeShowcaseThumb(imageUrl, style.title);
         if (imageUrl) {
-            const img = document.createElement('img');
-            img.src = imageUrl;
-            img.alt = style.title || '';
-            img.loading = 'lazy';
-            thumb.appendChild(img);
-        } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'express-showcase-thumb-placeholder';
-            thumb.appendChild(placeholder);
+            // Click on thumb → lightbox (stops propagation to item)
+            thumb.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openLightbox(imageUrl);
+            });
         }
 
         const title = document.createElement('div');
@@ -356,19 +372,13 @@ function renderFeaturedPacks() {
             goToPhotosets();
         });
 
-        const thumb = document.createElement('div');
-        thumb.className = 'express-showcase-thumb';
         const imageUrl = String(pack.image_url || '').trim();
+        const thumb = _makeShowcaseThumb(imageUrl, pack.title);
         if (imageUrl) {
-            const img = document.createElement('img');
-            img.src = imageUrl;
-            img.alt = pack.title || '';
-            img.loading = 'lazy';
-            thumb.appendChild(img);
-        } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'express-showcase-thumb-placeholder';
-            thumb.appendChild(placeholder);
+            thumb.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openLightbox(imageUrl);
+            });
         }
 
         const title = document.createElement('div');
@@ -402,6 +412,56 @@ function renderFeaturedPacks() {
     container.appendChild(moreItem);
 }
 
+function renderFeaturedCustom() {
+    const container = document.getElementById('main-custom-showcase');
+    if (!container) return;
+
+    const items = state.featuredCustom || [];
+    container.textContent = '';
+
+    items.forEach((item) => {
+        const el = document.createElement('div');
+        el.className = 'express-showcase-item';
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            goToCustomPrompt();
+        });
+
+        const imageUrl = String(item.image_url || '').trim();
+        const thumb = _makeShowcaseThumb(imageUrl, item.title);
+        if (imageUrl) {
+            thumb.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openLightbox(imageUrl);
+            });
+        }
+
+        const title = document.createElement('div');
+        title.className = 'express-showcase-title';
+        title.textContent = item.title || '';
+
+        el.appendChild(thumb);
+        el.appendChild(title);
+        container.appendChild(el);
+    });
+
+    const moreItem = document.createElement('div');
+    moreItem.className = 'express-showcase-item express-showcase-more';
+    moreItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        goToCustomPrompt();
+    });
+    const moreThumb = document.createElement('div');
+    moreThumb.className = 'express-showcase-thumb';
+    moreThumb.textContent = '→';
+    const moreTitle = document.createElement('div');
+    moreTitle.className = 'express-showcase-title';
+    moreTitle.textContent = 'и бесконечно много что ещё';
+    moreItem.appendChild(moreThumb);
+    moreItem.appendChild(moreTitle);
+    container.appendChild(moreItem);
+}
+
 // === Tab Switcher ===
 
 const _tabAccentColors = {
@@ -425,7 +485,7 @@ function switchMainTab(tab, force) {
     const idx = tabs.findIndex(c => c.dataset.tab === tab);
     const track = document.getElementById('tab-cards-track');
     if (track && idx >= 0) {
-        track.style.transform = `translateX(-${idx * 92}%)`;
+        track.style.transform = `translate3d(-${idx * 92}%, 0, 0)`;
     }
 
     // Update ambient glow
@@ -453,6 +513,8 @@ function _initTabSwipe() {
 
     let startX = 0, startY = 0, currentX = 0;
     let isDragging = false, directionLocked = false, isHorizontal = false;
+    let startRail = null; // showcase rail touched on touchstart (if any)
+    let railCanGoLeft = false, railCanGoRight = false;
     const THRESHOLD = 40;
     const CARD_WIDTH_PCT = 92;
 
@@ -463,8 +525,6 @@ function _initTabSwipe() {
     }
 
     area.addEventListener('touchstart', (e) => {
-        // Don't capture if starting inside showcase horizontal scroll
-        if (e.target.closest('.express-showcase-rail')) return;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         currentX = startX;
@@ -472,6 +532,16 @@ function _initTabSwipe() {
         directionLocked = false;
         isHorizontal = false;
         track.style.transition = 'none';
+
+        // Check if touch started inside a showcase rail
+        startRail = e.target.closest('.express-showcase-rail');
+        if (startRail) {
+            // Remember rail's scroll state — used to decide if card swipe takes over
+            railCanGoLeft = startRail.scrollLeft > 0;
+            railCanGoRight = startRail.scrollLeft < (startRail.scrollWidth - startRail.clientWidth - 1);
+        } else {
+            railCanGoLeft = railCanGoRight = false;
+        }
     }, { passive: true });
 
     area.addEventListener('touchmove', (e) => {
@@ -484,16 +554,31 @@ function _initTabSwipe() {
         if (!directionLocked && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
             directionLocked = true;
             isHorizontal = Math.abs(dx) > Math.abs(dy);
+
+            // If inside a showcase rail and rail CAN scroll in the swipe direction,
+            // defer to rail (don't swipe cards). Otherwise → card swipe takes over.
+            if (isHorizontal && startRail) {
+                const swipeLeft = dx < 0;  // finger moved left → rail scrolls right
+                const swipeRight = dx > 0; // finger moved right → rail scrolls left
+                if ((swipeLeft && railCanGoRight) || (swipeRight && railCanGoLeft)) {
+                    // Rail handles it — cancel card swipe
+                    isDragging = false;
+                    return;
+                }
+            }
         }
-        if (!isHorizontal) return;
+        if (!isHorizontal || !isDragging) return;
+
+        // Block iOS horizontal rubber-band / elastic scroll → prevents header shake
+        if (e.cancelable) e.preventDefault();
 
         // Drag the track
         const basePct = _getBaseOffset();
         const dragPx = dx;
         const areaWidth = area.offsetWidth;
         const dragPct = (dragPx / areaWidth) * 100;
-        track.style.transform = `translateX(${basePct + dragPct}%)`;
-    }, { passive: true });
+        track.style.transform = `translate3d(${basePct + dragPct}%, 0, 0)`;
+    }, { passive: false });
 
     area.addEventListener('touchend', () => {
         if (!isDragging) return;
@@ -502,7 +587,7 @@ function _initTabSwipe() {
 
         if (!isHorizontal) {
             // Snap back
-            track.style.transform = `translateX(${_getBaseOffset()}%)`;
+            track.style.transform = `translate3d(${_getBaseOffset()}%, 0, 0)`;
             return;
         }
 
@@ -516,9 +601,34 @@ function _initTabSwipe() {
             switchMainTab(tabs[currentIdx - 1].dataset.tab);
         } else {
             // Snap back to current
-            track.style.transform = `translateX(${_getBaseOffset()}%)`;
+            track.style.transform = `translate3d(${_getBaseOffset()}%, 0, 0)`;
         }
     }, { passive: true });
+
+    // Desktop trackpad/mouse wheel — swipe cards horizontally
+    let wheelAccumX = 0;
+    let wheelTimeout = null;
+    area.addEventListener('wheel', (e) => {
+        // Guards
+        if (e.ctrlKey) return; // pinch-zoom
+        if (!document.getElementById('screen-main')?.classList.contains('active')) return;
+        if (e.target.closest('.express-showcase-rail')) return; // let rail scroll
+        if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return; // vertical scroll
+
+        e.preventDefault();
+        wheelAccumX += e.deltaX;
+        clearTimeout(wheelTimeout);
+        wheelTimeout = setTimeout(() => {
+            const tabs = Array.from(track.querySelectorAll('.tab-card'));
+            const currentIdx = tabs.findIndex(c => c.dataset.tab === state.activeMainTab);
+            if (wheelAccumX > THRESHOLD && currentIdx < tabs.length - 1) {
+                switchMainTab(tabs[currentIdx + 1].dataset.tab);
+            } else if (wheelAccumX < -THRESHOLD && currentIdx > 0) {
+                switchMainTab(tabs[currentIdx - 1].dataset.tab);
+            }
+            wheelAccumX = 0;
+        }, 100);
+    }, { passive: false });
 }
 
 // === Navigation ===
@@ -539,6 +649,13 @@ function showScreen(name) {
     renderScreenFooters(name);
     setTimeout(() => {
         target.classList.add('active');
+        // Restore catalog scroll position on back navigation
+        if (name === 'express-catalog' && state._catalogScrollTop) {
+            requestAnimationFrame(() => {
+                target.scrollTop = state._catalogScrollTop;
+                state._catalogScrollTop = 0;
+            });
+        }
     }, 50);
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 }
@@ -726,7 +843,7 @@ function selectExpressStyle(style) {
     if (state.expressFile) {
         document.getElementById('express-upload-zone').style.display = 'none';
         document.getElementById('express-preview').style.display = 'block';
-        document.getElementById('express-generate-btn').style.display = 'block';
+        document.getElementById('express-generate-btn').style.display = canGenerateExpress() ? 'block' : 'none';
         const previewImg = document.getElementById('express-preview-image');
         if (previewImg && !previewImg.src.startsWith('data:')) {
             const reader = new FileReader();
@@ -758,7 +875,7 @@ function processExpressFile(file) {
         document.getElementById('express-preview-image').src = e.target.result;
         document.getElementById('express-upload-zone').style.display = 'none';
         document.getElementById('express-preview').style.display = 'block';
-        document.getElementById('express-generate-btn').style.display = 'block';
+        document.getElementById('express-generate-btn').style.display = canGenerateExpress() ? 'block' : 'none';
     };
     reader.readAsDataURL(file);
 }
@@ -903,6 +1020,16 @@ async function downloadExpressResult() {
     if (!img?.src) return;
     trackEvent('v2_express_download', { style_id: state.selectedExpressStyle?.id });
     const note = document.getElementById('express-result-note');
+
+    // Primary: tg.openLink for TG WebView/iOS (reliable, opens in browser for save)
+    if (tg?.openLink) {
+        tg.openLink(img.src);
+        if (note) note.textContent = 'Фото открыто в браузере. Также отправлено в чат бота.';
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        return;
+    }
+
+    // Secondary: blob download for desktop browsers
     try {
         const resp = await fetch(img.src);
         const blob = await resp.blob();
@@ -912,11 +1039,10 @@ async function downloadExpressResult() {
         a.download = `prismalab_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
         a.click();
         URL.revokeObjectURL(url);
-        if (note) note.textContent = 'Фото подготовлено к скачиванию';
+        if (note) note.textContent = 'Фото скачано';
     } catch (e) {
-        if (tg?.openLink) { tg.openLink(img.src); }
-        else { window.open(img.src, '_blank'); }
-        if (note) note.textContent = 'Фото открыто в браузере для скачивания';
+        window.open(img.src, '_blank');
+        if (note) note.textContent = 'Фото открыто в браузере';
     }
     if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
 }
@@ -985,7 +1111,7 @@ function renderProfileHistory() {
         badge.className = 'profile-history-badge';
         const modeLabels = {
             express: `Экспресс: ${item.style_title || ''}`,
-            custom: 'Свой запрос',
+            custom: 'Своя идея',
             photoset: `Фотосет: ${item.style_title || ''}`,
         };
         badge.textContent = modeLabels[item.mode] || item.mode || 'Экспресс';
@@ -1149,6 +1275,9 @@ function toggleV3Tag(slug) {
 }
 
 function selectV3Style(style) {
+    // Save catalog scroll position for restore on back
+    const catalogScreen = document.getElementById('screen-express-catalog');
+    if (catalogScreen) state._catalogScrollTop = catalogScreen.scrollTop || window.scrollY;
     state.selectedExpressStyle = style;
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     document.getElementById('express-selected-style').textContent = `${style.emoji || ''} ${style.label}`;
@@ -1157,7 +1286,7 @@ function selectV3Style(style) {
     if (state.expressFile) {
         document.getElementById('express-upload-zone').style.display = 'none';
         document.getElementById('express-preview').style.display = 'block';
-        document.getElementById('express-generate-btn').style.display = 'block';
+        document.getElementById('express-generate-btn').style.display = canGenerateExpress() ? 'block' : 'none';
         const previewImg = document.getElementById('express-preview-image');
         if (previewImg && !previewImg.src.startsWith('data:')) {
             const reader = new FileReader();
@@ -1175,29 +1304,43 @@ function selectV3Style(style) {
     if (providerChoice) {
         providerChoice.style.display = '';
         updateProviderUI();
+        _updateGenerateLabel('express');
     }
     showScreen('express-upload');
 }
 
-// Provider choice
+// Credits check — centralized
+function canGenerateExpress() {
+    return state.expressCredits.fast > 0 || !state.expressCredits.free_used;
+}
+
+// Provider choice — centralized helpers
+function _providerLabel(p) {
+    return p === 'nano-banana-pro' ? 'Nano Banana Pro' : 'Seedream';
+}
+
+function _updateGenerateLabel(screen) {
+    if (screen === 'express') {
+        const btn = document.querySelector('#express-generate-btn .btn-text');
+        if (btn) btn.textContent = `⚡ ${_providerLabel(state.selectedProvider)}`;
+    } else if (screen === 'custom') {
+        const btn = document.querySelector('#custom-generate-btn .btn-text');
+        if (btn) btn.textContent = `⚡ ${_providerLabel(state.customProvider)}`;
+    }
+}
+
 function selectProvider(provider) {
     state.selectedProvider = provider;
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     updateProviderUI();
+    _updateGenerateLabel('express');
 }
 
 function updateProviderUI() {
-    document.querySelectorAll('.provider-option').forEach(el => {
+    // Scoped to Express provider options only
+    document.querySelectorAll('#express-provider-options .provider-option').forEach(el => {
         el.classList.toggle('selected', el.dataset.provider === state.selectedProvider);
     });
-}
-
-function showProviderInfo() {
-    document.getElementById('provider-tooltip').style.display = '';
-}
-
-function hideProviderInfo() {
-    document.getElementById('provider-tooltip').style.display = 'none';
 }
 
 // === PHOTOSETS FLOW ===
@@ -1784,12 +1927,12 @@ function openAllTariffsScreen() {
 
     // Section 1: Express & Custom
     html += `<div class="tariff-section">
-        <h3 class="tariff-section-title">Экспресс и Свой запрос</h3>
+        <h3 class="tariff-section-title">Экспресс и Своя идея</h3>
         <div class="tariff-text">
-            <strong>Экспресс</strong> и <strong>Свой запрос</strong> используют общий баланс.
+            <strong>Экспресс</strong> и <strong>Своя идея</strong> используют общий баланс.
             Вы пополняете кредиты один раз и дальше тратите их в любом из этих разделов:<br><br>
             — выбираете готовые стили в <strong>Экспресс</strong><br>
-            — или создаёте фото по своему описанию в <strong>Свой запрос</strong><br><br>
+            — или создаёте фото по своему описанию в <strong>Своя идея</strong><br><br>
             <span class="tariff-highlight">1 кредит = 1 фото</span><br>
             в любой доступной модели: Seedream или Nano Banana Pro<br><br>
             Ниже — тарифы на пополнение.
@@ -2028,10 +2171,14 @@ function goToCustomPrompt() {
     if (textarea) { textarea.value = ''; }
     const counter = document.getElementById('custom-prompt-length');
     if (counter) counter.textContent = '0';
-    // Reset provider buttons
+    // Reset provider buttons + generate label
     document.querySelectorAll('#custom-provider-options .provider-option').forEach(btn => {
         btn.classList.toggle('selected', btn.dataset.provider === 'seedream');
     });
+    _updateGenerateLabel('custom');
+    // Hide generate if no credits — footer shows tariffs
+    const customGenBtn = document.getElementById('custom-generate-btn');
+    if (customGenBtn) customGenBtn.style.display = canGenerateExpress() ? '' : 'none';
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 }
 
@@ -2048,6 +2195,7 @@ function selectCustomProvider(provider) {
         state.customFiles = state.customFiles.slice(0, max);
         renderCustomPhotos();
     }
+    _updateGenerateLabel('custom');
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 }
 
@@ -2158,6 +2306,6 @@ async function startCustomGeneration() {
         console.error('Custom generation error:', e);
         alert('Ошибка: ' + e.message);
     } finally {
-        if (btn) { btn.disabled = false; btn.querySelector('.btn-text').textContent = '⚡ Создать'; }
+        if (btn) { btn.disabled = false; _updateGenerateLabel('custom'); }
     }
 }

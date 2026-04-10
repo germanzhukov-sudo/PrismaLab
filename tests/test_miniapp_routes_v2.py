@@ -584,6 +584,34 @@ def test_auth_returns_empty_discount_badge(mock_auth, client, store):
     assert resp.json()["discount_badge"] == ""
 
 
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_auth_returns_featured_custom_contract(mock_auth, client, store):
+    """Auth API returns featured_custom list with correct shape."""
+    resp = client.post("/app/api/auth", json={"init_data": "fake"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "featured_custom" in data
+    featured = data["featured_custom"]
+    assert isinstance(featured, list)
+    assert len(featured) >= 5  # At least 5 curated examples
+    for item in featured:
+        assert "title" in item and isinstance(item["title"], str) and item["title"]
+        assert "image_url" in item and isinstance(item["image_url"], str)
+        assert item["image_url"].startswith("https://")
+
+
+@patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
+def test_auth_returns_featured_styles_and_packs(mock_auth, client, store):
+    """Auth API returns featured_styles and featured_packs fields."""
+    resp = client.post("/app/api/auth", json={"init_data": "fake"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "featured_styles" in data
+    assert "featured_packs" in data
+    assert isinstance(data["featured_styles"], list)
+    assert isinstance(data["featured_packs"], list)
+
+
 # ── Phase 2: POST /app/api/fast/buy ─────────────────────────────
 
 

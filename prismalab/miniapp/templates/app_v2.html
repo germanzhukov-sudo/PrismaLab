@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PrismaLab Studio</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/static/style_v2.css?v=30">
+    <link rel="stylesheet" href="/app/static/style_v2.css?v=47">
 </head>
 <body>
     <div id="app">
@@ -66,24 +66,29 @@
                             <div class="tab-card-inner">
                                 <div class="tab-card-shimmer express-shimmer"></div>
                                 <div class="tab-card-glow express-glow"></div>
-                                <div class="tab-card-top">
-                                    <div class="tab-card-icon express-icon-box">
-                                        <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
-                                            <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#lightning-grad)"/>
-                                            <defs><linearGradient id="lightning-grad" x1="8" y1="4" x2="30" y2="36">
-                                                <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
-                                            </linearGradient></defs>
-                                        </svg>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon express-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#lightning-grad)"/>
+                                                <defs><linearGradient id="lightning-grad" x1="8" y1="4" x2="30" y2="36">
+                                                    <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Экспресс</h2>
                                     </div>
-                                    <h2 class="tab-card-title">Экспресс</h2>
+                                    <div class="tab-card-model-label express-model-label">Seedream · Nano Banana Pro</div>
+                                    <p class="tab-card-desc">Самые передовые AI-модели. Сотни готовых образов за секунды</p>
                                 </div>
-                                <p class="tab-card-desc">Фото за секунды по готовым образам. Модели Seedream и Nano Banana Pro</p>
-                                <div class="tab-card-showcase">
+                                <div class="tab-card-body">
                                     <div class="tab-card-showcase-title">Популярные стили</div>
                                     <div class="express-showcase-rail" id="main-express-showcase"></div>
                                 </div>
-                                <button class="tab-card-cta express-cta" onclick="event.stopPropagation(); goToExpress()">Выбрать стиль</button>
-                                <span class="tab-card-link" onclick="event.stopPropagation(); openExpressInfo(event)">Подробнее</span>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta express-cta" onclick="event.stopPropagation(); goToExpress()">Выбрать стиль</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openExpressInfo(event)">Подробнее</span>
+                                </div>
                             </div>
                         </div>
 
@@ -92,21 +97,30 @@
                             <div class="tab-card-inner">
                                 <div class="tab-card-shimmer custom-shimmer"></div>
                                 <div class="tab-card-glow custom-glow"></div>
-                                <div class="tab-card-top">
-                                    <div class="tab-card-icon custom-icon-box">
-                                        <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
-                                            <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                                            <path d="M24 10l6 6" stroke="url(#pen-grad)" stroke-width="2" stroke-linecap="round"/>
-                                            <defs><linearGradient id="pen-grad" x1="8" y1="6" x2="34" y2="32">
-                                                <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
-                                            </linearGradient></defs>
-                                        </svg>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon custom-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                                                <path d="M24 10l6 6" stroke="url(#pen-grad)" stroke-width="2" stroke-linecap="round"/>
+                                                <defs><linearGradient id="pen-grad" x1="8" y1="6" x2="34" y2="32">
+                                                    <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Своя идея</h2>
                                     </div>
-                                    <h2 class="tab-card-title">Свой запрос</h2>
+                                    <div class="tab-card-model-label custom-model-label">Seedream · Nano Banana Pro</div>
+                                    <p class="tab-card-desc">Создавайте фото по своему описанию или меняйте готовые изображения</p>
                                 </div>
-                                <p class="tab-card-desc">Создайте фото по своему текстовому запросу. Можно приложить исходное фото</p>
-                                <button class="tab-card-cta custom-cta" onclick="event.stopPropagation(); goToCustomPrompt()">Создать свой запрос</button>
-                                <span class="tab-card-link" onclick="event.stopPropagation(); openCustomInfo(event)">Подробнее</span>
+                                <div class="tab-card-body">
+                                    <div class="tab-card-showcase-title">Например</div>
+                                    <div class="express-showcase-rail custom-showcase-rail" id="main-custom-showcase"></div>
+                                </div>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta custom-cta" onclick="event.stopPropagation(); goToCustomPrompt()">Создать свою идею</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openCustomInfo(event)">Подробнее</span>
+                                </div>
                             </div>
                         </div>
                         {% endif %}
@@ -115,28 +129,33 @@
                             <div class="tab-card-inner">
                                 <div class="tab-card-shimmer photosets-shimmer"></div>
                                 <div class="tab-card-glow photosets-glow"></div>
-                                <div class="tab-card-top">
-                                    <div class="tab-card-icon photosets-icon-box">
-                                        <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
-                                            <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
-                                            <circle cx="20" cy="22" r="6" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
-                                            <circle cx="20" cy="22" r="2.5" fill="url(#cam-grad)"/>
-                                            <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#cam-grad)" stroke-width="2"/>
-                                            <defs><linearGradient id="cam-grad" x1="6" y1="7" x2="34" y2="32">
-                                                <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
-                                            </linearGradient></defs>
-                                        </svg>
+                                <div class="discount-badge" id="photosets-discount-badge" style="display:none">для вас -40%</div>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon photosets-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                                <circle cx="20" cy="22" r="6" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                                <circle cx="20" cy="22" r="2.5" fill="url(#cam-grad)"/>
+                                                <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#cam-grad)" stroke-width="2"/>
+                                                <defs><linearGradient id="cam-grad" x1="6" y1="7" x2="34" y2="32">
+                                                    <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Фотосеты</h2>
                                     </div>
-                                    <h2 class="tab-card-title">Фотосеты</h2>
+                                    <div class="tab-card-model-label photosets-model-label">Премиум</div>
+                                    <p class="tab-card-desc">Снимки, неотличимые от настоящих фото. Часто заменяют полноценную фотосессию</p>
                                 </div>
-                                <p class="tab-card-desc">Серия фото в одном стиле с полным сохранением лица. Создадим модель по вашим фото</p>
-                                <div class="tab-card-showcase">
+                                <div class="tab-card-body">
                                     <div class="tab-card-showcase-title">Популярные фотосеты</div>
                                     <div class="express-showcase-rail" id="main-photosets-showcase"></div>
                                 </div>
-                                <button class="tab-card-cta photosets-cta" onclick="event.stopPropagation(); goToPhotosets()">Выбрать фотосет</button>
-                                <span class="tab-card-link" onclick="event.stopPropagation(); openPhotosetsInfo(event)">Подробнее</span>
-                                <div class="discount-badge" id="photosets-discount-badge" style="display:none">для вас -40%</div>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta photosets-cta" onclick="event.stopPropagation(); goToPhotosets()">Выбрать фотосет</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openPhotosetsInfo(event)">Подробнее</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -144,20 +163,46 @@
 
                 <div class="tab-bar" id="main-tab-bar">
                     <button class="tab-btn active" data-tab="express" onclick="switchMainTab('express')">
-                        <span class="tab-icon">&#9889;</span>
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#tab-lightning-grad)"/>
+                                <defs><linearGradient id="tab-lightning-grad" x1="8" y1="4" x2="30" y2="36">
+                                    <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
                         <span class="tab-label">Экспресс</span>
                         <div class="tab-glow-line"></div>
                     </button>
                     {% if custom_request_v1 %}
                     <button class="tab-btn" data-tab="custom" onclick="switchMainTab('custom')">
-                        <span class="tab-icon">&#9999;&#65039;</span>
-                        <span class="tab-label">Запрос</span>
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#tab-pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                                <path d="M24 10l6 6" stroke="url(#tab-pen-grad)" stroke-width="2" stroke-linecap="round"/>
+                                <defs><linearGradient id="tab-pen-grad" x1="8" y1="6" x2="34" y2="32">
+                                    <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
+                        <span class="tab-label">Своя идея</span>
                         <div class="tab-glow-line"></div>
                     </button>
                     {% endif %}
                     <button class="tab-btn" data-tab="photosets" onclick="switchMainTab('photosets')">
-                        <span class="tab-icon">&#128248;</span>
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#tab-cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="6" stroke="url(#tab-cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="2.5" fill="url(#tab-cam-grad)"/>
+                                <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#tab-cam-grad)" stroke-width="2"/>
+                                <defs><linearGradient id="tab-cam-grad" x1="6" y1="7" x2="34" y2="32">
+                                    <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
                         <span class="tab-label">Фотосеты</span>
+                        <span class="tab-premium-dot" aria-hidden="true"></span>
                         <div class="tab-glow-line"></div>
                     </button>
                 </div>
@@ -234,7 +279,7 @@
                 <button class="back-btn" onclick="goBack('main')">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
-                <h2 class="header-title">Свой запрос</h2>
+                <h2 class="header-title">Своя идея</h2>
                 <div class="header-right-group">
                     <div class="credits-badge">
                         <span class="credits-icon">&#9889;</span>
@@ -264,23 +309,25 @@
                     <div class="custom-photos-hint" id="custom-photos-hint">До <span id="custom-max-photos">8</span> фото, JPG/PNG до 15 МБ</div>
                 </div>
 
-                <div class="custom-section">
-                    <label class="custom-label">Провайдер</label>
-                    <div class="provider-options" id="custom-provider-options">
-                        <button class="provider-option selected" data-provider="seedream" onclick="selectCustomProvider('seedream')">
-                            <span class="provider-name">Seedream</span>
-                            <span class="provider-desc">Быстрый</span>
-                        </button>
-                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectCustomProvider('nano-banana-pro')">
-                            <span class="provider-name">Nano Banana</span>
-                            <span class="provider-desc">Качество</span>
-                        </button>
-                    </div>
-                </div>
-
                 <button class="generate-btn" id="custom-generate-btn" onclick="startCustomGeneration()">
                     <span class="btn-text">&#9889; Создать</span>
                 </button>
+
+                <div class="custom-section">
+                    <label class="custom-label">Модель</label>
+                    <div class="provider-options" id="custom-provider-options">
+                        <button class="provider-option selected" data-provider="seedream" onclick="selectCustomProvider('seedream')">
+                            <span class="provider-name">Seedream</span>
+                        </button>
+                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectCustomProvider('nano-banana-pro')">
+                            <span class="provider-name">Nano Banana Pro</span>
+                        </button>
+                    </div>
+                    <p class="provider-description">
+                        <strong>Seedream</strong> — когда важны сходство и точная передача лица. Иногда может уступать в глубине проработки кадра и визуальной выразительности.<br><br>
+                        <strong>Nano Banana Pro</strong> — когда важнее красота кадра, свет и сильная подача. Может немного отходить от исходного фото, но часто даёт более эффектный результат.
+                    </p>
+                </div>
             </div>
             <div class="persona-buy-footer" id="custom-buy-footer" style="display:none">
                 <div class="footer-label">Докупите экспресс-кредиты</div>
@@ -316,24 +363,18 @@
                     <span class="btn-text">&#9889; Создать</span>
                 </button>
                 <div class="provider-choice" id="provider-choice" style="display:none">
-                    <div class="provider-options">
+                    <div class="provider-options" id="express-provider-options">
                         <button class="provider-option selected" data-provider="seedream" onclick="selectProvider('seedream')">
                             <span class="provider-name">Seedream</span>
-                            <span class="provider-desc">Быстрый</span>
                         </button>
                         <button class="provider-option" data-provider="nano-banana-pro" onclick="selectProvider('nano-banana-pro')">
-                            <span class="provider-name">Nano Banana</span>
-                            <span class="provider-desc">Детальный</span>
+                            <span class="provider-name">Nano Banana Pro</span>
                         </button>
                     </div>
-                    <button class="provider-info-btn" onclick="showProviderInfo()">?</button>
-                </div>
-                <div class="provider-tooltip" id="provider-tooltip" style="display:none">
-                    <div class="tooltip-content">
-                        <b>Seedream</b> — быстрая генерация, хорошее качество.<br>
-                        <b>Nano Banana</b> — более детальная и качественная генерация, занимает чуть больше времени.
-                        <button class="tooltip-close" onclick="hideProviderInfo()">Понятно</button>
-                    </div>
+                    <p class="provider-description">
+                        <strong>Seedream</strong> — когда важны сходство и точная передача лица. Иногда может уступать в глубине проработки кадра и визуальной выразительности.<br><br>
+                        <strong>Nano Banana Pro</strong> — когда важнее красота кадра, свет и сильная подача. Может немного отходить от исходного фото, но часто даёт более эффектный результат.
+                    </p>
                 </div>
             </div>
         </div>
@@ -579,7 +620,7 @@
                     <div class="history-tabs" id="history-tabs">
                         <button class="history-tab active" data-mode="" onclick="filterHistory(null)">Все</button>
                         <button class="history-tab" data-mode="express" onclick="filterHistory('express')">Экспресс</button>
-                        <button class="history-tab" data-mode="custom" onclick="filterHistory('custom')">Свой запрос</button>
+                        <button class="history-tab" data-mode="custom" onclick="filterHistory('custom')">Своя идея</button>
                         <button class="history-tab" data-mode="photoset" onclick="filterHistory('photoset')">Фотосеты</button>
                     </div>
                     <div class="profile-history-grid" id="profile-history-grid">
@@ -593,59 +634,100 @@
         </div>
         <!-- Screen: Express Info -->
         <div id="screen-express-info" class="screen">
-            <div class="screen-header">
-                <button class="back-btn" onclick="goBack('main')">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
                 <h2 class="header-title">Экспресс</h2>
-                <div></div>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
             </div>
             <div class="info-screen-container">
-                <p>Тестовый текст об Экспрессе. Будет заменён.</p>
-                <button class="generate-btn" onclick="goToExpress()">
-                    <span class="btn-text">Выбрать стиль</span>
-                </button>
+                <p class="info-lead">В этом разделе две модели: Seedream и Nano Banana Pro.</p>
+                <section class="info-block">
+                    <h3 class="info-block-title">Seedream</h3>
+                    <p class="info-block-sub">Если вам важно точнее передать лицо.</p>
+                    <p>Он лучше держится за исходное фото и иногда выглядит почти как аккуратный перенос лица в новый образ.</p>
+                    <p>Поэтому здесь особенно важно выбрать хороший, чёткий исходник.</p>
+                </section>
+                <section class="info-block">
+                    <h3 class="info-block-title">Nano Banana Pro</h3>
+                    <p class="info-block-sub">Если вам важнее красота кадра.</p>
+                    <p>Он может чуть сильнее отойти от исходного фото, зато часто даёт более эффектную картинку: свет, атмосфера, детали и общая подача выглядят богаче.</p>
+                </section>
+                <div class="info-summary">
+                    <p>Если нужен максимум сходства — выбирайте <strong>Seedream</strong>.</p>
+                    <p>Если нужен более сильный и красивый визуал — <strong>Nano Banana Pro</strong>.</p>
+                </div>
             </div>
         </div>
 
         <!-- Screen: Custom Info -->
         <div id="screen-custom-info" class="screen">
-            <div class="screen-header">
-                <button class="back-btn" onclick="goBack('main')">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
+                <h2 class="header-title">Своя идея</h2>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                 </button>
-                <h2 class="header-title">Свой запрос</h2>
-                <div></div>
             </div>
             <div class="info-screen-container">
-                <p>Тестовый текст о Своём запросе. Будет заменён.</p>
-                <button class="generate-btn" onclick="goToCustomPrompt()">
-                    <span class="btn-text">Создать</span>
-                </button>
+                <p class="info-lead">В этом разделе доступны две модели: Seedream и Nano Banana Pro. Обе позволяют создавать изображение по описанию или редактировать уже готовую картинку, но работают по-разному.</p>
+                <section class="info-block">
+                    <h3 class="info-block-title">Seedream</h3>
+                    <p>Seedream лучше подходит, когда вам важно точнее держаться запроса и аккуратнее передавать лицо, если в основе есть референс.</p>
+                    <p>Он обычно даёт более собранный и предсказуемый результат:</p>
+                    <ul>
+                        <li>лучше сохраняет сходство, если работа идёт от исходной картинки</li>
+                        <li>аккуратнее следует заданной идее</li>
+                        <li>хорошо подходит, когда нужен более контролируемый результат</li>
+                    </ul>
+                    <p>Выбирайте <strong>Seedream</strong>, если важнее точность, сходство и аккуратная подача.</p>
+                </section>
+                <section class="info-block">
+                    <h3 class="info-block-title">Nano Banana Pro</h3>
+                    <p>Nano Banana Pro чаще работает смелее и эффектнее. Эта модель может чуть свободнее интерпретировать исходник или запрос, зато часто даёт более сильную картинку по свету, атмосфере и деталям.</p>
+                    <p>Обычно это:</p>
+                    <ul>
+                        <li>более выразительная сцена</li>
+                        <li>более сочная подача</li>
+                        <li>больше ощущения вау-эффекта</li>
+                        <li>но иногда меньше точного сходства или буквального попадания в исходник</li>
+                    </ul>
+                    <p>Выбирайте <strong>Nano Banana Pro</strong>, если важнее визуальная сила, стиль и эффектность кадра.</p>
+                </section>
+                <div class="info-summary">
+                    <p><strong>Что выбрать?</strong></p>
+                    <p><strong>Seedream</strong> — когда нужен более точный и контролируемый результат.</p>
+                    <p><strong>Nano Banana Pro</strong> — когда нужен более яркий, красивый и выразительный визуал.</p>
+                </div>
             </div>
         </div>
 
         <!-- Screen: Photosets Info -->
         <div id="screen-photosets-info" class="screen">
-            <div class="screen-header">
-                <button class="back-btn" onclick="goBack('main')">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
                 <h2 class="header-title">Фотосеты</h2>
-                <div></div>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
             </div>
             <div class="info-screen-container">
-                <p>Нам будет нужно 10 ваших фото для обучения модели. Но оно того стоит &ndash; вы удивитесь результату. На фотосетах будете именно вы.</p>
-                <button class="generate-btn" onclick="goToPhotosets()">
-                    <span class="btn-text">Открыть каталог</span>
-                </button>
+                <p class="info-lead">Фотосеты — это формат с более реалистичным и персональным результатом. Во многих случаях такие фото сложно отличить от настоящей съёмки.</p>
+                <section class="info-block">
+                    <p>Сначала мы попросим <strong>10 ваших фото</strong> и создадим на их основе персональную модель. Она помогает точнее передавать лицо, мимику и общее сходство именно с вами.</p>
+                    <p>Поэтому фотосеты выглядят реалистичнее, дороже и узнаваемее, чем обычные генерации. Для части задач этого уже достаточно и отдельная фотосессия просто не нужна.</p>
+                </section>
+                <div class="info-summary">
+                    <p>Ваша модель будет храниться <strong>30 дней</strong>. Всё это время фотосеты для вас будут дешевле.</p>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Lightbox -->
     <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
-        <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+        <img id="lightbox-img" src="" alt="">
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
     </div>
 
@@ -653,6 +735,6 @@
         window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};
         window.CUSTOM_REQUEST_V1 = {{ 'true' if custom_request_v1 else 'false' }};
     </script>
-    <script src="/app/static/app_v2.js?v=32"></script>
+    <script src="/app/static/app_v2.js?v=41"></script>
 </body>
 </html>

@@ -122,7 +122,7 @@ def _use_unified_pack_persona_flow() -> bool:
 
 
 def custom_request_v1() -> bool:
-    """Feature flag: CUSTOM_REQUEST_V1=1 включает 'Свой запрос' в Mini App."""
+    """Feature flag: CUSTOM_REQUEST_V1=1 включает 'Своя идея' в Mini App."""
     return (os.getenv("CUSTOM_REQUEST_V1") or "").strip() == "1"
 
 

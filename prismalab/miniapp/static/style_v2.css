@@ -223,10 +223,15 @@ body {
     align-items: stretch;
     transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
     height: 100%;
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 .tab-card {
     min-width: 92%;
+    min-height: 0;
     padding: 0 4px;
     box-sizing: border-box;
     cursor: pointer;
@@ -242,10 +247,30 @@ body {
     border-radius: var(--radius-lg);
     padding: 24px 20px;
     overflow: hidden;
+    min-height: 0;
     flex: 1;
     display: flex;
     flex-direction: column;
+    gap: 16px;
 }
+
+/* Mac Telegram Desktop and other short viewports: allow scroll within card
+   so CTA + Подробнее stay reachable even if content doesn't fit. */
+@media (max-height: 720px) {
+    .tab-card-inner {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* 3 logical groups. Foot is pinned to bottom → CTAs aligned across all cards */
+.tab-card-head, .tab-card-body, .tab-card-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex-shrink: 0;
+}
+.tab-card-foot { margin-top: auto; }
 
 /* Glow blob (top-right) */
 .tab-card-glow {
@@ -268,10 +293,10 @@ body {
 .custom-shimmer { background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.6), transparent); }
 .photosets-shimmer { background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.6), transparent); }
 
-/* Top row: icon + credit chip */
+/* Top row: icon + title, vertically centered */
 .tab-card-top {
     display: flex; align-items: center; gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 0;
 }
 
 .tab-card-icon {
@@ -310,7 +335,9 @@ body {
 .tab-card-desc {
     font-size: 14px; line-height: 1.5;
     color: var(--text-secondary);
-    margin-bottom: 16px;
+    margin: 0;
+    /* Reserve 3 lines so all 3 cards have identical head height → CTA aligned */
+    min-height: calc(14px * 1.5 * 3);
 }
 
 /* Feature chips */
@@ -345,20 +372,28 @@ body {
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     padding-bottom: 2px;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
 }
+.express-showcase-rail:empty { min-height: 130px; }
 
 .express-showcase-rail::-webkit-scrollbar {
     display: none;
 }
 
+/* 3 visible previews + peek of 4th. Width: (100% - 2 gaps) / 3.15
+   max-width prevents over-scaling on desktop where card is very wide */
 .express-showcase-item {
-    flex: 0 0 80px;
+    flex: 0 0 calc((100% - 20px) / 3.15);
+    max-width: 110px;
     cursor: pointer;
+    scroll-snap-align: start;
 }
 
 .express-showcase-thumb {
-    width: 80px;
-    height: 100px;
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 4;
     border-radius: 14px;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.16);
@@ -398,6 +433,23 @@ body {
     text-align: center;
 }
 
+/* Custom card rail: horizontal thumbnails (override max-width + aspect-ratio) */
+.custom-showcase-rail .express-showcase-item {
+    flex: 0 0 180px;
+    max-width: 180px;
+}
+.custom-showcase-rail .express-showcase-thumb {
+    width: 180px;
+    height: 110px;
+    aspect-ratio: auto;
+}
+.custom-showcase-rail .express-showcase-thumb img {
+    object-fit: cover;
+}
+.custom-showcase-rail .express-showcase-title {
+    min-height: auto;
+}
+
 .express-showcase-more .express-showcase-thumb {
     border-style: dashed;
     color: rgba(255, 255, 255, 0.75);
@@ -415,7 +467,7 @@ body {
 }
 .balance-icon { font-size: 12px; }
 
-/* CTA button — glass + vivid */
+/* CTA button — glass + vivid, pinned to bottom of card */
 .tab-card-cta {
     width: 100%; padding: 14px;
     border-radius: var(--radius-sm);
@@ -479,8 +531,16 @@ body {
     position: relative;
     transition: all 0.3s ease;
 }
-.tab-btn .tab-icon { font-size: 20px; transition: transform 0.3s ease; }
-.tab-btn .tab-label { font-size: 11px; font-weight: 600; }
+.tab-btn .tab-icon {
+    display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    transition: transform 0.3s ease;
+}
+.tab-btn .tab-label {
+    font-size: 10px; font-weight: 600;
+    white-space: nowrap;
+}
+.tab-btn { padding: 10px 4px 8px; }
 .tab-btn .tab-glow-line {
     position: absolute; top: 0; left: 20%; right: 20%;
     height: 2px; border-radius: 2px;
@@ -517,6 +577,50 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 .tab-card-inner { animation: tab-card-reveal 0.4s ease-out both; }
+
+/* Glass model label pill — inline, under title, tinted to card accent */
+.tab-card-model-label {
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    white-space: nowrap;
+}
+.express-model-label {
+    color: rgba(255, 200, 130, 0.95);
+    background: rgba(249, 115, 22, 0.14);
+    border: 1px solid rgba(249, 115, 22, 0.35);
+}
+.custom-model-label {
+    color: rgba(180, 230, 255, 0.95);
+    background: rgba(34, 211, 238, 0.12);
+    border: 1px solid rgba(34, 211, 238, 0.35);
+}
+.photosets-model-label {
+    padding: 3px 9px;
+    font-size: 10px;
+    color: rgba(230, 200, 255, 0.95);
+    background: rgba(139, 92, 246, 0.14);
+    border: 1px solid rgba(139, 92, 246, 0.35);
+}
+
+
+/* Premium badge now inline under title via .photosets-model-label (see above) */
+
+/* Premium dot on photosets tab-btn */
+.tab-premium-dot {
+    position: absolute;
+    top: 6px; right: 10px;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #e0c068, #b78628);
+    box-shadow: 0 0 8px rgba(224, 192, 104, 0.7);
+}
 
 .discount-badge {
     position: absolute;
@@ -1321,7 +1425,8 @@ body {
 .provider-choice {
     margin-top: 12px;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     gap: 8px;
 }
 .provider-options {
@@ -1357,54 +1462,17 @@ body {
     color: var(--text-tertiary);
     margin-top: 2px;
 }
-.provider-info-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: 1px solid var(--border-glass);
-    background: var(--bg-glass);
-    color: var(--text-tertiary);
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-.provider-info-btn:active { transform: scale(0.9); }
-
-.provider-tooltip {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    padding: 20px;
-}
-.tooltip-content {
-    background: var(--bg-card);
-    border: 1px solid var(--border-glass);
-    border-radius: 16px;
-    padding: 20px;
-    max-width: 320px;
+.provider-description {
+    margin-top: 12px;
+    font-size: 13px;
+    line-height: 1.55;
     color: var(--text-secondary);
-    font-size: 14px;
-    line-height: 1.5;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--border-glass);
+    border-radius: 12px;
 }
-.tooltip-close {
-    display: block;
-    width: 100%;
-    margin-top: 16px;
-    padding: 10px;
-    border-radius: 10px;
-    border: none;
-    background: var(--accent-gradient);
-    color: white;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-}
-.tooltip-close:active { transform: scale(0.97); }
+.provider-description strong { color: var(--text-primary); }
 
 /* ===== V3: Empty State ===== */
 
@@ -1609,15 +1677,80 @@ body {
 
 /* ===== Info Screens ===== */
 
+.info-header .header-spacer { width: 36px; }
+
+.screen-close {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--bg-glass); border: 1px solid var(--border-glass);
+    color: var(--text-primary);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: var(--transition);
+}
+.screen-close:active { background: var(--bg-card-hover); transform: scale(0.92); }
+
 .info-screen-container {
-    padding: 24px 16px;
+    padding: 20px 20px 40px;
+    overflow-y: auto;
+    max-height: calc(100vh - 72px);
+    max-height: calc(100dvh - 72px);
+    -webkit-overflow-scrolling: touch;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 18px;
     color: var(--text-secondary);
     font-size: 15px;
-    line-height: 1.5;
+    line-height: 1.55;
 }
+
+.info-lead {
+    color: var(--text-primary);
+    font-weight: 500;
+    margin: 0;
+}
+
+.info-block {
+    padding: 16px 18px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-glass);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.info-block-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+.info-block-sub {
+    font-size: 14px;
+    color: var(--text-primary);
+    opacity: 0.85;
+    margin: 0 0 2px 0;
+}
+.info-block p { margin: 0; }
+.info-block ul {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.info-block strong { color: var(--text-primary); }
+
+.info-summary {
+    padding: 14px 18px;
+    border-radius: var(--radius-md);
+    background: rgba(139, 92, 246, 0.10);
+    border: 1px solid rgba(139, 92, 246, 0.30);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--text-primary);
+}
+.info-summary p { margin: 0; }
+.info-summary strong { color: var(--text-primary); }
 
 /* ===== Section Loading (prism + text + dots) ===== */
 

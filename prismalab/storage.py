@@ -476,6 +476,30 @@ class PrismaLabStore:
             "fast_total": round(cost_seedream_rub + cost_nano_rub, 2),
         }
 
+    @staticmethod
+    def calculate_generation_costs_by_provider(
+        seedream_count: int,
+        nano_count: int,
+        legacy_count: int,
+        cost_seedream: float,
+        cost_nano: float,
+        usd_rub: float,
+    ) -> dict:
+        """Calculate generation costs by provider for any mode (fast, custom, or combined).
+
+        legacy_count: generations with NULL/empty/unknown provider — costed at seedream rate.
+        Returns: {seedream: rub, nano: rub, legacy: rub, total: rub}
+        """
+        seedream_rub = float(seedream_count) * float(cost_seedream) * float(usd_rub)
+        nano_rub = float(nano_count) * float(cost_nano) * float(usd_rub)
+        legacy_rub = float(legacy_count) * float(cost_seedream) * float(usd_rub)  # legacy at seedream rate
+        return {
+            "seedream": round(seedream_rub, 2),
+            "nano": round(nano_rub, 2),
+            "legacy": round(legacy_rub, 2),
+            "total": round(seedream_rub + nano_rub + legacy_rub, 2),
+        }
+
     # --- Себестоимость паков ---
 
     def get_pack_costs(self) -> list[dict]:

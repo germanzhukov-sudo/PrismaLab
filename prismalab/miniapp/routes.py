@@ -180,6 +180,21 @@ async def api_auth(request: Request):
     except Exception as e:
         logger.warning("Failed to load featured styles: %s", e)
 
+    # Featured custom prompt examples for main screen preview rail
+    # Images uploaded to Supabase Storage, URLs hardcoded (static curated content)
+    featured_custom = [
+        {"title": "Меняйте причёску",
+         "image_url": "https://patojbpxuwfmqsvptdvj.supabase.co/storage/v1/object/public/persona-styles/ae9c28d8eaa4.png"},
+        {"title": "Подбирайте стиль",
+         "image_url": "https://patojbpxuwfmqsvptdvj.supabase.co/storage/v1/object/public/persona-styles/68378cf4dce9.png"},
+        {"title": "Восстанавливайте старые фото",
+         "image_url": "https://patojbpxuwfmqsvptdvj.supabase.co/storage/v1/object/public/persona-styles/eb6c16e694da.jpg"},
+        {"title": "Добавляйте или убирайте что хотите",
+         "image_url": "https://patojbpxuwfmqsvptdvj.supabase.co/storage/v1/object/public/persona-styles/f16b256a5881.jpg"},
+        {"title": "Создавайте мультяшных героев",
+         "image_url": "https://patojbpxuwfmqsvptdvj.supabase.co/storage/v1/object/public/persona-styles/3213fdb18cf1.png"},
+    ]
+
     # Featured photosets for main screen preview rail
     featured_packs = []
     try:
@@ -225,6 +240,7 @@ async def api_auth(request: Request):
         "discount_badge": store.get_admin_setting("photosets_discount_badge") or "",
         "featured_styles": featured_styles,
         "featured_packs": featured_packs,
+        "featured_custom": featured_custom,
     })
 
 
