@@ -265,12 +265,12 @@ function updateBalanceDisplays() {
     // Main topup button
     // "Тарифы" button always visible — no conditional hide
 
-    // Sync generate button visibility with current credits state
+    // Sync generate button visibility with current credits state (symmetric: hide AND show)
     const hasCredits = canGenerateExpress();
     const expressGenBtn = document.getElementById('express-generate-btn');
-    if (expressGenBtn && expressGenBtn.style.display !== 'none') {
-        // Only hide if it was supposed to be visible (photo uploaded) but credits ran out
-        if (!hasCredits && state.expressFile) expressGenBtn.style.display = 'none';
+    if (expressGenBtn && state.expressFile) {
+        // Express: show only if photo uploaded AND has credits
+        expressGenBtn.style.display = hasCredits ? 'block' : 'none';
     }
     const customGenBtn = document.getElementById('custom-generate-btn');
     if (customGenBtn) customGenBtn.style.display = hasCredits ? '' : 'none';

@@ -641,6 +641,30 @@ def test_legacy_provider_normalized_to_seedream_rate():
     assert result["total"] == result["legacy"]
 
 
+def test_dashboard_stats_has_custom_and_legacy_fields(store):
+    """get_dashboard_stats output includes custom + legacy generation/cost fields."""
+    if not store._use_pg:
+        return  # skip for SQLite-based test runs
+    stats = store.get_dashboard_stats()
+    gens = stats.get("generations", {})
+    costs = stats.get("costs", {})
+    # Custom generation fields
+    assert "custom_total" in gens
+    assert "custom_seedream" in gens
+    assert "custom_nano" in gens
+    assert "custom_legacy" in gens
+    # Legacy generation field
+    assert "fast_legacy" in gens
+    # Custom cost fields
+    assert "custom_photos" in costs
+    assert "custom_seedream" in costs
+    assert "custom_nano" in costs
+    assert "custom_legacy" in costs
+    assert "fast_legacy" in costs
+    # Total cost includes custom
+    assert costs["total"] >= 0
+
+
 # ── Phase 2: POST /app/api/fast/buy ─────────────────────────────
 
 

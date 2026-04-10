@@ -262,6 +262,34 @@
                 <div class="stat-label"><i class="bi bi-gift"></i> Бесплатных генераций</div>
             </div>
         </div>
+        {% if stats.generations.get('custom_total', 0) > 0 %}
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.custom_total }}</div>
+                <div class="stat-label"><i class="bi bi-pencil-square"></i> Своя идея (всего)</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.get('custom_seedream', 0) }}</div>
+                <div class="stat-label"><i class="bi bi-droplet"></i> Своя идея Seedream</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.get('custom_nano', 0) }}</div>
+                <div class="stat-label"><i class="bi bi-gem"></i> Своя идея Nano</div>
+            </div>
+        </div>
+        {% endif %}
+        {% if stats.generations.get('fast_legacy', 0) > 0 or stats.generations.get('custom_legacy', 0) > 0 %}
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.generations.get('fast_legacy', 0) + stats.generations.get('custom_legacy', 0) }}</div>
+                <div class="stat-label"><i class="bi bi-question-circle"></i> Legacy провайдер</div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Себестоимость за период -->
@@ -284,6 +312,22 @@
                 <div class="stat-label"><i class="bi bi-gem"></i> Себест. Nano Banana</div>
             </div>
         </div>
+        {% if stats.costs.get('custom_photos', 0) > 0 %}
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.custom_photos) }}</div>
+                <div class="stat-label"><i class="bi bi-pencil-square"></i> Себест. Своя идея</div>
+            </div>
+        </div>
+        {% endif %}
+        {% if stats.costs.get('fast_legacy', 0) > 0 or stats.costs.get('custom_legacy', 0) > 0 %}
+        <div class="col-md-3 col-6 mb-3">
+            <div class="stat-card">
+                <div class="stat-value">₽{{ "%.0f"|format(stats.costs.get('fast_legacy', 0) + stats.costs.get('custom_legacy', 0)) }}</div>
+                <div class="stat-label"><i class="bi bi-question-circle"></i> Себест. Legacy</div>
+            </div>
+        </div>
+        {% endif %}
         {% if stats.costs.packs > 0 %}
         <div class="col-md-3 col-6 mb-3">
             <div class="stat-card">
