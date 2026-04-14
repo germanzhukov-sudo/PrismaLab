@@ -17,6 +17,7 @@ import requests
 logger = logging.getLogger("prismalab.supabase_storage")
 
 BUCKET = "persona-styles"
+GENERATIONS_BUCKET = os.getenv("SUPABASE_GENERATIONS_BUCKET", "express-generations")
 
 
 def _supabase_url() -> str:
@@ -35,30 +36,30 @@ def _headers() -> dict[str, str]:
     }
 
 
-def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str | None:
-    """Загружает файл в Supabase Storage. Возвращает публичный URL или None при ошибке.
-
-    filename — имя файла в бакете (например, 'wedding.jpg'). Для уникальности
-    добавляется uuid-префикс.
-    """
+def _upload_to_bucket(
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+    bucket: str,
+) -> str | None:
+    """Общая загрузка в указанный бакет Supabase Storage."""
     base_url = _supabase_url()
     service_key = _supabase_key()
     if not base_url or not service_key:
         logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
         return None
 
-    # Уникальное имя для предотвращения конфликтов
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
     storage_path = f"{uuid.uuid4().hex[:12]}.{ext}"
 
-    url = f"{base_url}/storage/v1/object/{BUCKET}/{storage_path}"
+    url = f"{base_url}/storage/v1/object/{bucket}/{storage_path}"
     headers = _headers()
     headers["Content-Type"] = content_type
 
     try:
         resp = requests.post(url, headers=headers, data=file_bytes, timeout=30)
         if resp.status_code in (200, 201):
-            public_url = f"{base_url}/storage/v1/object/public/{BUCKET}/{storage_path}"
+            public_url = f"{base_url}/storage/v1/object/public/{bucket}/{storage_path}"
             logger.info("Uploaded %s → %s", filename, public_url)
             return public_url
         logger.error("Upload failed: %s %s", resp.status_code, resp.text[:200])
@@ -66,6 +67,27 @@ def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jp
     except Exception as e:
         logger.error("Upload error: %s", e)
         return None
+
+
+def upload_image(file_bytes: bytes, filename: str, content_type: str = "image/jpeg") -> str | None:
+    """Загружает файл в persona-styles бакет. Возвращает публичный URL или None при ошибке.
+
+    filename — имя файла в бакете (например, 'wedding.jpg'). Для уникальности
+    добавляется uuid-префикс.
+    """
+    return _upload_to_bucket(file_bytes, filename, content_type, BUCKET)
+
+
+def upload_generation(
+    file_bytes: bytes,
+    user_id: int,
+    file_ext: str = "jpg",
+    content_type: str = "image/jpeg",
+) -> str | None:
+    """Загружает изображение генерации в отдельный бакет истории."""
+    safe_ext = "png" if file_ext.lower() == "png" else "jpg"
+    filename = f"user_{int(user_id)}_{uuid.uuid4().hex[:8]}.{safe_ext}"
+    return _upload_to_bucket(file_bytes, filename, content_type, GENERATIONS_BUCKET)
 
 
 def delete_image(public_url: str) -> bool:

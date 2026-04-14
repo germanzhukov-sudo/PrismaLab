@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>PrismaLab Studio</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/app/static/style_v2.css?v=74">
+</head>
+<body>
+    <div id="app">
+        <!-- Screen: Loading -->
+        <div id="screen-loading" class="screen active">
+            <div class="loading-container">
+                <div class="packs-prism loading-prism"></div>
+                <div class="loading-text">PrismaLab</div>
+                <div class="loading-dots"><span></span><span></span><span></span></div>
+            </div>
+        </div>
+
+        <!-- Screen: Gender -->
+        <div id="screen-gender" class="screen">
+            <div class="screen-content">
+                <h1 class="screen-title">Кто на фото?</h1>
+                <p class="screen-subtitle">Подберём стили специально для вас</p>
+                <div class="gender-cards">
+                    <button class="gender-card" onclick="selectGender('male')">
+                        <div class="gender-icon">&#128104;</div>
+                        <div class="gender-label">Мужчина</div>
+                    </button>
+                    <button class="gender-card" onclick="selectGender('female')">
+                        <div class="gender-icon">&#128105;</div>
+                        <div class="gender-label">Женщина</div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Main — Two Sections -->
+        <div id="screen-main" class="screen">
+            <div class="main-container">
+                <div class="main-header">
+                    <div class="main-header-left">
+                        <h1 class="main-logo">PrismaLab</h1>
+                        <div class="main-balance-pill">
+                            <span class="main-balance-label">Баланс</span>
+                            <span class="main-balance-sep"></span>
+                            <span class="balance-icon">&#9889;</span><span id="header-express-bal">0</span>
+                            <span class="main-balance-sep"></span>
+                            <span class="badge-prism"></span><span id="header-photosets-bal">0</span>
+                        </div>
+                    </div>
+                    <div class="main-header-right">
+                        <button class="main-topup-btn" id="main-topup-btn"
+                                onclick="openAllTariffsScreen()">Тарифы</button>
+                        <button class="profile-btn" onclick="goToProfile()">&#128100;</button>
+                    </div>
+                </div>
+
+                <div class="ambient-glow" id="ambient-glow"></div>
+                <div class="grain-overlay"></div>
+
+                <div class="tab-content-area" id="tab-content-area">
+                    <div class="tab-cards-track" id="tab-cards-track">
+                        <div class="tab-card" data-tab="express" onclick="handleCardClick(this, goToExpress)">
+                            <div class="tab-card-inner">
+                                <div class="tab-card-shimmer express-shimmer"></div>
+                                <div class="tab-card-glow express-glow"></div>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon express-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#lightning-grad)"/>
+                                                <defs><linearGradient id="lightning-grad" x1="8" y1="4" x2="30" y2="36">
+                                                    <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Экспресс</h2>
+                                    </div>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label express-model-label">Seedream · Nano Banana Pro</div>
+                                        <div class="tab-card-credit-pill">&#9889; 1 кредит = 1 фото</div>
+                                    </div>
+                                    <p class="tab-card-desc">Самые передовые AI-модели. Сотни готовых образов за секунды</p>
+                                </div>
+                                <div class="tab-card-body">
+                                    <div class="express-showcase-rail" id="main-express-showcase"></div>
+                                </div>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta express-cta" onclick="event.stopPropagation(); goToExpress()">Выбрать стиль</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openExpressInfo(event)">Подробнее</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if custom_request_v1 %}
+                        <div class="tab-card" data-tab="custom" onclick="handleCardClick(this, goToCustomPrompt)">
+                            <div class="tab-card-inner">
+                                <div class="tab-card-shimmer custom-shimmer"></div>
+                                <div class="tab-card-glow custom-glow"></div>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon custom-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                                                <path d="M24 10l6 6" stroke="url(#pen-grad)" stroke-width="2" stroke-linecap="round"/>
+                                                <defs><linearGradient id="pen-grad" x1="8" y1="6" x2="34" y2="32">
+                                                    <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Своя идея</h2>
+                                    </div>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label custom-model-label">Seedream · Nano Banana Pro</div>
+                                        <div class="tab-card-credit-pill">&#9889; 1 кредит = 1 фото</div>
+                                    </div>
+                                    <p class="tab-card-desc">Создавайте фото по своему описанию или меняйте готовые изображения</p>
+                                </div>
+                                <div class="tab-card-body">
+                                    <div class="express-showcase-rail custom-showcase-rail" id="main-custom-showcase"></div>
+                                </div>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta custom-cta" onclick="event.stopPropagation(); goToCustomPrompt()">Создать свою идею</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openCustomInfo(event)">Подробнее</span>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="tab-card" data-tab="photosets" onclick="handleCardClick(this, goToPhotosets)">
+                            <div class="tab-card-inner">
+                                <div class="tab-card-shimmer photosets-shimmer"></div>
+                                <div class="tab-card-glow photosets-glow"></div>
+                                <div class="discount-badge" id="photosets-discount-badge" style="display:none">для вас -40%</div>
+                                <div class="tab-card-head">
+                                    <div class="tab-card-top">
+                                        <div class="tab-card-icon photosets-icon-box">
+                                            <svg width="24" height="24" viewBox="0 0 40 40" fill="none">
+                                                <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                                <circle cx="20" cy="22" r="6" stroke="url(#cam-grad)" stroke-width="2" fill="none"/>
+                                                <circle cx="20" cy="22" r="2.5" fill="url(#cam-grad)"/>
+                                                <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#cam-grad)" stroke-width="2"/>
+                                                <defs><linearGradient id="cam-grad" x1="6" y1="7" x2="34" y2="32">
+                                                    <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
+                                                </linearGradient></defs>
+                                            </svg>
+                                        </div>
+                                        <h2 class="tab-card-title">Фотосеты</h2>
+                                    </div>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label photosets-model-label">Премиум</div>
+                                        <div class="tab-card-credit-pill"><span class="badge-prism"></span> Стоимость зависит от фотосета</div>
+                                    </div>
+                                    <p class="tab-card-desc">Снимки, неотличимые от настоящих фото. Как полноценная фотосессия</p>
+                                </div>
+                                <div class="tab-card-body">
+                                    <div class="express-showcase-rail" id="main-photosets-showcase"></div>
+                                </div>
+                                <div class="tab-card-foot">
+                                    <button class="tab-card-cta photosets-cta" onclick="event.stopPropagation(); goToPhotosets()">Выбрать фотосет</button>
+                                    <span class="tab-card-link" onclick="event.stopPropagation(); openPhotosetsInfo(event)">Подробнее</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-bar" id="main-tab-bar">
+                    <button class="tab-btn active" data-tab="express" onclick="switchMainTab('express')">
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <path d="M22 4L8 22h10l-2 14L30 18H20l2-14z" fill="url(#tab-lightning-grad)"/>
+                                <defs><linearGradient id="tab-lightning-grad" x1="8" y1="4" x2="30" y2="36">
+                                    <stop stop-color="#f59e0b"/><stop offset="1" stop-color="#ef4444"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
+                        <span class="tab-label">Экспресс</span>
+                        <div class="tab-glow-line"></div>
+                    </button>
+                    {% if custom_request_v1 %}
+                    <button class="tab-btn" data-tab="custom" onclick="switchMainTab('custom')">
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <path d="M28 6l-18 18-2 8 8-2L34 12a4 4 0 00-6-6z" stroke="url(#tab-pen-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                                <path d="M24 10l6 6" stroke="url(#tab-pen-grad)" stroke-width="2" stroke-linecap="round"/>
+                                <defs><linearGradient id="tab-pen-grad" x1="8" y1="6" x2="34" y2="32">
+                                    <stop stop-color="#22d3ee"/><stop offset="1" stop-color="#6366f1"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
+                        <span class="tab-label">Своя идея</span>
+                        <div class="tab-glow-line"></div>
+                    </button>
+                    {% endif %}
+                    <button class="tab-btn" data-tab="photosets" onclick="switchMainTab('photosets')">
+                        <span class="tab-icon">
+                            <svg width="20" height="20" viewBox="0 0 40 40" fill="none">
+                                <rect x="6" y="12" width="28" height="20" rx="3" stroke="url(#tab-cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="6" stroke="url(#tab-cam-grad)" stroke-width="2" fill="none"/>
+                                <circle cx="20" cy="22" r="2.5" fill="url(#tab-cam-grad)"/>
+                                <path d="M14 12V9a2 2 0 012-2h8a2 2 0 012 2v3" stroke="url(#tab-cam-grad)" stroke-width="2"/>
+                                <defs><linearGradient id="tab-cam-grad" x1="6" y1="7" x2="34" y2="32">
+                                    <stop stop-color="#8b5cf6"/><stop offset="1" stop-color="#d946ef"/>
+                                </linearGradient></defs>
+                            </svg>
+                        </span>
+                        <span class="tab-label">Фотосеты</span>
+                        <div class="tab-glow-line"></div>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== EXPRESS FLOW ========== -->
+
+        <!-- Screen: Express Themes -->
+        <!-- V2: Express Themes (legacy, hidden when V3 active) -->
+        <div id="screen-express-themes" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Экспресс</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="express-credits-count">0</span>
+                </div>
+            </div>
+            <div class="themes-grid" id="themes-grid"></div>
+        </div>
+
+        <!-- V2: Express Styles (legacy) -->
+        <div id="screen-express-styles" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('express-themes')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="express-theme-title">Тема</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon">&#9889;</span>
+                    <span id="express-styles-credits">0</span>
+                </div>
+            </div>
+            <div class="styles-grid" id="express-styles-grid"></div>
+        </div>
+
+        <!-- V3: Express Catalog (categories + tags + styles) -->
+        <div id="screen-express-catalog" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Экспресс</h2>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon">&#9889;</span>
+                        <span id="v3-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" onclick="openUnifiedTariffScreen('fast', 'express-catalog')">Докупить +</button>
+                </div>
+            </div>
+            <div class="category-pills" id="v3-category-pills">
+                <!-- Категории загрузятся динамически -->
+            </div>
+            <div class="tag-pills" id="v3-tag-pills" style="display:none">
+                <!-- Теги загрузятся динамически -->
+            </div>
+            <div class="styles-grid" id="v3-styles-grid">
+                <!-- Стили загрузятся динамически -->
+            </div>
+            <div class="persona-buy-footer" id="express-buy-footer" style="display:none">
+                <div class="footer-label">На вашем балансе нет кредитов</div>
+                <div class="persona-buy-footer-buttons" id="express-footer-buttons"></div>
+                <button class="persona-buy-pay-btn" id="express-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+        </div>
+
+        <!-- Screen: Custom Prompt -->
+        <div id="screen-custom-prompt" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Своя идея</h2>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon">&#9889;</span>
+                        <span id="custom-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" onclick="openUnifiedTariffScreen('fast', 'custom-prompt')">Докупить +</button>
+                </div>
+            </div>
+            <div class="custom-prompt-body">
+                <div class="custom-section">
+                    <label class="custom-label">Опишите, что хотите увидеть</label>
+                    <textarea id="custom-prompt-input" class="custom-textarea" rows="4"
+                              placeholder="Например: Портрет девушки в осеннем парке, мягкий свет, кинематографичный стиль"
+                              maxlength="2000"></textarea>
+                    <div class="custom-prompt-counter"><span id="custom-prompt-length">0</span>/2000</div>
+                </div>
+
+                <div class="custom-section">
+                    <label class="custom-label">Фото-референсы <span class="custom-label-hint">(необязательно)</span></label>
+                    <div class="custom-photos-grid" id="custom-photos-grid">
+                        <button class="custom-photo-add" id="custom-photo-add-btn" onclick="document.getElementById('custom-file-input').click()">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            <span id="custom-photo-add-text">Добавить</span>
+                        </button>
+                    </div>
+                    <input type="file" id="custom-file-input" accept="image/jpeg,image/png,image/webp" multiple style="display:none" onchange="handleCustomFiles(event)">
+                    <div class="custom-photos-hint" id="custom-photos-hint">До <span id="custom-max-photos">8</span> фото, JPG/PNG до 15 МБ</div>
+                </div>
+
+                <button class="generate-btn" id="custom-generate-btn" onclick="startCustomGeneration()">
+                    <span class="btn-text">&#9889; Создать</span>
+                </button>
+
+                <div class="custom-section">
+                    <div class="provider-options" id="custom-provider-options">
+                        <button class="provider-option selected" data-provider="seedream" onclick="selectCustomProvider('seedream')">
+                            <span class="provider-name">Seedream</span>
+                        </button>
+                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectCustomProvider('nano-banana-pro')">
+                            <span class="provider-name">Nano Banana Pro</span>
+                        </button>
+                    </div>
+                    <p class="provider-description">
+                        <strong>Seedream</strong> — когда важны сходство и точная передача лица. Иногда может уступать в глубине проработки кадра и визуальной выразительности.<br><br>
+                        <strong>Nano Banana Pro</strong> — когда важнее красота кадра, свет и сильная подача. Может немного отходить от исходного фото, но часто даёт более эффектный результат.
+                    </p>
+                </div>
+            </div>
+            <div class="persona-buy-footer" id="custom-buy-footer" style="display:none">
+                <div class="footer-label">На вашем балансе нет кредитов</div>
+                <div class="persona-buy-footer-buttons" id="custom-footer-buttons"></div>
+                <button class="persona-buy-pay-btn" id="custom-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+        </div>
+
+        <!-- Screen: Express Upload -->
+        <div id="screen-express-upload" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-styles')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="express-selected-style">Стиль</h2>
+                <div></div>
+            </div>
+            <div class="upload-container">
+                <div class="upload-style-preview" id="upload-style-preview" style="display:none">
+                    <img id="upload-style-preview-img" src="" alt="">
+                </div>
+                <div class="upload-zone upload-zone-compact" id="express-upload-zone" onclick="document.getElementById('express-file-input').click()">
+                    <div class="upload-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </div>
+                    <div class="upload-text">Загрузите фото</div>
+                    <div class="upload-hint">JPG, PNG до 15 МБ</div>
+                </div>
+                <input type="file" id="express-file-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handleExpressFile(event)">
+                <div class="upload-preview" id="express-preview" style="display:none">
+                    <img id="express-preview-image" src="" alt="Preview">
+                    <button class="preview-change" onclick="resetExpressUpload()">Сменить фото</button>
+                </div>
+                <button class="generate-btn" id="express-generate-btn" style="display:none" onclick="startExpressGeneration()">
+                    <span class="btn-text">&#9889; Создать</span>
+                </button>
+                <div class="provider-choice" id="provider-choice" style="display:none">
+                    <div class="provider-options" id="express-provider-options">
+                        <button class="provider-option selected" data-provider="seedream" onclick="selectProvider('seedream')">
+                            <span class="provider-name">Seedream</span>
+                        </button>
+                        <button class="provider-option" data-provider="nano-banana-pro" onclick="selectProvider('nano-banana-pro')">
+                            <span class="provider-name">Nano Banana Pro</span>
+                        </button>
+                    </div>
+                    <p class="provider-description">
+                        <strong>Seedream</strong> — когда важны сходство и точная передача лица. Иногда может уступать в глубине проработки кадра и визуальной выразительности.<br><br>
+                        <strong>Nano Banana Pro</strong> — когда важнее красота кадра, свет и сильная подача. Может немного отходить от исходного фото, но часто даёт более эффектный результат.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Express Generating -->
+        <div id="screen-express-generating" class="screen">
+            <div class="generating-container">
+                <div class="generating-visual">
+                    <div class="generating-ring"></div>
+                    <div class="generating-ring ring-2"></div>
+                    <div class="generating-ring ring-3"></div>
+                    <div class="generating-center"><div class="packs-prism"></div></div>
+                </div>
+                <h2 class="generating-title">Создаём фотографию</h2>
+                <p class="generating-subtitle">Можете закрыть это окно. Мы отправим фото в Телеграм и сохраним его в профиле приложения &#128100;</p>
+            </div>
+        </div>
+
+        <!-- Screen: Express Result -->
+        <div id="screen-express-result" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-themes')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Результат</h2>
+                <div></div>
+            </div>
+            <div class="result-container">
+                <div class="result-image-wrapper">
+                    <img id="express-result-image" src="" alt="Result">
+                </div>
+                <div class="result-actions">
+                    <button class="action-btn secondary" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-themes')">&#127912; Ещё стиль</button>
+                    <button class="action-btn secondary" onclick="showScreen('main')">Вернуться на главную</button>
+                </div>
+                <p class="result-note" id="express-result-note"></p>
+            </div>
+        </div>
+
+        <!-- ========== PHOTOSETS FLOW ========== -->
+
+        <!-- Screen: Photosets Catalog -->
+        <div id="screen-photosets" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Фотосеты</h2>
+                <div class="header-right-group">
+                    <div class="credits-badge">
+                        <span class="credits-icon"><span class="badge-prism"></span></span>
+                        <span id="photosets-credits-count">0</span>
+                    </div>
+                    <button class="header-topup-btn" id="photosets-topup-btn" onclick="openUnifiedTariffScreen(state.hasPersona ? 'persona_topup' : 'persona_create', 'photosets')">Докупить +</button>
+                </div>
+            </div>
+            <div class="category-tabs" id="photosets-filter-tabs">
+                <button class="category-tab active" data-filter="all" onclick="filterPhotosets('all')">Все</button>
+                <button class="category-tab" data-filter="available" onclick="filterPhotosets('available')">Доступные</button>
+                <button class="category-tab" data-filter="female" onclick="filterPhotosets('female')">Женские</button>
+                <button class="category-tab" data-filter="male" onclick="filterPhotosets('male')">Мужские</button>
+                <button class="category-tab" data-filter="child" onclick="filterPhotosets('child')">Детские</button>
+                <button class="category-tab" data-filter="animals" onclick="filterPhotosets('animals')">Животные</button>
+            </div>
+            <div class="photosets-grid" id="photosets-grid">
+                <!-- Каталог загрузится динамически -->
+            </div>
+
+            <!-- Generate footer: batch selected styles -->
+            <div class="persona-generate-footer" id="photosets-generate-footer" style="display:none">
+                <button class="persona-generate-btn" id="photosets-generate-btn" onclick="generatePhotosetBatch()">
+                    <span id="photosets-generate-btn-text">Сгенерировать</span>
+                </button>
+            </div>
+
+            <!-- Sticky footer: Persona Create (no persona yet) -->
+            <div class="persona-buy-footer" id="photosets-create-footer" style="display:none">
+                <div class="footer-label">Персональная модель + кредиты для фотосетов</div>
+                <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
+                <div class="persona-buy-footer-buttons" id="create-tariff-buttons">
+                    <!-- Rendered dynamically from state.tariffs.persona_create -->
+                </div>
+                <button class="persona-buy-pay-btn" id="create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+
+            <!-- Sticky footer: Persona Topup (has persona, 0 credits) -->
+            <div class="persona-buy-footer" id="photosets-topup-footer" style="display:none">
+                <div class="footer-label">Пополните кредиты — выгоднее пакетом</div>
+                <div class="persona-buy-footer-buttons" id="topup-tariff-buttons">
+                    <!-- Rendered dynamically from state.tariffs.persona_topup -->
+                </div>
+                <button class="persona-buy-pay-btn" id="topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Detail (Pack) -->
+        <div id="screen-photoset-pack-detail" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('photosets')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="photoset-pack-title">Фотопак</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon"><span class="badge-prism"></span></span>
+                    <span class="detail-credits-count">0</span>
+                </div>
+            </div>
+            <div class="pack-detail-container">
+                <div class="pack-gallery" id="photoset-pack-gallery"></div>
+                <div class="photoset-style-cost" id="photoset-pack-cost" style="display:none">
+                    <span class="cost-icon"><span class="badge-prism"></span></span>
+                    <span id="photoset-pack-cost-value">4</span>&nbsp;<span id="photoset-pack-cost-word">кредита</span>
+                    <span class="cost-arrow">&#8594;</span>
+                    <span id="photoset-pack-cost-images">4 фото</span>
+                </div>
+                <button class="generate-btn" id="photoset-pack-buy-btn" onclick="buyPhotosetPack()">
+                    <span class="btn-text" id="photoset-pack-buy-text">Купить 990 &#8381;</span>
+                </button>
+                <div class="no-persona-block" id="pack-no-persona" style="display:none">
+                    <p class="no-persona-text">У вас ещё нет персональной модели. Выберите пакет кредитов, создание вашей модели входит в стоимость.</p>
+                    <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
+                    <div class="persona-buy-footer-buttons" id="pack-create-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="pack-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+                <div id="pack-topup" class="photoset-inline-topup" style="display:none">
+                    <p class="topup-hint" id="pack-topup-hint">Не хватает кредитов</p>
+                    <div class="persona-buy-footer-buttons" id="pack-topup-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="pack-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Photoset Detail (Style — 4 photos) -->
+        <div id="screen-photoset-style-detail" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('photosets')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title" id="photoset-style-title">Образ</h2>
+                <div class="credits-badge">
+                    <span class="credits-icon"><span class="badge-prism"></span></span>
+                    <span class="detail-credits-count">0</span>
+                </div>
+            </div>
+            <div class="photoset-style-container">
+                <div class="photoset-style-preview" id="photoset-style-preview"></div>
+                <div class="photoset-style-info">
+                    <div class="photoset-style-desc" id="photoset-style-desc"></div>
+                    <div class="photoset-style-cost">
+                        <span class="cost-icon"><span class="badge-prism"></span></span>
+                        <span id="photoset-style-cost-value">4</span> <span id="photoset-style-cost-word">кредита</span>
+                        <span class="cost-arrow">&#8594;</span>
+                        <span>4 фото</span>
+                    </div>
+                </div>
+                <button class="generate-btn" id="photoset-generate-btn" style="display:none" onclick="startStyleBatchGeneration()">
+                    <span class="btn-text">&#10024; Сгенерировать (4 фото)</span>
+                </button>
+                <div class="no-persona-block" id="photoset-no-persona" style="display:none">
+                    <p class="no-persona-text">У вас ещё нет персональной модели. Выберите пакет кредитов, создание вашей модели входит в стоимость.</p>
+                    <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
+                    <div class="persona-buy-footer-buttons" id="style-create-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="style-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+                <div id="photoset-style-topup" class="photoset-inline-topup" style="display:none">
+                    <p class="topup-hint">Не хватает кредитов. Пополните:</p>
+                    <div class="persona-buy-footer-buttons" id="style-topup-buttons"></div>
+                    <button class="persona-buy-pay-btn" id="style-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Pack Paid -->
+        <div id="screen-pack-paid" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon">&#9989;</div>
+                <h2 class="nocredits-title">Оплата прошла!</h2>
+                <p class="nocredits-text">Перейдите в бот — там всё продолжится.</p>
+                <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+            </div>
+        </div>
+
+        <!-- Screen: No Credits -->
+        <div id="screen-nocredits" class="screen">
+            <div class="nocredits-container">
+                <div class="nocredits-icon"><span class="badge-prism prism-lg"></span></div>
+                <h2 class="nocredits-title">Нужны кредиты</h2>
+                <p class="nocredits-text" id="nocredits-text">Купите кредиты, чтобы продолжить.</p>
+                <button class="action-btn primary" onclick="closeMiniApp()">Перейти в бот</button>
+                <button class="action-btn secondary" onclick="goBack('main')">Назад</button>
+            </div>
+        </div>
+
+        <!-- Screen: Tariffs Page (from credits badge click) -->
+        <div id="screen-tariffs-page" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBackTariffs()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Тарифы</h2>
+                <div></div>
+            </div>
+            <div class="tariffs-page-container">
+                <div class="tariffs-page-info" id="tariffs-page-info"></div>
+                <div id="tariffs-page-sections"></div>
+                <div class="persona-buy-footer-buttons" id="tariffs-page-buttons"></div>
+                <button class="persona-buy-pay-btn" id="tariffs-page-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>
+        </div>
+
+        <!-- Screen: Profile -->
+        <div id="screen-profile" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="goBack('main')">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <h2 class="header-title">Профиль</h2>
+                <div></div>
+            </div>
+            <div class="profile-container">
+                <div class="profile-card">
+                    <div class="profile-row">
+                        <span class="profile-label">&#9889; Экспресс</span>
+                        <span class="profile-value" id="profile-express-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label"><span class="badge-prism"></span> Фотосеты</span>
+                        <span class="profile-value" id="profile-photosets-credits">0</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Пол</span>
+                        <span class="profile-value" id="profile-gender">&mdash;</span>
+                    </div>
+                </div>
+                <div class="profile-history">
+                    <div class="profile-history-header">
+                        <h3>Мои фото</h3>
+                    </div>
+                    <div class="history-tabs" id="history-tabs">
+                        <button class="history-tab active" data-mode="" onclick="filterHistory(null)">Все</button>
+                        <button class="history-tab" data-mode="express" onclick="filterHistory('express')">Экспресс</button>
+                        <button class="history-tab" data-mode="custom" onclick="filterHistory('custom')">Своя идея</button>
+                        <button class="history-tab" data-mode="photoset" onclick="filterHistory('photoset')">Фотосеты</button>
+                    </div>
+                    <div class="profile-history-grid" id="profile-history-grid">
+                        <div class="empty-state">История пока пустая</div>
+                    </div>
+                    <button class="action-btn secondary profile-history-more" id="profile-history-more" style="display:none" onclick="loadProfileHistory(false)">
+                        Показать ещё
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- Screen: Express Info -->
+        <div id="screen-express-info" class="screen">
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
+                <h2 class="header-title">Экспресс</h2>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="info-screen-container">
+                <p class="info-lead">В этом разделе две модели: Seedream и Nano Banana Pro.</p>
+                <section class="info-block">
+                    <h3 class="info-block-title">Seedream</h3>
+                    <p class="info-block-sub">Если вам важно точнее передать лицо.</p>
+                    <p>Он лучше держится за исходное фото и иногда выглядит почти как аккуратный перенос лица в новый образ.</p>
+                    <p>Поэтому здесь особенно важно выбрать хороший, чёткий исходник.</p>
+                </section>
+                <section class="info-block">
+                    <h3 class="info-block-title">Nano Banana Pro</h3>
+                    <p class="info-block-sub">Если вам важнее красота кадра.</p>
+                    <p>Он может чуть сильнее отойти от исходного фото, зато часто даёт более эффектную картинку: свет, атмосфера, детали и общая подача выглядят богаче.</p>
+                </section>
+                <div class="info-summary">
+                    <p>Если нужен максимум сходства — выбирайте <strong>Seedream</strong>.</p>
+                    <p>Если нужен более сильный и красивый визуал — <strong>Nano Banana Pro</strong>.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Custom Info -->
+        <div id="screen-custom-info" class="screen">
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
+                <h2 class="header-title">Своя идея</h2>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="info-screen-container">
+                <p class="info-lead">В этом разделе доступны две модели: Seedream и Nano Banana Pro. Обе позволяют создавать изображение по описанию или редактировать уже готовую картинку, но работают по-разному.</p>
+                <section class="info-block">
+                    <h3 class="info-block-title">Seedream</h3>
+                    <p>Seedream лучше подходит, когда вам важно точнее держаться запроса и аккуратнее передавать лицо, если в основе есть референс.</p>
+                    <p>Он обычно даёт более собранный и предсказуемый результат:</p>
+                    <ul>
+                        <li>лучше сохраняет сходство, если работа идёт от исходной картинки</li>
+                        <li>аккуратнее следует заданной идее</li>
+                        <li>хорошо подходит, когда нужен более контролируемый результат</li>
+                    </ul>
+                    <p>Выбирайте <strong>Seedream</strong>, если важнее точность, сходство и аккуратная подача.</p>
+                </section>
+                <section class="info-block">
+                    <h3 class="info-block-title">Nano Banana Pro</h3>
+                    <p>Nano Banana Pro чаще работает смелее и эффектнее. Эта модель может чуть свободнее интерпретировать исходник или запрос, зато часто даёт более сильную картинку по свету, атмосфере и деталям.</p>
+                    <p>Обычно это:</p>
+                    <ul>
+                        <li>более выразительная сцена</li>
+                        <li>более сочная подача</li>
+                        <li>больше ощущения вау-эффекта</li>
+                        <li>но иногда меньше точного сходства или буквального попадания в исходник</li>
+                    </ul>
+                    <p>Выбирайте <strong>Nano Banana Pro</strong>, если важнее визуальная сила, стиль и эффектность кадра.</p>
+                </section>
+                <div class="info-summary">
+                    <p><strong>Что выбрать?</strong></p>
+                    <p><strong>Seedream</strong> — когда нужен более точный и контролируемый результат.</p>
+                    <p><strong>Nano Banana Pro</strong> — когда нужен более яркий, красивый и выразительный визуал.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screen: Photosets Info -->
+        <div id="screen-photosets-info" class="screen">
+            <div class="screen-header info-header">
+                <div class="header-spacer"></div>
+                <h2 class="header-title">Фотосеты</h2>
+                <button class="screen-close" onclick="goBack('main')" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="info-screen-container">
+                <p class="info-lead">Фотосеты — это формат с более реалистичным и персональным результатом. Во многих случаях такие фото сложно отличить от настоящей съёмки.</p>
+                <section class="info-block">
+                    <p>Сначала мы попросим <strong>10 ваших фото</strong> и создадим на их основе персональную модель. Она помогает точнее передавать лицо, мимику и общее сходство именно с вами.</p>
+                    <p>Поэтому фотосеты выглядят реалистичнее, дороже и узнаваемее, чем обычные генерации. Для части задач этого уже достаточно и отдельная фотосессия просто не нужна.</p>
+                </section>
+                <div class="info-summary">
+                    <p>Ваша модель будет храниться <strong>30 дней</strong>. Всё это время фотосеты для вас будут дешевле.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Persona info modal -->
+    <div id="persona-info-modal" class="persona-info-modal" style="display:none" onclick="closePersonaInfoModal()">
+        <div class="persona-info-modal-content" onclick="event.stopPropagation()">
+            <h3>Персональная модель</h3>
+            <p>Персональная модель — это ваша цифровая версия, обученная по 10 фото.</p>
+            <p>Она помогает создавать изображения с более точным сходством, лицом и мимикой именно под вас.</p>
+            <p>Создание модели оплачивается один раз — дальше фотосеты будут значительно дешевле.</p>
+            <button class="generate-btn" onclick="closePersonaInfoModal()" style="margin-top:16px;padding:12px">Понятно</button>
+        </div>
+    </div>
+
+    <!-- Persona pending modal (paid create tariff, no photos uploaded yet) -->
+    <div id="persona-pending-modal" class="persona-info-modal" style="display:none">
+        <div class="persona-info-modal-content" onclick="event.stopPropagation()">
+            <h3>Модель ещё не создана</h3>
+            <p>Вы уже оплатили создание персональной модели.</p>
+            <p>Перейдите в бота и загрузите 10 фотографий — после этого сможете выбрать фотосет.</p>
+            <button class="generate-btn" onclick="closePersonaPendingModal()" style="margin-top:16px;padding:12px">Понятно</button>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="">
+        <div id="lightbox-overlay" class="lightbox-overlay" style="display:none">
+            <div class="lightbox-overlay-name" id="lightbox-style-name"></div>
+            <div class="lightbox-overlay-cost" id="lightbox-style-cost"></div>
+        </div>
+        <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
+    </div>
+
+    <script>
+        window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};
+        window.CUSTOM_REQUEST_V1 = {{ 'true' if custom_request_v1 else 'false' }};
+    </script>
+    <script src="/app/static/app_v2.js?v=60"></script>
+</body>
+</html>

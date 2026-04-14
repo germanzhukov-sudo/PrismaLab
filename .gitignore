@@ -37,3 +37,6 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# Рабочие папки для дизайн-ассетов (загружаются вручную в Supabase)
+images_custom/

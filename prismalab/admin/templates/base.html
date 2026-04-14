@@ -259,16 +259,19 @@
                     <a class="nav-link {% if '/analytics' in request.url.path %}active{% endif %}" href="{{ admin_base }}/analytics">
                         <i class="bi bi-funnel"></i> Аналитика
                     </a>
-                    <a class="nav-link {% if '/pack-costs' in request.url.path %}active{% endif %}" href="{{ admin_base }}/pack-costs">
-                        <i class="bi bi-box-seam"></i> Паки
+                    <a class="nav-link {% if '/photosets' in request.url.path and '/persona-styles/' not in request.url.path %}active{% endif %}" href="{{ admin_base }}/photosets">
+                        <i class="bi bi-camera-reels"></i> Фотосеты
                     </a>
-                    <a class="nav-link {% if '/persona-styles' in request.url.path %}active{% endif %}" href="{{ admin_base }}/persona-styles">
-                        <i class="bi bi-palette"></i> Стили Персоны
+                    <a class="nav-link {% if '/express-' in request.url.path %}active{% endif %}" href="{{ admin_base }}/express-styles">
+                        <i class="bi bi-lightning"></i> Экспресс-стили
                     </a>
                     <a class="nav-link {% if '/broadcast' in request.url.path %}active{% endif %}" href="{{ admin_base }}/broadcast">
                         <i class="bi bi-megaphone"></i> Рассылка
                     </a>
-                    <a class="nav-link {% if '/settings' in request.url.path %}active{% endif %}" href="{{ admin_base }}/settings">
+                    <a class="nav-link {% if '/pricing' in request.url.path %}active{% endif %}" href="{{ admin_base }}/pricing">
+                        <i class="bi bi-tags"></i> Цены
+                    </a>
+                    <a class="nav-link {% if '/settings' in request.url.path and '/pricing' not in request.url.path %}active{% endif %}" href="{{ admin_base }}/settings">
                         <i class="bi bi-gear"></i> Настройки
                     </a>
                 </nav>

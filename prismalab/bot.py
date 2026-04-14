@@ -274,7 +274,7 @@ FAST_TARIFFS_PERSONA_MESSAGE = """<b>Баланс Экспресс-фото:</b>
 Хотите результат, который пересылают в чаты и ставят на аватар? Выбирайте тариф <b>Персона</b> ✨"""
 
 
-FAST_CUSTOM_PROMPT_REQUEST_MESSAGE = """✏️ <b>Свой запрос</b>
+FAST_CUSTOM_PROMPT_REQUEST_MESSAGE = """✏️ <b>Своя идея</b>
 
 Напишите текстом описание картинки — это будет <b>запрос для нашей нейросети</b>. Лучше на английском.
 
@@ -489,6 +489,35 @@ async def handle_reset_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # Replicate train10 (_start_train10) удалён
 
 
+async def _save_style_job_history(store, user_id: int, style, images_bytes: list[bytes]) -> None:
+    """Best-effort: upload images to Supabase Storage + save to generation_history."""
+    try:
+        from prismalab.supabase_storage import upload_generation
+    except ImportError:
+        upload_generation = None
+
+    for img_bytes in images_bytes:
+        try:
+            image_url = None
+            if upload_generation and img_bytes:
+                try:
+                    image_url = await asyncio.to_thread(
+                        upload_generation, img_bytes, user_id, "png", "image/png",
+                    )
+                except Exception as e:
+                    logger.warning("History upload failed for style %s: %s", style.id, e)
+            store.save_generation_history(
+                user_id=user_id,
+                mode="photoset",
+                style_slug=str(style.id),
+                style_title=style.title,
+                provider="astria",
+                image_url=image_url,
+            )
+        except Exception as e:
+            logger.warning("Save style history failed for %s: %s", style.id, e)
+
+
 async def _run_style_job(
     *,
     bot,
@@ -507,7 +536,18 @@ async def _run_style_job(
     is_persona_style: bool = False,
     context: ContextTypes.DEFAULT_TYPE | None = None,
     skip_post_message: bool = False,
-) -> None:
+    num_images: int = 1,
+    credits_to_spend: int = 1,
+) -> bool:
+    """
+    Запускает генерацию одного стиля. Возвращает True, если хоть одна картинка
+    была УСПЕШНО отправлена юзеру (т.е. юзер получил результат), иначе False.
+
+    Существующие callsite (fast_photo, regular handlers) return value игнорируют —
+    обратная совместимость сохраняется. Новый контракт нужен для persona-batch refund
+    логики в `handlers/persona.py::_run_persona_batch` (Task 5b).
+    """
+    generated_any = False
     try:
         use_test_prompt = test_prompt is not None
         if use_test_prompt:
@@ -534,7 +574,7 @@ async def _run_style_job(
                 if is_persona_style and context:
                     extra["reply_markup"] = _persona_app_keyboard()
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-                return
+                return False
 
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         refs: list[bytes] = []
@@ -553,7 +593,7 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
 
         # Только Astria (Replicate удалён)
         if not settings.astria_api_key:
@@ -562,7 +602,7 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
         # Проверяем, есть ли у пользователя FaceID или LoRA tune
         user_profile = store.get_user(user_id)
         astria_tune_id = user_profile.astria_tune_id if user_profile else None
@@ -584,11 +624,12 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
         if use_lora:
             # LoRA генерация: используем <lora:{tune_id}:strength> в промпте
             # Inference на базовой модели Flux1.dev (1504944)
-            lora_weight = 1.1  # Вес LoRA для сходства (1.0–1.2)
+            from prismalab.config import lora_weight_for_flow
+            lora_weight = lora_weight_for_flow("style")  # 1.1 для наших образов
 
             # Промпт для Astria LoRA (lora_prompt_override — для Персоны)
             # Токен должен совпадать с name при обучении: person (бот) или woman/man (пак)
@@ -679,7 +720,7 @@ async def _run_style_job(
             use_inpaint_faces = False
             use_seed = random_seed  # Поддерживается для Flux1.dev
             logger.info(f"[ASTRIA] LoRA на Flux1.dev: face_correct=false, face_swap=false, inpaint_faces=false, hires_fix=true, seed={use_seed}")
-            super_resolution = True  # Для лучшего качества
+            super_resolution = False  # DEV: тест без super_resolution
             # Для Flux negative_prompt не поддерживается
             neg = None  # Flux не поддерживает negative_prompt
         else:
@@ -704,7 +745,7 @@ async def _run_style_job(
             use_face_correct = True  # Обязательно для FaceID
             use_face_swap = True  # Обязательно для FaceID
             # super_resolution=true почти всегда улучшает лицо
-            super_resolution = True
+            super_resolution = False  # DEV: тест без super_resolution
             # inpaint_faces НЕ поддерживается для FaceID (Astria возвращает 422)
             # Для full-body/long-shot можно использовать только LoRA с inpaint_faces
             use_inpaint_faces = None
@@ -733,39 +774,86 @@ async def _run_style_job(
             film_grain=use_film_grain,
             seed=use_seed,  # None для Flux 2 Pro LoRA, random_seed для остальных
             aspect_ratio="3:4",
+            num_images=num_images,
             max_seconds=settings.astria_max_seconds,
             poll_seconds=6.0,
         )
         if not is_persona_style:
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Скачиваю результат…")
-        out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
-        out_bytes = _postprocess_output(style_id, out_bytes)
 
-        bio = io.BytesIO(out_bytes)
-        bio.name = f"{settings.app_name}_{style.id}.png"
-        if not is_persona_style:
-            await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
-        tune_type_label = "LoRA" if use_lora else "FaceID"
+        # Скачиваем результаты (1 или N картинок)
+        _result_bytes_list: list[bytes] = []  # for history saving
+        if num_images > 1 and len(astria_res.images) > 1:
+            # Альбом: скачиваем все, отправляем sendMediaGroup
+            all_bytes = []
+            for img_url in astria_res.images[:num_images]:
+                try:
+                    img_bytes = await astria_download_first_image_bytes([img_url], api_key=settings.astria_api_key)
+                    all_bytes.append(_postprocess_output(style_id, img_bytes))
+                except Exception as dl_err:
+                    logger.warning("Failed to download image %s: %s", img_url, dl_err)
 
-        persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
-        await _safe_send_document(
-            bot=bot,
-            chat_id=chat_id,
-            document=bio,
-            caption=persona_caption,
-        )
+            if not is_persona_style:
+                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
+
+            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово: «{style.title}»"
+
+            _result_bytes_list = list(all_bytes)
+            if all_bytes:
+                # Пробуем отправить альбомом
+                try:
+                    from telegram import InputMediaDocument
+                    media = []
+                    for idx, img_b in enumerate(all_bytes):
+                        bio = io.BytesIO(img_b)
+                        bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
+                        media.append(InputMediaDocument(media=bio, caption=persona_caption if idx == 0 else None))
+                    await bot.send_media_group(chat_id=chat_id, media=media)
+                    generated_any = True  # Task 5b: хоть что-то улетело юзеру
+                except Exception as album_err:
+                    logger.warning("sendMediaGroup failed, sending individually: %s", album_err)
+                    # Fallback: отправляем поштучно
+                    for idx, img_b in enumerate(all_bytes):
+                        try:
+                            bio = io.BytesIO(img_b)
+                            bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
+                            await _safe_send_document(bot=bot, chat_id=chat_id, document=bio,
+                                                      caption=persona_caption if idx == 0 else "")
+                            generated_any = True  # Task 5b: одна из fallback-картинок улетела
+                        except Exception:
+                            logger.warning("Fallback send failed for image %d", idx + 1)
+        else:
+            # Одна картинка (legacy flow)
+            out_bytes = await astria_download_first_image_bytes(astria_res.images, api_key=settings.astria_api_key)
+            out_bytes = _postprocess_output(style_id, out_bytes)
+
+            bio = io.BytesIO(out_bytes)
+            bio.name = f"{settings.app_name}_{style.id}.png"
+            if not is_persona_style:
+                await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text="Отправляю в Telegram…")
+            tune_type_label = "LoRA" if use_lora else "FaceID"
+            persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
+            await _safe_send_document(bot=bot, chat_id=chat_id, document=bio, caption=persona_caption)
+            generated_any = True  # Task 5b: single-image отправлена
+            _result_bytes_list = [out_bytes]
+
         # Логируем успешную генерацию для аналитики
         try:
-            store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria"})
+            store.log_event(user_id, "generation", {"mode": "persona" if is_persona_style else "fast", "style": style_id, "provider": "astria", "num_images": num_images})
         except Exception:
             pass
+
+        # Сохраняем в историю генераций (best-effort upload + save)
+        if is_persona_style and _result_bytes_list:
+            await _save_style_job_history(store, user_id, style, _result_bytes_list)
 
         if is_persona_style and context:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
             except Exception:
                 pass
-            credits = store.decrement_persona_credits(user_id)
+            # Списание credits_to_spend (не фикс 1)
+            credits = store.decrement_persona_credits(user_id, count=credits_to_spend)
             if not skip_post_message:
                 if credits <= 0:
                     profile = store.get_user(user_id)
@@ -787,7 +875,7 @@ async def _run_style_job(
                 text="Готово. Хочешь другой стиль?",
                 reply_markup=_start_keyboard(profile),
             )
-        return
+        return generated_any
 
     except AstriaError as e:
         logger.warning("Astria error: %s", e)
@@ -801,6 +889,7 @@ async def _run_style_job(
             )
         else:
             await _safe_edit_status(bot, chat_id, status_message_id, text=err_msg)
+        return generated_any  # Task 5b: если что-то успели отправить — True; иначе False
     except Exception as e:
         logger.error("Ошибка PrismaLab job: %s", e, exc_info=True)
         gen_type = "persona" if is_persona_style else "express"
@@ -820,6 +909,7 @@ async def _run_style_job(
                 await _safe_edit_status(bot, chat_id, status_message_id, text=err_text)
         except Exception:
             pass
+        return generated_any  # Task 5b
 
 
 async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

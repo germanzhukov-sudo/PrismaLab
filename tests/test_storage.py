@@ -96,13 +96,8 @@ def test_pending_pack_upload(store):
 
 
 def test_persona_styles_crud(store):
-    """persona_styles — только PG, в SQLite возвращает пустой список (by design)."""
-    if not store._use_pg:
-        styles = store.get_persona_styles()
-        assert styles == []
-        return
-    # PG-тесты (не запускаются в CI с SQLite)
-    store.create_persona_style(
+    """persona_styles — CRUD работает и в SQLite."""
+    style_id = store.create_persona_style(
         slug="test_style",
         title="Test Style",
         description="Test",
@@ -111,8 +106,367 @@ def test_persona_styles_crud(store):
         image_url="",
         sort_order=1,
     )
+    assert style_id is not None
+
     styles = store.get_persona_styles()
     assert len(styles) >= 1
+    assert styles[0]["slug"] == "test_style"
+
+    # Read by id
+    s = store.get_persona_style(style_id)
+    assert s is not None
+    assert s["title"] == "Test Style"
+
+    # Read by slug
+    s2 = store.get_persona_style_by_slug("test_style")
+    assert s2 is not None
+    assert s2["id"] == style_id
+
+    # Update
+    ok = store.update_persona_style(style_id, title="Updated Style")
+    assert ok is True
+    s3 = store.get_persona_style(style_id)
+    assert s3["title"] == "Updated Style"
+
+    # Delete
+    ok = store.delete_persona_style(style_id)
+    assert ok is True
+    assert store.get_persona_style(style_id) is None
+
+
+def test_persona_style_credit_cost(store):
+    """credit_cost — создание, чтение, обновление."""
+    style_id = store.create_persona_style(
+        slug="cost_test",
+        title="Cost Test",
+        gender="female",
+        credit_cost=6,
+    )
+    assert style_id is not None
+
+    s = store.get_persona_style(style_id)
+    assert s["credit_cost"] == 6
+
+    store.update_persona_style(style_id, credit_cost=2)
+    s2 = store.get_persona_style(style_id)
+    assert s2["credit_cost"] == 2
+
+
+def test_persona_style_credit_cost_default(store):
+    """credit_cost по умолчанию = 4."""
+    style_id = store.create_persona_style(
+        slug="default_cost",
+        title="Default Cost",
+        gender="male",
+    )
+    s = store.get_persona_style(style_id)
+    assert s["credit_cost"] == 4
+
+
+def test_style_previews_crud(store):
+    """persona_style_previews — set, get, replace, cascade delete."""
+    style_id = store.create_persona_style(
+        slug="preview_test", title="Preview Test", gender="female",
+    )
+    # Пустые превью по умолчанию
+    assert store.get_style_previews(style_id) == []
+
+    # Set previews
+    store.set_style_previews(style_id, ["url1", "url2", "url3", "url4"])
+    previews = store.get_style_previews(style_id)
+    assert previews == ["url1", "url2", "url3", "url4"]
+
+    # Replace previews
+    store.set_style_previews(style_id, ["new1", "new2"])
+    assert store.get_style_previews(style_id) == ["new1", "new2"]
+
+    # Max 4 — лишние обрезаются
+    store.set_style_previews(style_id, ["a", "b", "c", "d", "e"])
+    assert len(store.get_style_previews(style_id)) == 4
+
+    # Cascade delete — удаление стиля удаляет превью
+    store.delete_persona_style(style_id)
+    assert store.get_style_previews(style_id) == []
+
+
+def test_style_previews_map(store):
+    """get_all_style_previews_map — batch загрузка без N+1."""
+    s1 = store.create_persona_style(slug="map_a", title="Map A", gender="female")
+    s2 = store.create_persona_style(slug="map_b", title="Map B", gender="male")
+    store.set_style_previews(s1, ["a1", "a2"])
+    store.set_style_previews(s2, ["b1", "b2", "b3"])
+
+    m = store.get_all_style_previews_map()
+    assert m[s1] == ["a1", "a2"]
+    assert m[s2] == ["b1", "b2", "b3"]
+
+
+def test_style_previews_migration(store):
+    """Миграция image_url → previews: стиль с image_url, повторный init подхватывает."""
+    # Создаём стиль с image_url (после первичного init)
+    style_id = store.create_persona_style(
+        slug="migrate_test", title="Migrate", gender="female", image_url="https://old.jpg",
+    )
+    # Превью пусто — миграция уже прошла до создания стиля
+    assert store.get_style_previews(style_id) == []
+
+    # Повторный init — миграция подхватит существующий image_url
+    store._init_admin_tables()
+    previews = store.get_style_previews(style_id)
+    assert "https://old.jpg" in previews
+
+
+def test_style_delete_orphan_legacy_image(store):
+    """При удалении стиля с image_url но без previews — image_url доступен для cleanup."""
+    style_id = store.create_persona_style(
+        slug="orphan_test", title="Orphan", gender="female", image_url="https://legacy.jpg",
+    )
+    # Не добавляем previews — имитируем legacy стиль
+    assert store.get_style_previews(style_id) == []
+
+    # Перед удалением admin route читает стиль и previews
+    style = store.get_persona_style(style_id)
+    assert style is not None
+    legacy_url = (style.get("image_url") or "").strip()
+    preview_urls = set(store.get_style_previews(style_id))
+
+    # legacy_url НЕ в previews → admin route вызовет delete_image(legacy_url)
+    assert legacy_url == "https://legacy.jpg"
+    assert legacy_url not in preview_urls
+
+    store.delete_persona_style(style_id)
+    assert store.get_persona_style(style_id) is None
+
+
+def test_express_styles_crud(store):
+    """express_styles — полный CRUD цикл с новыми полями."""
+    # Create
+    style_id = store.create_express_style(
+        slug="night_bar",
+        title="Ночной бар",
+        emoji="🍸",
+        theme="lifestyle",
+        gender="male",
+        prompt="test prompt",
+        negative_prompt="bad quality",
+        provider="seedream",
+        image_url="https://example.com/img.jpg",
+        model_params='{"quality": "hd"}',
+        sort_order=1,
+    )
+    assert style_id is not None
+
+    # Read all — проверяем все поля
+    styles = store.get_express_styles()
+    assert len(styles) == 1
+    s = styles[0]
+    assert s["slug"] == "night_bar"
+    assert s["emoji"] == "🍸"
+    assert s["theme"] == "lifestyle"
+    assert s["provider"] == "seedream"
+    assert s["model"] == "seedream"  # backward compat
+    assert s["negative_prompt"] == "bad quality"
+    assert s["image_url"] == "https://example.com/img.jpg"
+    assert s["model_params"] == '{"quality": "hd"}'
+
+    # Read by id
+    s = store.get_express_style(style_id)
+    assert s is not None
+    assert s["title"] == "Ночной бар"
+    assert s["provider"] == "seedream"
+
+    # Read by slug
+    s2 = store.get_express_style_by_slug("night_bar")
+    assert s2 is not None
+    assert s2["id"] == style_id
+
+    # Update
+    ok = store.update_express_style(style_id, title="Night Bar", emoji="🌙",
+                                     provider="nano-banana-pro", theme="mood")
+    assert ok is True
+    s3 = store.get_express_style(style_id)
+    assert s3["title"] == "Night Bar"
+    assert s3["emoji"] == "🌙"
+    assert s3["provider"] == "nano-banana-pro"
+    assert s3["model"] == "nano-banana-pro"  # synced
+    assert s3["theme"] == "mood"
+
+    # Delete
+    ok = store.delete_express_style(style_id)
+    assert ok is True
+    assert store.get_express_style(style_id) is None
+
+
+def test_express_styles_filter_gender(store):
+    """express_styles — фильтрация по полу."""
+    store.create_express_style(slug="male_1", title="Male Style", gender="male", theme="general")
+    store.create_express_style(slug="female_1", title="Female Style", gender="female", theme="general")
+
+    males = store.get_express_styles(gender="male")
+    assert len(males) == 1
+    assert males[0]["slug"] == "male_1"
+
+    females = store.get_express_styles(gender="female")
+    assert len(females) == 1
+    assert females[0]["slug"] == "female_1"
+
+    all_styles = store.get_express_styles()
+    assert len(all_styles) == 2
+
+
+def test_express_styles_active_filter(store):
+    """express_styles — фильтрация по active_only."""
+    sid = store.create_express_style(slug="active_test", title="Active Test", gender="female")
+    assert len(store.get_express_styles(active_only=True)) == 1
+
+    store.update_express_style(sid, is_active=0)
+    assert len(store.get_express_styles(active_only=True)) == 0
+    assert len(store.get_express_styles(active_only=False)) == 1
+
+
+def test_express_styles_upsert(store):
+    """upsert_express_style — insert + update по slug с новыми полями."""
+    # Insert
+    sid1 = store.upsert_express_style(
+        slug="upsert_test", title="V1", emoji="🔥", gender="female",
+        theme="glamour", provider="seedream",
+        negative_prompt="", image_url="", model_params="",
+    )
+    assert sid1 is not None
+    s1 = store.get_express_style(sid1)
+    assert s1["title"] == "V1"
+    assert s1["theme"] == "glamour"
+    assert s1["provider"] == "seedream"
+
+    # Upsert (update existing)
+    sid2 = store.upsert_express_style(
+        slug="upsert_test", title="V2", emoji="✨", gender="female",
+        theme="beauty", provider="nano-banana-pro",
+    )
+    assert sid2 == sid1  # same id
+    s2 = store.get_express_style(sid1)
+    assert s2["title"] == "V2"
+    assert s2["emoji"] == "✨"
+    assert s2["theme"] == "beauty"
+    assert s2["provider"] == "nano-banana-pro"
+
+    # Only 1 row
+    assert len(store.get_express_styles()) == 1
+
+
+def test_express_styles_backward_compat_model(store):
+    """Передача model= вместо provider= должна работать (backward compat)."""
+    sid = store.create_express_style(
+        slug="compat_test", title="Compat", gender="female", model="nano-banana-pro",
+    )
+    s = store.get_express_style(sid)
+    assert s["provider"] == "nano-banana-pro"
+    assert s["model"] == "nano-banana-pro"
+
+
+def test_express_themes(store):
+    """get_express_themes — distinct темы с фильтрацией."""
+    store.create_express_style(slug="t1", title="T1", gender="female", theme="glamour")
+    store.create_express_style(slug="t2", title="T2", gender="female", theme="mood")
+    store.create_express_style(slug="t3", title="T3", gender="female", theme="glamour")  # дубль
+    store.create_express_style(slug="t4", title="T4", gender="male", theme="outdoor")
+
+    # Все темы
+    themes = store.get_express_themes(active_only=False)
+    assert sorted(themes) == ["glamour", "mood", "outdoor"]
+
+    # Фильтр по gender
+    f_themes = store.get_express_themes(gender="female", active_only=False)
+    assert sorted(f_themes) == ["glamour", "mood"]
+
+    m_themes = store.get_express_themes(gender="male", active_only=False)
+    assert m_themes == ["outdoor"]
+
+    # active_only
+    store.update_express_style(
+        store.get_express_style_by_slug("t4")["id"], is_active=0,
+    )
+    active_themes = store.get_express_themes(active_only=True)
+    assert "outdoor" not in active_themes
+    assert sorted(active_themes) == ["glamour", "mood"]
+
+
+def test_express_styles_swap_and_renumber(store):
+    """swap_express_style_order + _renumber → contiguous 1..N."""
+    id1 = store.create_express_style(slug="s1", title="S1", sort_order=1)
+    id2 = store.create_express_style(slug="s2", title="S2", sort_order=2)
+    id3 = store.create_express_style(slug="s3", title="S3", sort_order=3)
+
+    # Swap s1 и s2
+    store.swap_express_style_order(id1, id2)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["s2", "s1", "s3"]
+
+    # Sort orders contiguous 1,2,3
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3]
+
+
+def test_express_styles_renumber_fills_gaps(store):
+    """_renumber_express_styles заполняет дыры в sort_order."""
+    store.create_express_style(slug="g1", title="G1", sort_order=1)
+    store.create_express_style(slug="g2", title="G2", sort_order=5)
+    store.create_express_style(slug="g3", title="G3", sort_order=10)
+
+    store._renumber_express_styles()
+
+    styles = store.get_express_styles()
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3]
+
+
+def test_express_styles_move_down(store):
+    """move_express_style_to_order: позиция 2→4 → стиль оказывается на 4."""
+    id1 = store.create_express_style(slug="m1", title="M1", sort_order=1)
+    id2 = store.create_express_style(slug="m2", title="M2", sort_order=2)
+    id3 = store.create_express_style(slug="m3", title="M3", sort_order=3)
+    id4 = store.create_express_style(slug="m4", title="M4", sort_order=4)
+    id5 = store.create_express_style(slug="m5", title="M5", sort_order=5)
+
+    # Двигаем m2 с позиции 2 на позицию 4
+    store.move_express_style_to_order(id2, 4)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["m1", "m3", "m4", "m2", "m5"]
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3, 4, 5]
+
+
+def test_express_styles_move_up(store):
+    """move_express_style_to_order: позиция 4→2 → стиль оказывается на 2."""
+    id1 = store.create_express_style(slug="u1", title="U1", sort_order=1)
+    id2 = store.create_express_style(slug="u2", title="U2", sort_order=2)
+    id3 = store.create_express_style(slug="u3", title="U3", sort_order=3)
+    id4 = store.create_express_style(slug="u4", title="U4", sort_order=4)
+
+    # Двигаем u4 с позиции 4 на позицию 2
+    store.move_express_style_to_order(id4, 2)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["u1", "u4", "u2", "u3"]
+    orders = [s["sort_order"] for s in styles]
+    assert orders == [1, 2, 3, 4]
+
+
+def test_express_styles_move_noop(store):
+    """move_express_style_to_order: same position → no change."""
+    id1 = store.create_express_style(slug="n1", title="N1", sort_order=1)
+    id2 = store.create_express_style(slug="n2", title="N2", sort_order=2)
+
+    store.move_express_style_to_order(id1, 1)
+
+    styles = store.get_express_styles()
+    slugs = [s["slug"] for s in styles]
+    assert slugs == ["n1", "n2"]
 
 
 def test_log_event(store):

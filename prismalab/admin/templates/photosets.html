@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+
+{% block title %}Фотосеты — PrismaLab Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2><i class="bi bi-camera-reels me-2"></i>Фотосеты</h2>
+    <span class="text-muted">Курс: {{ usd_rub }} ₽/$</span>
+</div>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    <i class="bi bi-check-circle me-2"></i>Сохранено
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<!-- Табы -->
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'packs' %}active{% endif %}" href="?tab=packs{% if category_filter %}&category={{ category_filter }}{% endif %}">Паки</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'styles' %}active{% endif %}" href="?tab=styles{% if category_filter %}&category={{ category_filter }}{% endif %}">Стили</a>
+    </li>
+</ul>
+
+<!-- Фильтр по категории -->
+<div class="mb-3">
+    {% set categories = [('', 'Все'), ('female', 'Женские'), ('male', 'Мужские'), ('child', 'Детские'), ('animals', 'Животные')] %}
+    {% for val, label in categories %}
+    <a href="?tab={{ tab }}{% if val %}&category={{ val }}{% endif %}"
+       class="btn btn-sm {% if category_filter == val %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
+    {% endfor %}
+</div>
+
+{% if tab == 'packs' %}
+<!-- ===== Паки ===== -->
+{% if packs %}
+<form method="POST">
+    <input type="hidden" name="save_type" value="packs">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Паков: {{ packs|length }}</span>
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-check-lg me-1"></i>Сохранить
+            </button>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Название</th>
+                        <th>Класс</th>
+                        <th>Фото</th>
+                        <th>Кредиты</th>
+                        <th>Цена</th>
+                        <th>Себест. ($)</th>
+                        <th>Себест. (₽)</th>
+                        <th>Маржа (₽)</th>
+                        <th>%</th>
+                        <th>Генераций</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in packs %}
+                    <tr>
+                        <td><small class="text-muted">{{ p.id }}</small></td>
+                        <td><strong>{{ p.title }}</strong></td>
+                        <td><code>{{ p.class_name }}</code></td>
+                        <td>{{ p.expected_images }}</td>
+                        <td>
+                            <input type="number" min="1" class="form-control form-control-sm"
+                                   name="credit_cost_{{ p.id }}" value="{{ p.credit_cost }}"
+                                   style="width: 80px;">
+                        </td>
+                        <td>₽{{ "%.0f"|format(p.price_rub) }}</td>
+                        <td>
+                            <input type="number" step="0.01" min="0" class="form-control form-control-sm"
+                                   name="cost_{{ p.id }}" value="{{ "%.2f"|format(p.cost_usd) }}"
+                                   style="width: 90px;" onchange="updatePackRow(this)">
+                        </td>
+                        <td class="cost-rub">₽{{ "%.0f"|format(p.cost_rub) }}</td>
+                        <td class="margin-rub {% if p.margin_rub > 0 %}text-success{% elif p.margin_rub < 0 %}text-danger{% endif %}">
+                            {% if p.cost_usd > 0 %}₽{{ "%.0f"|format(p.margin_rub) }}{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td class="margin-pct">
+                            {% if p.cost_usd > 0 %}{{ p.margin_pct }}%{% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if p.generations > 0 %}
+                            <span class="badge bg-primary">{{ p.generations }}</span>
+                            <small class="text-muted">({{ p.total_images }} фото)</small>
+                            {% else %}
+                            <span class="text-muted">0</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-end">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg me-1"></i>Сохранить все
+            </button>
+        </div>
+    </div>
+</form>
+{% else %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>Паки не найдены{% if category_filter %} для этого фильтра{% endif %}.
+</div>
+{% endif %}
+
+{% else %}
+<!-- ===== Стили ===== -->
+<form method="POST">
+    <input type="hidden" name="save_type" value="styles">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Стилей: {{ styles|length }}</span>
+            <div>
+                <a href="{{ admin_base }}/persona-styles/new" class="btn btn-success btn-sm me-2">
+                    <i class="bi bi-plus-lg me-1"></i>Новый стиль
+                </a>
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <i class="bi bi-check-lg me-1"></i>Сохранить
+                </button>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>№</th>
+                        <th>Фото</th>
+                        <th>Название</th>
+                        <th>Описание</th>
+                        <th>Пол</th>
+                        <th>Кредиты</th>
+                        <th>Себест. ($)</th>
+                        <th>Себест. (₽)</th>
+                        <th>Генераций</th>
+                        <th>Статус</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in styles %}
+                    {% set cost_usd = s.cost_usd|default(0)|float %}
+                    {% set cost_rub = cost_usd * usd_rub %}
+                    {% set credit_price = (s.credit_cost|default(4)|int) %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            {% if s.image_url %}
+                            <img src="{{ s.image_url }}" width="48" height="64" class="rounded" style="object-fit:cover">
+                            {% else %}
+                            <div style="width:48px;height:64px;background:var(--bs-gray-200);border-radius:4px"></div>
+                            {% endif %}
+                        </td>
+                        <td><strong>{{ s.title }}</strong></td>
+                        <td style="max-width:200px">
+                            {% if s.description %}
+                            <small class="text-muted">{{ s.description[:80] }}{% if s.description|length > 80 %}...{% endif %}</small>
+                            {% else %}
+                            <small class="text-muted">&mdash;</small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if s.gender == 'female' %}<span class="badge bg-danger">Жен</span>
+                            {% elif s.gender == 'male' %}<span class="badge bg-primary">Муж</span>
+                            {% elif s.gender == 'child' %}<span class="badge bg-warning text-dark">Дети</span>
+                            {% elif s.gender == 'animals' %}<span class="badge bg-success">Животные</span>
+                            {% else %}<span class="badge bg-secondary">{{ s.gender }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ credit_price }}</td>
+                        <td>
+                            <input type="number" step="0.01" min="0" class="form-control form-control-sm"
+                                   name="style_cost_{{ s.id }}" value="{{ "%.2f"|format(cost_usd) }}"
+                                   style="width: 90px;" onchange="updateStyleRow(this)">
+                        </td>
+                        <td class="cost-rub">₽{{ "%.0f"|format(cost_rub) }}</td>
+                        <td>
+                            {% if s.generations > 0 %}
+                            <span class="badge bg-primary">{{ s.generations }}</span>
+                            {% else %}
+                            <span class="text-muted">0</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if s.is_active %}<span class="badge bg-success">Вкл</span>
+                            {% else %}<span class="badge bg-secondary">Выкл</span>{% endif %}
+                        </td>
+                        <td>
+                            <a href="{{ admin_base }}/persona-styles/{{ s.id }}/edit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer text-end">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg me-1"></i>Сохранить себестоимость
+            </button>
+        </div>
+    </div>
+</form>
+
+{% if not styles %}
+<div class="alert alert-info mt-3">
+    <i class="bi bi-info-circle me-2"></i>Стили не найдены{% if category_filter %} для этого фильтра{% endif %}.
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const usdRub = {{ usd_rub }};
+
+    function updatePackRow(input) {
+        const tr = input.closest('tr');
+        const costUsd = parseFloat(input.value) || 0;
+        const priceRub = parseFloat(tr.querySelector('td:nth-child(5)').textContent.replace('₽', '').trim()) || 0;
+        const costRub = costUsd * usdRub;
+        const marginRub = priceRub - costRub;
+        const marginPct = priceRub > 0 && costUsd > 0 ? ((marginRub / priceRub) * 100).toFixed(1) : 0;
+
+        tr.querySelector('.cost-rub').textContent = '₽' + Math.round(costRub);
+        const marginEl = tr.querySelector('.margin-rub');
+        const pctEl = tr.querySelector('.margin-pct');
+        if (costUsd > 0) {
+            marginEl.textContent = '₽' + Math.round(marginRub);
+            marginEl.className = 'margin-rub ' + (marginRub > 0 ? 'text-success' : marginRub < 0 ? 'text-danger' : '');
+            pctEl.textContent = marginPct + '%';
+        } else {
+            marginEl.innerHTML = '<span class="text-muted">—</span>';
+            marginEl.className = 'margin-rub';
+            pctEl.innerHTML = '<span class="text-muted">—</span>';
+        }
+    }
+
+    function updateStyleRow(input) {
+        const tr = input.closest('tr');
+        const costUsd = parseFloat(input.value) || 0;
+        const costRub = costUsd * usdRub;
+        tr.querySelector('.cost-rub').textContent = '₽' + Math.round(costRub);
+    }
+</script>
+{% endblock %}

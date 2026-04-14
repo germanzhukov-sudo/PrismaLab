@@ -122,10 +122,9 @@ INVOICE_AMOUNT_KOPECKS = int(os.getenv("INVOICE_AMOUNT_KOPECKS") or "8800")  # 8
 # Префикс payload для PreCheckout (валидный платёж). Формат: pl:product_type:credits:user_id
 INVOICE_PAYLOAD_PREFIX = "pl:"
 
-# Цены в рублях (для отображения и реальной оплаты если PAYMENT_TEST_AMOUNT=0)
-PRICES_FAST = {5: 199, 10: 299, 30: 699}
-PRICES_PERSONA_TOPUP = {10: 229, 20: 439, 30: 629}
-PRICES_PERSONA_CREATE = {5: 299, 20: 599, 40: 999}
+# Цены продажи — через единый сервис prismalab.tariffs
+# Не хардкодить цены здесь! Все PRICES_* перенесены в tariffs.py как _DEFAULT_*.
+from prismalab.tariffs import get_price as _tariffs_get_price
 
 
 def is_yookassa_configured() -> bool:
@@ -137,16 +136,14 @@ def is_telegram_payments_configured() -> bool:
     return bool(TELEGRAM_PROVIDER_TOKEN)
 
 
-def _amount_rub(product_type: str, credits: int) -> float:
-    """Сумма в рублях для создания платежа."""
+def _amount_rub(store, product_type: str, credits: int) -> float:
+    """Сумма в рублях для создания платежа. Читает цену из tariffs service."""
     if PAYMENT_TEST_AMOUNT > 0:
         return float(PAYMENT_TEST_AMOUNT)
-    if product_type == "fast":
-        return float(PRICES_FAST.get(credits, 199))
-    if product_type == "persona_topup":
-        return float(PRICES_PERSONA_TOPUP.get(credits, 229))
-    if product_type == "persona_create":
-        return float(PRICES_PERSONA_CREATE.get(credits, 599))
+    price = _tariffs_get_price(store, product_type, credits)
+    if price is not None:
+        return float(price)
+    logger.warning("No price found for %s/%s, fallback 10", product_type, credits)
     return 10.0
 
 
@@ -286,10 +283,17 @@ def _yookassa_success_content(
         text = (
             f"Оплата получена ✅\n\n"
             f"{_format_balance_express(credits_now)}\n\n"
-            f"<b>Выберите стиль</b> или введите <b>свой запрос</b> 👇\n\n"
+            f"Вернитесь в приложение для генерации или <b>выберите стиль</b> ниже 👇\n\n"
             f"{STYLE_EXAMPLES_FOOTER}"
         )
         kb = _fast_style_choice_keyboard(gender, include_tariffs=True, back_to_ready=True, page=0)
+        # Add Mini App button if URL configured
+        from prismalab.config import MINIAPP_URL
+        if MINIAPP_URL:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+            existing_rows = list(kb.inline_keyboard) if kb else []
+            new_rows = [[InlineKeyboardButton("⚡ Открыть Экспресс", web_app=WebAppInfo(url=MINIAPP_URL))]] + existing_rows
+            kb = InlineKeyboardMarkup(new_rows)
         return text, kb
 
     if product_type == "persona_topup":
@@ -902,462 +906,28 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
         except Exception as e:
             logger.warning("Ошибка подключения админки: %s (%s)", type(e).__name__, e, exc_info=True)
 
-        # Mini App на том же порту по пути /app (прямые aiohttp handlers, без ASGIResource)
+        # Mini App на том же порту по пути /app (ASGI bridge → Starlette routes.py)
         try:
-            from prismalab.miniapp import routes as miniapp_routes
-            miniapp_routes.set_store(store)
+            from prismalab.miniapp.routes import create_miniapp, set_application, set_bot, set_bot_username, set_store as miniapp_set_store
+            miniapp_set_store(store)
+            set_bot(bot)
+            set_application(application)
+            set_bot_username(bot_username)
 
-            async def _miniapp_page(_request: web.Request) -> web.Response:
-                """Отдаёт HTML Mini App."""
-                from pathlib import Path
-                html_path = Path(__file__).parent / "miniapp" / "templates" / "app.html"
-                html = html_path.read_text(encoding="utf-8")
-                return web.Response(text=html, content_type="text/html")
+            miniapp_app = create_miniapp(store=store)
+            miniapp_asgi = ASGIResource(miniapp_app, root_path="")
 
-            async def _miniapp_api_auth(request: web.Request) -> web.Response:
-                body = await request.json()
-                # Прямой вызов API
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Invalid init data"}, status=401)
-                profile = miniapp_routes.get_store().get_user(user["user_id"])
-                user_id = user["user_id"]
-                _pc = getattr(profile, "persona_credits_remaining", 0)
-                _hp = bool(getattr(profile, "astria_lora_tune_id", None))
-                logger.info("AUTH user=%s has_persona=%s persona_credits_raw=%s", user_id, _hp, _pc)
-                return web.json_response({
-                    "user_id": user_id,
-                    "first_name": user["first_name"],
-                    "credits": {"fast": profile.paid_generations_remaining, "free_used": profile.free_generation_used},
-                    "gender": profile.subject_gender,
-                    "packs_enabled": True,
-                    "has_persona": bool(getattr(profile, "astria_lora_tune_id", None)),
-                    "persona_credits": getattr(profile, "persona_credits_remaining", 0) or 0,
-                })
+            async def _miniapp_handler(request: web.Request) -> web.StreamResponse:
+                # Fix: aiohttp_asgi/yarl ломается на Host с портом (localhost:8080)
+                host = request.headers.get("Host", "")
+                if ":" in host:
+                    request = request.clone(headers={**request.headers, "Host": host.split(":")[0]})
+                return await miniapp_asgi._handle(request)
 
-            async def _miniapp_api_profile(request: web.Request) -> web.Response:
-                """Сохранение пола в профиль (как в основном боте)."""
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Invalid init data"}, status=401)
-                gender = body.get("gender")
-                if gender not in ("male", "female"):
-                    return web.json_response({"error": "Invalid gender"}, status=400)
-                store = miniapp_routes.get_store()
-                store.set_subject_gender(user["user_id"], gender)
-                return web.json_response({"ok": True, "gender": gender})
-
-            async def _miniapp_api_styles(request: web.Request) -> web.Response:
-                user = _miniapp_get_user(request)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                gender = request.query.get("gender", "female")
-                styles = miniapp_routes.FAST_STYLES_FEMALE if gender == "female" else miniapp_routes.FAST_STYLES_MALE
-                return web.json_response({"styles": styles, "gender": gender})
-
-            async def _miniapp_api_generate(request: web.Request) -> web.Response:
-                reader = await request.multipart()
-                init_data = ""
-                style_id = ""
-                photo_bytes = b""
-                async for part in reader:
-                    if part.name == "init_data":
-                        init_data = (await part.read()).decode()
-                    elif part.name == "style_id":
-                        style_id = (await part.read()).decode()
-                    elif part.name == "photo":
-                        photo_bytes = await part.read()
-
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-
-                user_id = user["user_id"]
-                s = miniapp_routes.get_store()
-                profile = s.get_user(user_id)
-                has_free = not profile.free_generation_used
-                has_paid = profile.paid_generations_remaining > 0
-                if not has_free and not has_paid:
-                    return web.json_response({"error": "no_credits"}, status=402)
-                if len(photo_bytes) > 15 * 1024 * 1024:
-                    return web.json_response({"error": "Photo too large"}, status=413)
-
-                import uuid
-                task_id = str(uuid.uuid4())[:8]
-                miniapp_routes._generation_tasks[task_id] = {"status": "processing", "user_id": user_id, "style_id": style_id, "result_url": None, "error": None}
-                asyncio.get_event_loop().create_task(
-                    miniapp_routes._run_generation(task_id, user_id, style_id, photo_bytes, has_free, profile)
-                )
-                return web.json_response({"task_id": task_id, "status": "processing"})
-
-            async def _miniapp_api_status(request: web.Request) -> web.Response:
-                user = _miniapp_get_user(request)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                task_id = request.match_info.get("task_id", "")
-                task = miniapp_routes._generation_tasks.get(task_id)
-                if not task:
-                    return web.json_response({"error": "Task not found"}, status=404)
-                if int(task.get("user_id") or 0) != int(user["user_id"]):
-                    return web.json_response({"error": "Forbidden"}, status=403)
-                response = {"task_id": task_id, "status": task["status"]}
-                if task["status"] == "done":
-                    response["result_url"] = task["result_url"]
-                elif task["status"] == "error":
-                    response["error"] = task["error"]
-                return web.json_response(response)
-
-            def _miniapp_get_user(request: web.Request):
-                """Извлекает user из initData (header или query)."""
-                init_data = request.headers.get("X-Telegram-Init-Data", "")
-                if not init_data:
-                    init_data = request.query.get("init_data", "")
-                if not init_data:
-                    return None
-                from prismalab.miniapp.auth import validate_init_data
-                return validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-
-            async def _miniapp_api_packs(request: web.Request) -> web.Response:
-                user = _miniapp_get_user(request)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                offers = miniapp_routes._load_pack_offers()
-                if not offers:
-                    return web.json_response({"packs": []})
-                sem = asyncio.Semaphore(miniapp_routes._PACKS_FETCH_CONCURRENCY)
-
-                async def _fetch_one(offer):
-                    pack_id = int(offer["id"])
-                    async with sem:
-                        pack_data = await miniapp_routes._fetch_pack_data(pack_id)
-                    expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
-                    return {
-                        "id": offer["id"],
-                        "title": offer["title"],
-                        "price_rub": offer["price_rub"],
-                        "expected_images": expected_images,
-                        "cover_url": pack_data.get("cover_url", ""),
-                        "category": offer.get("category", "female"),
-                    }
-
-                result = await asyncio.gather(*[_fetch_one(o) for o in offers], return_exceptions=True)
-                packs = [r for r in result if isinstance(r, dict)]
-                return web.json_response({"packs": packs})
-
-            async def _miniapp_api_pack_detail(request: web.Request) -> web.Response:
-                user = _miniapp_get_user(request)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                pack_id_str = request.match_info.get("pack_id", "")
-                try:
-                    pack_id = int(pack_id_str)
-                except (ValueError, TypeError):
-                    return web.json_response({"error": "Invalid pack_id"}, status=400)
-                offers = miniapp_routes._load_pack_offers()
-                offer = next((o for o in offers if o["id"] == pack_id), None)
-                if not offer:
-                    return web.json_response({"error": "Pack not found"}, status=404)
-                pack_data = await miniapp_routes._fetch_pack_data(pack_id)
-                expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
-                return web.json_response({
-                    "id": offer["id"],
-                    "title": offer["title"],
-                    "price_rub": offer["price_rub"],
-                    "expected_images": expected_images,
-                    "cover_url": pack_data.get("cover_url", ""),
-                    "examples": pack_data.get("examples", []),
-                })
-
-            async def _miniapp_api_pack_buy(request: web.Request) -> web.Response:
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                pack_id_str = request.match_info.get("pack_id", "")
-                try:
-                    pack_id = int(pack_id_str)
-                except (ValueError, TypeError):
-                    return web.json_response({"error": "Invalid pack_id"}, status=400)
-                offers = miniapp_routes._load_pack_offers()
-                offer = next((o for o in offers if o["id"] == pack_id), None)
-                if not offer:
-                    return web.json_response({"error": "Pack not found"}, status=404)
-                pack_data = await miniapp_routes._fetch_pack_data(pack_id, use_cache=False)
-                expected_images = miniapp_routes._resolve_pack_expected_images(offer, pack_data, pack_id=pack_id)
-                pack_cost_field, pack_cost_value = miniapp_routes._resolve_pack_cost_data(offer, pack_data)
-                pack_class = miniapp_routes._resolve_pack_class_key(offer)
-                user_id = user["user_id"]
-                price_rub = offer["price_rub"]
-                amount = apply_test_amount(float(price_rub))
-                miniapp_url = miniapp_routes.MINIAPP_URL
-                return_url = miniapp_url.rstrip("/") + f"?pack_paid={pack_id}" if miniapp_url else ""
-                if not miniapp_url:
-                    logger.warning("MINIAPP_URL не задан — после оплаты пака пользователь не вернётся в Mini App")
-                url, payment_id_or_err = create_payment(
-                    amount_rub=amount,
-                    description=f"PrismaLab — {offer['title']}",
-                    metadata={
-                        "user_id": str(user_id),
-                        "chat_id": str(user_id),
-                        "product_type": "persona_pack",
-                        "credits": str(expected_images),
-                        "pack_id": str(pack_id),
-                        "pack_title": str(offer.get("title") or "")[:100],
-                        "pack_class": str(pack_class or "")[:24],
-                        "pack_num_images": str(expected_images),
-                        "pack_cost_field": str(pack_cost_field or "")[:24],
-                        "pack_cost_value": str(pack_cost_value or "")[:64],
-                    },
-                    return_url=return_url,
-                )
-                if not url:
-                    asyncio.get_event_loop().create_task(
-                        alert_payment_error(user_id, "persona_pack", str(payment_id_or_err or "payment creation failed"))
-                    )
-                    return web.json_response({"error": "Payment creation failed"}, status=500)
-                # Запускаем поллинг — bot и application доступны через замыкание run_webhook_server
-                asyncio.get_event_loop().create_task(poll_payment_status(
-                    payment_id=payment_id_or_err,
-                    bot=bot,
-                    store=store,
-                    user_id=user_id,
-                    chat_id=user_id,
-                    credits=expected_images,
-                    product_type="persona_pack",
-                    amount_rub=amount,
-                    application=application,
-                ))
-                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
-
-            async def _miniapp_api_persona_buy(request: web.Request) -> web.Response:
-                """Покупка персоны из Mini App: создаёт платёж ЮKassa и возвращает URL для оплаты."""
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                # credits: 20 или 40
-                try:
-                    credits = int(body.get("credits", 0))
-                except (ValueError, TypeError):
-                    return web.json_response({"error": "Invalid credits"}, status=400)
-                if credits not in PRICES_PERSONA_CREATE:
-                    return web.json_response({"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_CREATE.keys())}"}, status=400)
-                user_id = user["user_id"]
-                price_rub = PRICES_PERSONA_CREATE[credits]
-                amount = apply_test_amount(float(price_rub))
-                # return_url → бот (после оплаты юзер попадает в бота для загрузки фото)
-                return_url = YOOKASSA_RETURN_URL
-                url, payment_id_or_err = create_payment(
-                    amount_rub=amount,
-                    description=f"PrismaLab — Создание персоны ({credits} фото)",
-                    metadata={
-                        "user_id": str(user_id),
-                        "chat_id": str(user_id),
-                        "product_type": "persona_create",
-                        "credits": str(credits),
-                    },
-                    return_url=return_url,
-                )
-                if not url:
-                    asyncio.get_event_loop().create_task(
-                        alert_payment_error(user_id, "persona_create", str(payment_id_or_err or "payment creation failed"))
-                    )
-                    return web.json_response({"error": "Payment creation failed"}, status=500)
-                asyncio.get_event_loop().create_task(poll_payment_status(
-                    payment_id=payment_id_or_err,
-                    bot=bot,
-                    store=store,
-                    user_id=user_id,
-                    chat_id=user_id,
-                    credits=credits,
-                    product_type="persona_create",
-                    amount_rub=amount,
-                    application=application,
-                ))
-                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
-
-            async def _miniapp_api_persona_topup(request: web.Request) -> web.Response:
-                """Докуп кредитов персоны из Mini App."""
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                try:
-                    credits = int(body.get("credits", 0))
-                except (ValueError, TypeError):
-                    return web.json_response({"error": "Invalid credits"}, status=400)
-                if credits not in PRICES_PERSONA_TOPUP:
-                    return web.json_response({"error": f"Invalid credits value: {credits}. Allowed: {list(PRICES_PERSONA_TOPUP.keys())}"}, status=400)
-                user_id = user["user_id"]
-                price_rub = PRICES_PERSONA_TOPUP[credits]
-                amount = apply_test_amount(float(price_rub))
-                return_url = YOOKASSA_RETURN_URL
-                url, payment_id_or_err = create_payment(
-                    amount_rub=amount,
-                    description=f"PrismaLab — Докуп кредитов персоны ({credits} фото)",
-                    metadata={
-                        "user_id": str(user_id),
-                        "chat_id": str(user_id),
-                        "product_type": "persona_topup",
-                        "credits": str(credits),
-                    },
-                    return_url=return_url,
-                )
-                if not url:
-                    asyncio.get_event_loop().create_task(
-                        alert_payment_error(user_id, "persona_topup", str(payment_id_or_err or "payment creation failed"))
-                    )
-                    return web.json_response({"error": "Payment creation failed"}, status=500)
-                asyncio.get_event_loop().create_task(poll_payment_status(
-                    payment_id=payment_id_or_err,
-                    bot=bot,
-                    store=store,
-                    user_id=user_id,
-                    chat_id=user_id,
-                    credits=credits,
-                    product_type="persona_topup",
-                    amount_rub=amount,
-                    application=application,
-                ))
-                return web.json_response({"payment_url": url, "payment_id": payment_id_or_err})
-
-            async def _miniapp_api_persona_generate(request: web.Request) -> web.Response:
-                """Сохраняет батч стилей для генерации и возвращает deeplink в бот."""
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-                user_id = user["user_id"]
-                styles = body.get("styles", [])
-                if not styles or not isinstance(styles, list):
-                    return web.json_response({"error": "No styles selected"}, status=400)
-                # Проверяем персону и кредиты
-                profile = store.get_user(user_id)
-                has_persona = bool(getattr(profile, "astria_lora_tune_id", None))
-                if not has_persona:
-                    return web.json_response({"error": "No persona"}, status=400)
-                credits = profile.persona_credits_remaining
-                if credits <= 0:
-                    return web.json_response({"error": "No credits"}, status=402)
-                # Ограничиваем батч кредитами и обогащаем промптами из БД
-                batch = styles[:credits]
-                all_db_styles = store.get_persona_styles(active_only=False)
-                db_by_slug = {s["slug"]: s for s in all_db_styles}
-                for item in batch:
-                    db_style = db_by_slug.get(item.get("slug", ""))
-                    if db_style and db_style.get("prompt"):
-                        item["prompt"] = db_style["prompt"]
-                import json as _json
-                store.set_pending_persona_batch(user_id, _json.dumps(batch))
-                logger.info("Persona batch saved for user %s: %d styles", user_id, len(batch))
-                # Deeplink в бот
-                bot_link = f"https://t.me/{bot_username}?start=persona_batch"
-                return web.json_response({"ok": True, "count": len(batch), "bot_link": bot_link})
-
-            async def _miniapp_api_persona_styles(request: web.Request) -> web.Response:
-                gender = request.query.get("gender", "")
-                styles = store.get_persona_styles(active_only=True, gender=gender if gender else None)
-                return web.json_response([
-                    {
-                        "id": s["id"],
-                        "slug": s["slug"],
-                        "title": s["title"],
-                        "description": s.get("description", ""),
-                        "gender": s.get("gender", ""),
-                        "image_url": s.get("image_url", ""),
-                    }
-                    for s in styles
-                ])
-
-            async def _miniapp_api_persona_style_detail(request: web.Request) -> web.Response:
-                style_id_str = request.match_info.get("style_id", "")
-                try:
-                    style_id = int(style_id_str)
-                except (ValueError, TypeError):
-                    return web.json_response({"error": "Invalid style_id"}, status=400)
-                s = store.get_persona_style(style_id)
-                if not s:
-                    return web.json_response({"error": "Style not found"}, status=404)
-                return web.json_response({
-                    "id": s["id"],
-                    "slug": s["slug"],
-                    "title": s["title"],
-                    "description": s.get("description", ""),
-                    "gender": s.get("gender", ""),
-                    "image_url": s.get("image_url", ""),
-                })
-
-            # Статика Mini App
-            from pathlib import Path
-            miniapp_static_path = str(Path(__file__).parent / "miniapp" / "static")
-            app.router.add_get("/app", _miniapp_page)
-            app.router.add_get("/app/", _miniapp_page)
-            app.router.add_post("/app/api/auth", _miniapp_api_auth)
-            app.router.add_post("/app/api/profile", _miniapp_api_profile)
-            app.router.add_get("/app/api/styles", _miniapp_api_styles)
-            app.router.add_post("/app/api/generate", _miniapp_api_generate)
-            app.router.add_get("/app/api/status/{task_id}", _miniapp_api_status)
-            app.router.add_get("/app/api/packs", _miniapp_api_packs)
-            app.router.add_get("/app/api/packs/{pack_id}", _miniapp_api_pack_detail)
-            app.router.add_post("/app/api/packs/{pack_id}/buy", _miniapp_api_pack_buy)
-            app.router.add_get("/app/api/persona-styles", _miniapp_api_persona_styles)
-            app.router.add_get("/app/api/persona-styles/{style_id}", _miniapp_api_persona_style_detail)
-            app.router.add_post("/app/api/persona/buy", _miniapp_api_persona_buy)
-            app.router.add_post("/app/api/persona/topup", _miniapp_api_persona_topup)
-            app.router.add_post("/app/api/persona/generate", _miniapp_api_persona_generate)
-
-            async def _miniapp_api_track(request: web.Request) -> web.Response:
-                try:
-                    body = await request.json()
-                except Exception:
-                    return web.json_response({"error": "Invalid JSON"}, status=400)
-                init_data = body.get("init_data", "")
-                from prismalab.miniapp.auth import validate_init_data
-                user = validate_init_data(init_data, miniapp_routes.BOT_TOKEN)
-                if not user:
-                    return web.json_response({"error": "Invalid init data"}, status=401)
-                event = body.get("event", "")
-                if event not in miniapp_routes.ALLOWED_TRACK_EVENTS:
-                    return web.json_response({"error": "Unknown event"}, status=400)
-                event_data = body.get("data") or {}
-                if not isinstance(event_data, dict):
-                    event_data = {}
-                event_data["source"] = "miniapp"
-                store.log_event(user["user_id"], event, event_data)
-                return web.json_response({"ok": True})
-
-            app.router.add_post("/app/api/track", _miniapp_api_track)
-            app.router.add_static("/app/static", miniapp_static_path)
-            logger.info("Mini App доступен на порту %s (path: /app/)", port)
+            app.router.add_route("*", "/app", _miniapp_handler)
+            app.router.add_route("*", "/app/", _miniapp_handler)
+            app.router.add_route("*", "/app/{path:.*}", _miniapp_handler)
+            logger.info("Mini App доступен на порту %s (path: /app/, ASGI bridge)", port)
         except ImportError as e:
             logger.warning("Mini App не подключен: %s", e)
         except Exception as e:

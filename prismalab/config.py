@@ -76,6 +76,33 @@ def _is_dev_runtime() -> bool:
     return prefix.startswith("dev_")
 
 
+def miniapp_v2_enabled() -> bool:
+    """Feature flag: V2 Mini App UI (два раздела: Экспресс + Фотосеты).
+    Default: off (0). Включается MINIAPP_V2=1."""
+    raw = (os.getenv("MINIAPP_V2") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def express_via_miniapp() -> bool:
+    """Кнопка «Экспресс-фото» в боте ведёт в Mini App (вместо inline-кнопок).
+    Включается когда MINIAPP_V2=1 и MINIAPP_URL задан."""
+    return miniapp_v2_enabled() and bool(MINIAPP_URL)
+
+
+def express_filters_v3() -> bool:
+    """Feature flag: V3 фильтры экспресс (категории/теги/выбор провайдера).
+    Default: off (0). Включается EXPRESS_FILTERS_V3=1."""
+    raw = (os.getenv("EXPRESS_FILTERS_V3") or "").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
+def packs_use_credits() -> bool:
+    """Feature flag: паки покупаются за persona_credits вместо ₽.
+    Default: off (0). Включается PACKS_USE_CREDITS=1."""
+    raw = (os.getenv("PACKS_USE_CREDITS") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
 def _dev_skip_pack_payment() -> bool:
     """Dev-флаг: тест паков без оплаты. В проде выключен."""
     raw = (os.getenv("PRISMALAB_DEV_SKIP_PACK_PAYMENT") or "").strip().lower()
@@ -92,6 +119,33 @@ def _use_unified_pack_persona_flow() -> bool:
     """Unified flow: если Персоны нет, ведём через persona-flow → автозапуск фотосета."""
     raw = (os.getenv("PRISMALAB_UNIFIED_PACK_PERSONA_FLOW") or "1").strip().lower()
     return raw not in {"0", "false", "no", "n", "off"}
+
+
+def custom_request_v1() -> bool:
+    """Feature flag: CUSTOM_REQUEST_V1=1 включает 'Своя идея' в Mini App."""
+    return (os.getenv("CUSTOM_REQUEST_V1") or "").strip() == "1"
+
+
+def persona_lora_name(gender: str | None, user_id: int | None = None) -> str:
+    """Имя класса для LoRA: woman/man (при mode=gender) или person (default).
+
+    Feature flag: PRISMALAB_PERSONA_LORA_NAME_MODE=gender.
+    Если gender пустой при mode=gender → safe fallback "woman" + warning.
+    """
+    import logging
+    mode = (os.getenv("PRISMALAB_PERSONA_LORA_NAME_MODE") or "person").strip().lower()
+    if mode in {"gender", "class", "man_woman"}:
+        if not gender:
+            logging.getLogger("prismalab").warning(
+                "persona_lora_name: empty gender for user=%s, fallback to woman", user_id,
+            )
+        return "man" if gender == "male" else "woman"
+    return "person"
+
+
+def lora_weight_for_flow(flow: str) -> float:
+    """Вес LoRA по типу flow. style=1.1 (наши образы), pack=1.0 (Astria default)."""
+    return 1.1 if flow == "style" else 1.0
 
 
 def _guard_dev_only_flags() -> None:
