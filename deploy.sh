@@ -31,7 +31,7 @@ if [ ! -f .env ]; then
 fi
 
 echo "Копирую проект на сервер..."
-rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='*.db' --exclude='.git' --exclude='*.log' --exclude='*.bak' --exclude='.env' --exclude='.env.*' --exclude='.env.dev' . "$SERVER:$REMOTE_DIR/"
+rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='*.db' --exclude='.git' --exclude='*.log' --exclude='*.bak' --exclude='.env' --exclude='.env.*' --exclude='.env.dev' --exclude='images_custom' . "$SERVER:$REMOTE_DIR/"
 
 echo "Запускаю миграцию БД (создание public.users при наличии DATABASE_URL)..."
 ssh "$SERVER" "cd $REMOTE_DIR && docker compose run --rm prismalab python -m prismalab.migrate_db" || true
