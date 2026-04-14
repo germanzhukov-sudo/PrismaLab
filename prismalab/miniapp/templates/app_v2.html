@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>PrismaLab Studio</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/app/static/style_v2.css?v=47">
+    <link rel="stylesheet" href="/app/static/style_v2.css?v=74">
 </head>
 <body>
     <div id="app">
@@ -78,11 +78,13 @@
                                         </div>
                                         <h2 class="tab-card-title">Экспресс</h2>
                                     </div>
-                                    <div class="tab-card-model-label express-model-label">Seedream · Nano Banana Pro</div>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label express-model-label">Seedream · Nano Banana Pro</div>
+                                        <div class="tab-card-credit-pill">&#9889; 1 кредит = 1 фото</div>
+                                    </div>
                                     <p class="tab-card-desc">Самые передовые AI-модели. Сотни готовых образов за секунды</p>
                                 </div>
                                 <div class="tab-card-body">
-                                    <div class="tab-card-showcase-title">Популярные стили</div>
                                     <div class="express-showcase-rail" id="main-express-showcase"></div>
                                 </div>
                                 <div class="tab-card-foot">
@@ -110,11 +112,13 @@
                                         </div>
                                         <h2 class="tab-card-title">Своя идея</h2>
                                     </div>
-                                    <div class="tab-card-model-label custom-model-label">Seedream · Nano Banana Pro</div>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label custom-model-label">Seedream · Nano Banana Pro</div>
+                                        <div class="tab-card-credit-pill">&#9889; 1 кредит = 1 фото</div>
+                                    </div>
                                     <p class="tab-card-desc">Создавайте фото по своему описанию или меняйте готовые изображения</p>
                                 </div>
                                 <div class="tab-card-body">
-                                    <div class="tab-card-showcase-title">Например</div>
                                     <div class="express-showcase-rail custom-showcase-rail" id="main-custom-showcase"></div>
                                 </div>
                                 <div class="tab-card-foot">
@@ -145,11 +149,13 @@
                                         </div>
                                         <h2 class="tab-card-title">Фотосеты</h2>
                                     </div>
-                                    <div class="tab-card-model-label photosets-model-label">Премиум</div>
-                                    <p class="tab-card-desc">Снимки, неотличимые от настоящих фото. Часто заменяют полноценную фотосессию</p>
+                                    <div class="tab-card-pills">
+                                        <div class="tab-card-model-label photosets-model-label">Премиум</div>
+                                        <div class="tab-card-credit-pill"><span class="badge-prism"></span> Стоимость зависит от фотосета</div>
+                                    </div>
+                                    <p class="tab-card-desc">Снимки, неотличимые от настоящих фото. Как полноценная фотосессия</p>
                                 </div>
                                 <div class="tab-card-body">
-                                    <div class="tab-card-showcase-title">Популярные фотосеты</div>
                                     <div class="express-showcase-rail" id="main-photosets-showcase"></div>
                                 </div>
                                 <div class="tab-card-foot">
@@ -202,7 +208,6 @@
                             </svg>
                         </span>
                         <span class="tab-label">Фотосеты</span>
-                        <span class="tab-premium-dot" aria-hidden="true"></span>
                         <div class="tab-glow-line"></div>
                     </button>
                 </div>
@@ -267,7 +272,7 @@
                 <!-- Стили загрузятся динамически -->
             </div>
             <div class="persona-buy-footer" id="express-buy-footer" style="display:none">
-                <div class="footer-label">Докупите экспресс-кредиты</div>
+                <div class="footer-label">На вашем балансе нет кредитов</div>
                 <div class="persona-buy-footer-buttons" id="express-footer-buttons"></div>
                 <button class="persona-buy-pay-btn" id="express-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
             </div>
@@ -314,7 +319,6 @@
                 </button>
 
                 <div class="custom-section">
-                    <label class="custom-label">Модель</label>
                     <div class="provider-options" id="custom-provider-options">
                         <button class="provider-option selected" data-provider="seedream" onclick="selectCustomProvider('seedream')">
                             <span class="provider-name">Seedream</span>
@@ -330,7 +334,7 @@
                 </div>
             </div>
             <div class="persona-buy-footer" id="custom-buy-footer" style="display:none">
-                <div class="footer-label">Докупите экспресс-кредиты</div>
+                <div class="footer-label">На вашем балансе нет кредитов</div>
                 <div class="persona-buy-footer-buttons" id="custom-footer-buttons"></div>
                 <button class="persona-buy-pay-btn" id="custom-footer-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
             </div>
@@ -346,12 +350,14 @@
                 <div></div>
             </div>
             <div class="upload-container">
-                <div class="upload-zone" id="express-upload-zone" onclick="document.getElementById('express-file-input').click()">
+                <div class="upload-style-preview" id="upload-style-preview" style="display:none">
+                    <img id="upload-style-preview-img" src="" alt="">
+                </div>
+                <div class="upload-zone upload-zone-compact" id="express-upload-zone" onclick="document.getElementById('express-file-input').click()">
                     <div class="upload-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     </div>
                     <div class="upload-text">Загрузите фото</div>
-                    <div class="upload-hint">Нажмите или перетащите</div>
                     <div class="upload-hint">JPG, PNG до 15 МБ</div>
                 </div>
                 <input type="file" id="express-file-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handleExpressFile(event)">
@@ -388,12 +394,8 @@
                     <div class="generating-ring ring-3"></div>
                     <div class="generating-center"><div class="packs-prism"></div></div>
                 </div>
-                <h2 class="generating-title">Создаём шедевр</h2>
-                <p class="generating-subtitle">AI обрабатывает ваше фото...</p>
-                <div class="generating-progress">
-                    <div class="progress-bar" id="express-progress-bar"></div>
-                </div>
-                <div class="generating-tip" id="express-generating-tip">Обычно это занимает 30-60 секунд</div>
+                <h2 class="generating-title">Создаём фотографию</h2>
+                <p class="generating-subtitle">Можете закрыть это окно. Мы отправим фото в Телеграм и сохраним его в профиле приложения &#128100;</p>
             </div>
         </div>
 
@@ -411,11 +413,8 @@
                     <img id="express-result-image" src="" alt="Result">
                 </div>
                 <div class="result-actions">
-                    <button class="action-btn primary" onclick="downloadExpressResult()">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        Скачать
-                    </button>
                     <button class="action-btn secondary" onclick="goBack(window.EXPRESS_V3 ? 'express-catalog' : 'express-themes')">&#127912; Ещё стиль</button>
+                    <button class="action-btn secondary" onclick="showScreen('main')">Вернуться на главную</button>
                 </div>
                 <p class="result-note" id="express-result-note"></p>
             </div>
@@ -459,7 +458,8 @@
 
             <!-- Sticky footer: Persona Create (no persona yet) -->
             <div class="persona-buy-footer" id="photosets-create-footer" style="display:none">
-                <div class="footer-label">Персона + кредиты для генерации</div>
+                <div class="footer-label">Персональная модель + кредиты для фотосетов</div>
+                <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
                 <div class="persona-buy-footer-buttons" id="create-tariff-buttons">
                     <!-- Rendered dynamically from state.tariffs.persona_create -->
                 </div>
@@ -490,17 +490,18 @@
             </div>
             <div class="pack-detail-container">
                 <div class="pack-gallery" id="photoset-pack-gallery"></div>
-                <div class="pack-info">
-                    <div class="pack-info-row">
-                        <span class="pack-info-label">Количество фото</span>
-                        <span class="pack-info-value" id="photoset-pack-count">20</span>
-                    </div>
+                <div class="photoset-style-cost" id="photoset-pack-cost" style="display:none">
+                    <span class="cost-icon"><span class="badge-prism"></span></span>
+                    <span id="photoset-pack-cost-value">4</span>&nbsp;<span id="photoset-pack-cost-word">кредита</span>
+                    <span class="cost-arrow">&#8594;</span>
+                    <span id="photoset-pack-cost-images">4 фото</span>
                 </div>
                 <button class="generate-btn" id="photoset-pack-buy-btn" onclick="buyPhotosetPack()">
                     <span class="btn-text" id="photoset-pack-buy-text">Купить 990 &#8381;</span>
                 </button>
                 <div class="no-persona-block" id="pack-no-persona" style="display:none">
-                    <p class="no-persona-text">Для покупки нужна Персона</p>
+                    <p class="no-persona-text">У вас ещё нет персональной модели. Выберите пакет кредитов, создание вашей модели входит в стоимость.</p>
+                    <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
                     <div class="persona-buy-footer-buttons" id="pack-create-buttons"></div>
                     <button class="persona-buy-pay-btn" id="pack-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
                 </div>
@@ -539,7 +540,8 @@
                     <span class="btn-text">&#10024; Сгенерировать (4 фото)</span>
                 </button>
                 <div class="no-persona-block" id="photoset-no-persona" style="display:none">
-                    <p class="no-persona-text">Для генерации нужна Персона</p>
+                    <p class="no-persona-text">У вас ещё нет персональной модели. Выберите пакет кредитов, создание вашей модели входит в стоимость.</p>
+                    <a class="persona-tooltip-link" onclick="event.preventDefault(); openPersonaInfoModal()">Что такое персональная модель?</a>
                     <div class="persona-buy-footer-buttons" id="style-create-buttons"></div>
                     <button class="persona-buy-pay-btn" id="style-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
                 </div>
@@ -725,9 +727,34 @@
         </div>
     </div>
 
+    <!-- Persona info modal -->
+    <div id="persona-info-modal" class="persona-info-modal" style="display:none" onclick="closePersonaInfoModal()">
+        <div class="persona-info-modal-content" onclick="event.stopPropagation()">
+            <h3>Персональная модель</h3>
+            <p>Персональная модель — это ваша цифровая версия, обученная по 10 фото.</p>
+            <p>Она помогает создавать изображения с более точным сходством, лицом и мимикой именно под вас.</p>
+            <p>Создание модели оплачивается один раз — дальше фотосеты будут значительно дешевле.</p>
+            <button class="generate-btn" onclick="closePersonaInfoModal()" style="margin-top:16px;padding:12px">Понятно</button>
+        </div>
+    </div>
+
+    <!-- Persona pending modal (paid create tariff, no photos uploaded yet) -->
+    <div id="persona-pending-modal" class="persona-info-modal" style="display:none">
+        <div class="persona-info-modal-content" onclick="event.stopPropagation()">
+            <h3>Модель ещё не создана</h3>
+            <p>Вы уже оплатили создание персональной модели.</p>
+            <p>Перейдите в бота и загрузите 10 фотографий — после этого сможете выбрать фотосет.</p>
+            <button class="generate-btn" onclick="closePersonaPendingModal()" style="margin-top:16px;padding:12px">Понятно</button>
+        </div>
+    </div>
+
     <!-- Lightbox -->
     <div id="lightbox" class="lightbox" style="display:none" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="">
+        <div id="lightbox-overlay" class="lightbox-overlay" style="display:none">
+            <div class="lightbox-overlay-name" id="lightbox-style-name"></div>
+            <div class="lightbox-overlay-cost" id="lightbox-style-cost"></div>
+        </div>
         <button type="button" class="lightbox-close" onclick="closeLightbox()" aria-label="Close">&times;</button>
     </div>
 
@@ -735,6 +762,6 @@
         window.EXPRESS_V3 = {{ 'true' if express_v3 else 'false' }};
         window.CUSTOM_REQUEST_V1 = {{ 'true' if custom_request_v1 else 'false' }};
     </script>
-    <script src="/app/static/app_v2.js?v=42"></script>
+    <script src="/app/static/app_v2.js?v=60"></script>
 </body>
 </html>

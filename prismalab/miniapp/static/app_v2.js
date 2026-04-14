@@ -67,9 +67,17 @@ const state = {
     selectedPersonaStyles: [],
     personaCreditsOriginal: 0,
     photosetsCreditsPreview: 0,
-    photosetsFilter: 'all',
+    photosetsFilter: new Set(),
+    photosetsLoaded: false,
+    photosetsLoadingPromise: null,
     // Tab switcher
     activeMainTab: 'express',
+    _lastHiddenAt: 0,
+    _scrollMap: {},
+    _personaPendingShown: false,
+    _packCache: {},            // { [packId]: pack data } — skip fetch on re-open
+    _lastPackDetailId: null,   // skip DOM rewrite if same pack
+    _lastStyleDetailId: null,  // skip preview rerender if same style
     featuredStyles: [],
     featuredPacks: [],
     featuredCustom: [],
@@ -122,6 +130,14 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             tabs[currentIdx - 1].focus();
             switchMainTab(tabs[currentIdx - 1].dataset.tab);
+        }
+    });
+    // Balance refresh when returning from payment
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            state._lastHiddenAt = Date.now();
+        } else if (Date.now() - state._lastHiddenAt > 3000) {
+            refreshBalance();
         }
     });
     authenticate();
@@ -274,6 +290,37 @@ function updateBalanceDisplays() {
     }
     const customGenBtn = document.getElementById('custom-generate-btn');
     if (customGenBtn) customGenBtn.style.display = hasCredits ? '' : 'none';
+}
+
+// Balance refresh on visibility change (best-effort: fires when TG WebView stays alive)
+async function refreshBalance() {
+    try {
+        const resp = await fetch('/app/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ init_data: state.initData }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // Update ONLY balance — preserve form state (files, prompt, selections)
+        state.expressCredits = data.credits || state.expressCredits;
+        state.hasPersona = !!data.has_persona;
+        state.photosetsCredits = data.persona_credits ?? state.photosetsCredits;
+        state.personaCreditsOriginal = state.photosetsCredits;
+        // Recalculate preview accounting for already-selected styles
+        const selectedCost = (state.selectedPersonaStyles || []).reduce((sum, s) => sum + (s.credit_cost || 4), 0);
+        state.photosetsCreditsPreview = Math.max(0, state.photosetsCredits - selectedCost);
+        state.tariffs = data.tariffs || state.tariffs;
+        updateBalanceDisplays();
+        // Re-render footers for current visible screen
+        const activeScreen = document.querySelector('.screen.active');
+        if (activeScreen) {
+            const screenName = activeScreen.id.replace('screen-', '');
+            renderScreenFooters(screenName);
+        }
+    } catch (e) {
+        // Silent — best effort
+    }
 }
 
 // === Featured Styles Carousel ===
@@ -560,10 +607,10 @@ function _initTabSwipe() {
         const dx = currentX - startX;
         const dy = e.touches[0].clientY - startY;
 
-        // Lock direction after 10px movement
-        if (!directionLocked && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+        // Lock direction — bias towards horizontal (6px horizontal vs 10px vertical)
+        if (!directionLocked && (Math.abs(dx) > 6 || Math.abs(dy) > 10)) {
             directionLocked = true;
-            isHorizontal = Math.abs(dx) > Math.abs(dy);
+            isHorizontal = Math.abs(dx) >= Math.abs(dy);
 
             // If inside a showcase rail and rail CAN scroll in the swipe direction,
             // defer to rail (don't swipe cards). Otherwise → card swipe takes over.
@@ -643,31 +690,44 @@ function _initTabSwipe() {
 
 // === Navigation ===
 
+// Classic display: none/flex + window scroll navigation.
+// state._scrollMap[screenId] = window.scrollY перед сменой экрана.
+// При возврате — force reflow → window.scrollTo saved. Мягкий fade-in 0.2s в CSS.
+
+function saveScroll(_screenName) { /* legacy no-op — scroll saved inside showScreen */ }
+
 function showScreen(name) {
     const target = document.getElementById(`screen-${name}`);
     if (!target) return;
-    // Уже на этом экране — ничего не делаем
     if (target.classList.contains('active')) return;
-    const screens = document.querySelectorAll('.screen');
-    screens.forEach(s => {
-        if (s.classList.contains('active')) {
-            s.classList.add('slide-out');
-            setTimeout(() => s.classList.remove('active', 'slide-out'), 300);
-        }
-    });
-    // Centralized footer management
+
+    // Save scroll of current screen before hiding it.
+    const currentActive = document.querySelector('.screen.active');
+    if (currentActive) {
+        state._scrollMap[currentActive.id] = window.scrollY || 0;
+        currentActive.classList.remove('active');
+    }
+
+    // Footers up-front — до activation, чтобы layout нового screen учёл их сразу.
     renderScreenFooters(name);
-    setTimeout(() => {
-        target.classList.add('active');
-        // Restore catalog scroll position on back navigation
-        if (name === 'express-catalog' && state._catalogScrollTop) {
-            requestAnimationFrame(() => {
-                target.scrollTop = state._catalogScrollTop;
-                state._catalogScrollTop = 0;
-            });
-        }
-    }, 50);
+
+    // Activate new screen.
+    target.classList.add('active');
+
+    // Force reflow — браузер применяет display:flex и вычисляет layout синхронно.
+    // eslint-disable-next-line no-unused-expressions
+    void target.offsetHeight;
+
+    // Restore scroll (saved) или reset to top для новых открытий.
+    const savedY = state._scrollMap[target.id];
+    window.scrollTo(0, savedY != null ? savedY : 0);
+
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+}
+
+// Перед открытием detail-экрана — удалить его запомненный scroll, чтобы открылся с верха.
+function resetScreenScroll(name) {
+    delete state._scrollMap[`screen-${name}`];
 }
 
 function goBack(screen) {
@@ -906,7 +966,7 @@ async function startExpressGeneration() {
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
     showScreen('express-generating');
-    startProgressAnimation('express-progress-bar', 'express-generating-tip');
+    // Progress animation removed — generating screen now shows static exit hint
 
     const formData = new FormData();
     formData.append('init_data', state.initData);
@@ -925,7 +985,7 @@ async function startExpressGeneration() {
         const data = await resp.json();
 
         if (resp.status === 402) {
-            stopProgressAnimation('express-progress-bar');
+            // stopProgressAnimation removed — no progress bar on generating screen
             showScreen('nocredits');
             return;
         }
@@ -950,7 +1010,7 @@ async function pollExpressStatus() {
         const data = await resp.json();
 
         if (data.status === 'done') {
-            stopProgressAnimation('express-progress-bar');
+            // stopProgressAnimation removed — no progress bar on generating screen
             trackEvent('v2_express_generate_done', { style_id: state.selectedExpressStyle?.id });
 
             if (!state.expressCredits.free_used) {
@@ -970,7 +1030,7 @@ async function pollExpressStatus() {
             showScreen('express-result');
             if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         } else if (data.status === 'error') {
-            stopProgressAnimation('express-progress-bar');
+            // stopProgressAnimation removed — no progress bar on generating screen
             alert('Ошибка генерации. Попробуйте ещё раз.');
             showScreen('express-upload');
             if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
@@ -992,7 +1052,7 @@ async function pollCustomStatus() {
         const data = await resp.json();
 
         if (data.status === 'done') {
-            stopProgressAnimation('express-progress-bar');
+            // stopProgressAnimation removed — no progress bar on generating screen
             trackEvent('v2_custom_generate_done');
 
             if (!state.expressCredits.free_used) {
@@ -1012,7 +1072,7 @@ async function pollCustomStatus() {
             showScreen('express-result');
             if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         } else if (data.status === 'error') {
-            stopProgressAnimation('express-progress-bar');
+            // stopProgressAnimation removed — no progress bar on generating screen
             alert('Ошибка генерации. Попробуйте ещё раз.');
             showScreen('custom-prompt');
             if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
@@ -1025,37 +1085,6 @@ async function pollCustomStatus() {
     }
 }
 
-async function downloadExpressResult() {
-    const img = document.getElementById('express-result-image');
-    if (!img?.src) return;
-    trackEvent('v2_express_download', { style_id: state.selectedExpressStyle?.id });
-    const note = document.getElementById('express-result-note');
-
-    // Primary: tg.openLink for TG WebView/iOS (reliable, opens in browser for save)
-    if (tg?.openLink) {
-        tg.openLink(img.src);
-        if (note) note.textContent = 'Фото открыто в браузере. Также отправлено в чат бота.';
-        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-        return;
-    }
-
-    // Secondary: blob download for desktop browsers
-    try {
-        const resp = await fetch(img.src);
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `prismalab_${state.selectedExpressStyle?.id || 'photo'}.jpg`;
-        a.click();
-        URL.revokeObjectURL(url);
-        if (note) note.textContent = 'Фото скачано';
-    } catch (e) {
-        window.open(img.src, '_blank');
-        if (note) note.textContent = 'Фото открыто в браузере';
-    }
-    if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-}
 
 // === PROFILE HISTORY ===
 
@@ -1240,7 +1269,13 @@ function renderV3Styles(styles) {
     styles.forEach((s, i) => {
         const card = document.createElement('div');
         card.className = 'style-card';
-        card.addEventListener('click', () => selectV3Style(s));
+        card.addEventListener('click', () => {
+            if (canGenerateExpress()) {
+                selectV3Style(s);
+            } else {
+                openStylePreviewLightbox(s);
+            }
+        });
 
         const hasImg = s.image_url && s.image_url.startsWith('http');
         if (hasImg) {
@@ -1285,12 +1320,24 @@ function toggleV3Tag(slug) {
 }
 
 function selectV3Style(style) {
-    // Save catalog scroll position for restore on back
-    const catalogScreen = document.getElementById('screen-express-catalog');
-    if (catalogScreen) state._catalogScrollTop = catalogScreen.scrollTop || window.scrollY;
+    // Save catalog scroll position for restore on back (Task 6b)
+    resetScreenScroll('express-upload'); // детали стиля — открываем с верха
     state.selectedExpressStyle = style;
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     document.getElementById('express-selected-style').textContent = `${style.emoji || ''} ${style.label}`;
+
+    // Show selected style preview image
+    const stylePreview = document.getElementById('upload-style-preview');
+    const stylePreviewImg = document.getElementById('upload-style-preview-img');
+    if (stylePreview && stylePreviewImg) {
+        const previewUrl = style.image_url || (style.preview_urls && style.preview_urls[0]) || '';
+        if (previewUrl) {
+            stylePreviewImg.src = previewUrl;
+            stylePreview.style.display = '';
+        } else {
+            stylePreview.style.display = 'none';
+        }
+    }
 
     // Restore preview if photo already uploaded
     if (state.expressFile) {
@@ -1330,12 +1377,22 @@ function _providerLabel(p) {
 }
 
 function _updateGenerateLabel(screen) {
+    // "Создать" по центру, provider chip справа (через absolute positioning в CSS).
+    // classList на .btn-text, inner layout — span для текста + span для chip.
+    const render = (provider) =>
+        `Создать<span class="btn-provider-hint">${provider}</span>`;
     if (screen === 'express') {
         const btn = document.querySelector('#express-generate-btn .btn-text');
-        if (btn) btn.textContent = `⚡ ${_providerLabel(state.selectedProvider)}`;
+        if (btn) {
+            btn.classList.add('btn-text--with-provider');
+            btn.innerHTML = render(_providerLabel(state.selectedProvider));
+        }
     } else if (screen === 'custom') {
         const btn = document.querySelector('#custom-generate-btn .btn-text');
-        if (btn) btn.textContent = `⚡ ${_providerLabel(state.customProvider)}`;
+        if (btn) {
+            btn.classList.add('btn-text--with-provider');
+            btn.innerHTML = render(_providerLabel(state.customProvider));
+        }
     }
 }
 
@@ -1355,51 +1412,81 @@ function updateProviderUI() {
 
 // === PHOTOSETS FLOW ===
 
-async function loadPhotosets() {
+async function loadPhotosets(forceReload) {
+    // Task 4: paid persona_create, but no persona uploaded yet → modal
+    if (!state._personaPendingShown &&
+        !state.hasPersona &&
+        (state.personaCreditsOriginal || state.photosetsCredits || 0) > 0) {
+        openPersonaPendingModal();
+        return;   // не грузим экран, юзер уйдёт в бота по кнопке "Понятно"
+    }
     showScreen('photosets');
     // Hide "Докупить +" immediately — state.hasPersona is known from auth
     const topupBtn = document.getElementById('photosets-topup-btn');
     if (topupBtn) topupBtn.style.display = state.hasPersona ? '' : 'none';
+
+    // Return instantly with cached catalog — no loader, no DOM rewrite on re-entry.
+    // Grid уже rendered at first load. innerHTML rewrite вызывает visual flicker →
+    // не перерисовываем заново, просто показываем экран с уже имеющимся content.
+    if (!forceReload && state.photosetsLoaded) {
+        updatePhotosetsPreviewBalance();
+        ensurePhotosetsFooter();
+        return;
+    }
+
+    // Prevent duplicate requests on repeated taps.
+    if (state.photosetsLoadingPromise) {
+        await state.photosetsLoadingPromise;
+        return;
+    }
+
     const grid = document.getElementById('photosets-grid');
     grid.innerHTML = renderSectionLoading('Нужно немного времени, чтобы загрузить фотосеты. Пожалуйста, никуда не убегайте');
 
-    try {
-        const resp = await fetch('/app/api/v2/photosets', {
-            headers: { 'X-Telegram-Init-Data': state.initData },
-        });
-        const data = await resp.json();
+    state.photosetsLoadingPromise = (async () => {
+        try {
+            const resp = await fetch('/app/api/v2/photosets', {
+                headers: { 'X-Telegram-Init-Data': state.initData },
+            });
+            const data = await resp.json();
 
-        state.photosets = (data.photosets || []).map(item => ({
-            ...item,
-            preview_urls: Array.isArray(item.preview_urls) ? item.preview_urls : [],
-        }));
-        state.packsUseCredits = !!data.packs_use_credits;
-        state.packs = state.photosets
-            .filter(item => item.type === 'pack')
-            .map(item => ({ id: item.entity_id, title: item.title, credit_cost: item.credit_cost, num_images: item.num_images, preview_urls: item.preview_urls }));
-        state.personaStyles = state.photosets
-            .filter(item => item.type === 'style')
-            .map(item => ({
-                id: item.entity_id,
-                slug: item.slug || '',
-                title: item.title,
-                description: item.description || '',
-                credit_cost: item.credit_cost,
-                num_images: item.num_images,
-                preview_urls: item.preview_urls,
-                image_url: item.preview_urls?.[0] || '',
+            state.photosets = (data.photosets || []).map(item => ({
+                ...item,
+                preview_urls: Array.isArray(item.preview_urls) ? item.preview_urls : [],
             }));
+            state.packsUseCredits = !!data.packs_use_credits;
+            state.packs = state.photosets
+                .filter(item => item.type === 'pack')
+                .map(item => ({ id: item.entity_id, title: item.title, credit_cost: item.credit_cost, num_images: item.num_images, preview_urls: item.preview_urls }));
+            state.personaStyles = state.photosets
+                .filter(item => item.type === 'style')
+                .map(item => ({
+                    id: item.entity_id,
+                    slug: item.slug || '',
+                    title: item.title,
+                    description: item.description || '',
+                    credit_cost: item.credit_cost,
+                    num_images: item.num_images,
+                    preview_urls: item.preview_urls,
+                    image_url: item.preview_urls?.[0] || '',
+                }));
 
-        state.personaCreditsOriginal = state.photosetsCredits;
-        state.photosetsCreditsPreview = state.photosetsCredits;
-        state.selectedPersonaStyles = [];
-        renderPhotosets();
-        ensurePhotosetsFooter();
-        updatePhotosetsPreviewBalance();
-    } catch (e) {
-        console.error('Load photosets error:', e);
-        grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Ошибка загрузки</div>';
-    }
+            state.personaCreditsOriginal = state.photosetsCredits;
+            state.photosetsCreditsPreview = state.photosetsCredits;
+            state.selectedPersonaStyles = [];
+            state.photosetsLoaded = true;
+            renderPhotosets();
+            ensurePhotosetsFooter();
+            updatePhotosetsPreviewBalance();
+        } catch (e) {
+            console.error('Load photosets error:', e);
+            grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)">Ошибка загрузки</div>';
+        } finally {
+            state.photosetsLoadingPromise = null;
+        }
+    })();
+
+    await state.photosetsLoadingPromise;
 }
 
 function renderPhotosetCardPreview(item) {
@@ -1411,10 +1498,23 @@ function renderPhotosetCardPreview(item) {
 }
 
 function filterPhotosets(filter) {
-    state.photosetsFilter = filter;
     if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    if (filter === 'all') {
+        state.photosetsFilter.clear();
+    } else {
+        if (state.photosetsFilter.has(filter)) {
+            state.photosetsFilter.delete(filter);
+        } else {
+            state.photosetsFilter.add(filter);
+        }
+    }
     document.querySelectorAll('#photosets-filter-tabs .category-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.filter === filter);
+        const f = btn.dataset.filter;
+        if (f === 'all') {
+            btn.classList.toggle('active', state.photosetsFilter.size === 0);
+        } else {
+            btn.classList.toggle('active', state.photosetsFilter.has(f));
+        }
     });
     renderPhotosets();
 }
@@ -1423,22 +1523,37 @@ function renderPhotosets() {
     const grid = document.getElementById('photosets-grid');
     let items = state.photosets || [];
 
-    // Client-side filtering
-    if (state.photosetsFilter === 'available') {
-        items = items.filter(item => !item.is_locked);
-    } else if (state.photosetsFilter && state.photosetsFilter !== 'all') {
-        items = items.filter(item => item.category === state.photosetsFilter);
+    // Client-side multi-filter
+    const filters = state.photosetsFilter;
+    if (filters.size > 0) {
+        items = items.filter(item => {
+            if (filters.has('available') && item.is_locked) return false;
+            const categoryFilters = new Set([...filters].filter(f => f !== 'available'));
+            if (categoryFilters.size > 0) return categoryFilters.has(item.category);
+            return true;
+        });
     }
 
     if (!items.length) {
-        grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);grid-column:1/-1">Фотосеты скоро появятся</div>';
+        if (filters.has('available')) {
+            grid.innerHTML = `<div class="photosets-empty-state" style="grid-column:1/-1">
+                <p>У вас не хватает кредитов для фотосета. Пополните баланс</p>
+                <div class="persona-buy-footer-buttons" id="photosets-empty-topup-buttons"></div>
+                <button class="persona-buy-pay-btn" id="photosets-empty-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
+            </div>`;
+            _renderTariffButtonsInto('photosets-empty-topup-buttons', 'photosets-empty-topup-pay-btn',
+                state.hasPersona ? 'persona_topup' : 'persona_create',
+                state.hasPersona ? (state.tariffs.persona_topup || []) : (state.tariffs.persona_create || []));
+        } else {
+            grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);grid-column:1/-1">Фотосеты скоро появятся</div>';
+        }
         return;
     }
 
     const lockSvg = '<svg viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="10" rx="2" fill="#fff"/><path d="M8 11V7a4 4 0 018 0v4" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
     const showCheckboxes = state.hasPersona && state.personaCreditsOriginal > 0;
 
-    grid.innerHTML = items.map((item, i) => {
+    grid.innerHTML = items.map((item) => {
         const creditCost = Number(item.credit_cost || 0);
         const numImages = Number(item.num_images || 0);
         const isLocked = !!item.is_locked;
@@ -1456,7 +1571,7 @@ function renderPhotosets() {
         }
 
         return `
-            <div class="photoset-card fade-in" style="animation-delay:${i * 0.05}s" onclick="${openAction}">
+            <div class="photoset-card" onclick="${openAction}">
                 ${badgeHtml}
                 ${renderPhotosetCardPreview(item)}
                 <div class="photoset-card-info">
@@ -1470,12 +1585,45 @@ function renderPhotosets() {
     }).join('');
 }
 
-// Pack Detail
+// Pack Detail — with cache: повторное открытие того же пака instant (no fetch, no loading).
 async function openPackDetail(packId) {
     trackEvent('v2_photoset_detail', { kind: 'pack', id: packId });
     document.querySelectorAll('.detail-credits-count').forEach(el => {
         el.textContent = state.photosetsCreditsPreview;
     });
+
+    // Cache hit: данные пака уже загружены раньше → instant show.
+    const cached = state._packCache[packId];
+    if (cached) {
+        // Если DOM уже содержит этот пак (последний показанный) — не трогаем DOM вообще.
+        if (state._lastPackDetailId !== packId) {
+            _fillPackDetailDOM(cached);
+            state._lastPackDetailId = packId;
+        }
+        state.selectedPack = cached;
+        resetScreenScroll('photoset-pack-detail');  // всегда открываем с верха
+        showScreen('photoset-pack-detail');
+        if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+        return;
+    }
+
+    // Cache miss: очищаем UI и показываем loading placeholder до fetch.
+    state.selectedPack = null;
+    state._lastPackDetailId = null;
+    const titleEl = document.getElementById('photoset-pack-title');
+    if (titleEl) titleEl.textContent = 'Загрузка…';
+    const galleryClear = document.getElementById('photoset-pack-gallery');
+    if (galleryClear) galleryClear.replaceChildren();
+    const packCostPillClear = document.getElementById('photoset-pack-cost');
+    if (packCostPillClear) packCostPillClear.style.display = 'none';
+    const buyBtnInit = document.getElementById('photoset-pack-buy-btn');
+    if (buyBtnInit) buyBtnInit.style.display = 'none';
+    const noPersInit = document.getElementById('pack-no-persona');
+    if (noPersInit) noPersInit.style.display = 'none';
+    const topupInit = document.getElementById('pack-topup');
+    if (topupInit) topupInit.style.display = 'none';
+
+    resetScreenScroll('photoset-pack-detail');
     showScreen('photoset-pack-detail');
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
@@ -1485,51 +1633,77 @@ async function openPackDetail(packId) {
         });
         const pack = await resp.json();
         state.selectedPack = pack;
-
-        document.getElementById('photoset-pack-title').textContent = pack.title;
-        document.getElementById('photoset-pack-count').textContent = pack.expected_images;
-
-        if (state.packsUseCredits) {
-            const cc = pack.credit_cost || pack.expected_images;
-            document.getElementById('photoset-pack-buy-text').textContent = `Купить за ${cc} ${pluralCredits(cc)}`;
-        } else {
-            document.getElementById('photoset-pack-buy-text').textContent = `Купить ${pack.price_rub} ₽`;
-        }
-
-        const gallery = document.getElementById('photoset-pack-gallery');
-        gallery.innerHTML = (pack.examples || []).slice(0, 10).map(url =>
-            `<img src="${url}" alt="" loading="lazy" onclick="openLightbox('${url}')">`
-        ).join('');
-
-        // Locked pack gating
-        const buyBtn = document.getElementById('photoset-pack-buy-btn');
-        const packNoPersona = document.getElementById('pack-no-persona');
-        const packTopup = document.getElementById('pack-topup');
-        buyBtn.style.display = '';
-        if (packNoPersona) packNoPersona.style.display = 'none';
-        if (packTopup) packTopup.style.display = 'none';
-
-        if (!state.hasPersona) {
-            buyBtn.style.display = 'none';
-            if (packNoPersona) {
-                packNoPersona.style.display = '';
-                _renderTariffButtonsInto('pack-create-buttons', 'pack-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
-            }
-        } else if (state.packsUseCredits) {
-            const cc = pack.credit_cost || pack.expected_images;
-            if (state.photosetsCredits < cc) {
-                buyBtn.style.display = 'none';
-                if (packTopup) {
-                    packTopup.style.display = '';
-                    const packDeficit = cc - state.photosetsCredits;
-                    document.getElementById('pack-topup-hint').innerHTML = `<strong>Стоимость:</strong> ${cc} ${pluralCredits(cc)}<br>` +
-                        `<strong>Не хватает:</strong> ${packDeficit} ${pluralCredits(packDeficit)}<br>Выберите тариф:`;
-                    _renderTariffButtonsInto('pack-topup-buttons', 'pack-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
-                }
-            }
-        }
+        state._packCache[packId] = pack;
+        state._lastPackDetailId = packId;
+        _fillPackDetailDOM(pack);
     } catch (e) {
         console.error('Pack detail error:', e);
+    }
+}
+
+// Fill DOM фотосет-пака из объекта pack. Используется в openPackDetail
+// как на cache hit (без fetch), так и после успешного fetch.
+function _fillPackDetailDOM(pack) {
+    document.getElementById('photoset-pack-title').textContent = pack.title;
+
+    // Credit cost pill (унифицировано с деталью стиля)
+    const packCostPill = document.getElementById('photoset-pack-cost');
+    const packCostValue = document.getElementById('photoset-pack-cost-value');
+    const packCostWord = document.getElementById('photoset-pack-cost-word');
+    const packCostImages = document.getElementById('photoset-pack-cost-images');
+    const pcc = pack.credit_cost || pack.expected_images || 4;
+    const pimg = pack.expected_images || 4;
+    if (packCostPill && packCostValue && packCostWord && packCostImages) {
+        packCostValue.textContent = String(pcc);
+        packCostWord.textContent = pluralCredits(pcc);
+        packCostImages.textContent = `${pimg} фото`;
+        packCostPill.style.display = '';
+    }
+
+    if (state.packsUseCredits) {
+        const cc = pack.credit_cost || pack.expected_images;
+        document.getElementById('photoset-pack-buy-text').textContent = `Купить за ${cc} ${pluralCredits(cc)}`;
+    } else {
+        document.getElementById('photoset-pack-buy-text').textContent = `Купить ${pack.price_rub} ₽`;
+    }
+
+    // Галерея — через безопасный DOM API вместо innerHTML-интерполяции (XSS hardening)
+    const gallery = document.getElementById('photoset-pack-gallery');
+    gallery.replaceChildren();
+    (pack.examples || []).slice(0, 10).forEach(url => {
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.addEventListener('click', () => openLightbox(url));
+        gallery.appendChild(img);
+    });
+
+    // Locked pack gating
+    const buyBtn = document.getElementById('photoset-pack-buy-btn');
+    const packNoPersona = document.getElementById('pack-no-persona');
+    const packTopup = document.getElementById('pack-topup');
+    buyBtn.style.display = '';
+    if (packNoPersona) packNoPersona.style.display = 'none';
+    if (packTopup) packTopup.style.display = 'none';
+
+    if (!state.hasPersona) {
+        buyBtn.style.display = 'none';
+        if (packNoPersona) {
+            packNoPersona.style.display = '';
+            _renderTariffButtonsInto('pack-create-buttons', 'pack-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+        }
+    } else if (state.packsUseCredits) {
+        const cc = pack.credit_cost || pack.expected_images;
+        if (state.photosetsCredits < cc) {
+            buyBtn.style.display = 'none';
+            if (packTopup) {
+                packTopup.style.display = '';
+                const packDeficit = cc - state.photosetsCredits;
+                document.getElementById('pack-topup-hint').textContent = `Для этого фотосета не хватает ${packDeficit} ${pluralCredits(packDeficit)}. Пополните баланс`;
+                _renderTariffButtonsInto('pack-topup-buttons', 'pack-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
+            }
+        }
     }
 }
 
@@ -1598,24 +1772,42 @@ function openStyleDetail(styleId) {
     trackEvent('v2_photoset_detail', { kind: 'style', id: styleId });
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
 
-    document.getElementById('photoset-style-title').textContent = style.title;
+    // Тот же стиль, что и в прошлый раз — не трогаем title/desc/preview DOM вообще.
+    // Только gates (кнопки, тарифы, баланс) могут поменяться, их обновим ниже.
+    const sameStyle = state._lastStyleDetailId === styleId;
+    if (!sameStyle) {
+        document.getElementById('photoset-style-title').textContent = style.title;
+        document.getElementById('photoset-style-desc').textContent = style.description || '';
+        document.getElementById('photoset-style-cost-value').textContent = style.credit_cost;
+        document.getElementById('photoset-style-cost-word').textContent = pluralCredits(style.credit_cost);
+
+        // Preview rail — rerender только для нового стиля.
+        const preview = document.getElementById('photoset-style-preview');
+        const previews = (style.preview_urls || []).filter(Boolean).slice(0, 4);
+        preview.replaceChildren();
+        previews.forEach(url => {
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = '';
+            img.loading = 'lazy';
+            img.addEventListener('click', () => openLightbox(url));
+            preview.appendChild(img);
+        });
+        for (let i = previews.length; i < 4; i++) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'preview-placeholder';
+            placeholder.textContent = '?';
+            preview.appendChild(placeholder);
+        }
+        state._lastStyleDetailId = styleId;
+    }
+
+    // Header badge (баланс может быть актуальный) — обновляется всегда.
     document.querySelectorAll('.detail-credits-count').forEach(el => {
         el.textContent = state.photosetsCreditsPreview;
     });
-    document.getElementById('photoset-style-desc').textContent = style.description || '';
 
     const creditCost = style.credit_cost;
-    document.getElementById('photoset-style-cost-value').textContent = creditCost;
-    document.getElementById('photoset-style-cost-word').textContent = pluralCredits(creditCost);
-
-    // Preview grid (2x2 из preview_urls, fallback до 4 плейсхолдеров)
-    const preview = document.getElementById('photoset-style-preview');
-    const previews = (style.preview_urls || []).filter(Boolean).slice(0, 4);
-    const previewTiles = previews.map(url => `<img src="${url}" alt="" loading="lazy">`);
-    while (previewTiles.length < 4) {
-        previewTiles.push('<div class="preview-placeholder">?</div>');
-    }
-    preview.innerHTML = previewTiles.join('');
 
     // Gate: generate / no-persona / not-enough-credits
     const generateBtn = document.getElementById('photoset-generate-btn');
@@ -1631,21 +1823,21 @@ function openStyleDetail(styleId) {
         noPersonaBlock.style.display = '';
         _renderTariffButtonsInto('style-create-buttons', 'style-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
     } else if (inCheckboxMode) {
-        // Checkbox mode: always use preview balance for consistency with catalog
-        const isSelected = state.selectedPersonaStyles.some(s => s.id === styleId);
-        const canAfford = state.photosetsCreditsPreview >= creditCost;
-        if (isSelected || canAfford) {
+        // Task 6a: в детали стиля — прямая генерация одного стиля (не multi-select toggle).
+        // Multi-select остаётся только на карточках списка (чекбоксы), не в детали.
+        const canAfford = state.photosetsCredits >= creditCost;
+        if (canAfford) {
             generateBtn.style.display = '';
-            generateBtn.querySelector('.btn-text').textContent = isSelected ? 'Убрать из выбранных' : 'Выбрать';
-            generateBtn.onclick = () => { togglePhotosetStyle(styleId); goBack('photosets'); };
+            const numImg = state.selectedPersonaStyle?.num_images || 4;
+            generateBtn.querySelector('.btn-text').textContent = `\u2728 Сгенерировать (${numImg} фото)`;
+            generateBtn.onclick = () => startStyleBatchGeneration();
         } else {
             // Can't afford with preview balance — show topup
             topupBlock.style.display = '';
             const topupHint = document.getElementById('photoset-style-topup')?.querySelector('.topup-hint');
             if (topupHint) {
                 const deficit = creditCost - state.photosetsCreditsPreview;
-                topupHint.innerHTML = `<strong>Стоимость:</strong> ${creditCost} ${pluralCredits(creditCost)}<br>` +
-                    `<strong>Не хватает:</strong> ${deficit} ${pluralCredits(deficit)}<br>Выберите тариф:`;
+                topupHint.textContent = `Для этого фотосета не хватает ${deficit} ${pluralCredits(deficit)}. Пополните баланс`;
             }
             _renderTariffButtonsInto('style-topup-buttons', 'style-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
         }
@@ -1653,10 +1845,11 @@ function openStyleDetail(styleId) {
         // Has persona but 0 credits original — show topup
         topupBlock.style.display = '';
         const topupHint = document.getElementById('photoset-style-topup')?.querySelector('.topup-hint');
-        if (topupHint) topupHint.innerHTML = `<strong>Стоимость:</strong> ${creditCost} ${pluralCredits(creditCost)}<br>Выберите тариф:`;
+        if (topupHint) topupHint.textContent = `Для этого фотосета не хватает ${creditCost} ${pluralCredits(creditCost)}. Пополните баланс`;
         _renderTariffButtonsInto('style-topup-buttons', 'style-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
     }
 
+    resetScreenScroll('photoset-style-detail');
     showScreen('photoset-style-detail');
 }
 
@@ -1698,6 +1891,13 @@ async function startStyleBatchGeneration() {
                 return;
             }
             throw new Error(data.error || 'Request failed');
+        }
+
+        // Task 5c: API теперь списывает кредиты синхронно → читаем серверный баланс
+        if (data.credits_balance != null) {
+            state.photosetsCredits = data.credits_balance;
+            state.photosetsCreditsPreview = data.credits_balance;
+            if (typeof updateBalanceDisplays === 'function') updateBalanceDisplays();
         }
 
         trackEvent('v2_style_batch_sent', { style_id: style.id, count: data.count });
@@ -1894,26 +2094,43 @@ function _renderTariffButtonsInto(containerId, payBtnId, mode, tariffs) {
     if (payBtn) payBtn.style.display = 'none';
     const items = [...tariffs].sort((a, b) => a.credits - b.credits);
     if (!items.length) { container.innerHTML = '<div style="color:var(--text-secondary);text-align:center">Тарифы загружаются...</div>'; return; }
+    // Префикс-иконка перед числом кредитов: молния для Express/Custom (fast),
+    // призма для всех persona-тарифов (create/topup). Консистентно между разделами.
+    const prefix = mode === 'fast'
+        ? '&#9889; '
+        : '<span class="badge-prism"></span> ';
     container.innerHTML = items.map(t => `
         <button class="persona-buy-btn" data-credits="${t.credits}"
                 onclick="selectInlineTariff(this, ${t.credits}, ${t.price}, '${payBtnId}', '${mode}')">
             <span class="persona-buy-btn-price">${t.price} ₽</span>
-            <span class="persona-buy-btn-credits">${t.credits} ${pluralCredits(t.credits)}</span>
+            <span class="persona-buy-btn-credits">${prefix}${t.credits} ${pluralCredits(t.credits)}</span>
         </button>
     `).join('');
 }
 
 function selectInlineTariff(btn, credits, price, payBtnId, mode) {
+    // Toggle: повторный клик на том же тарифе отжимает его.
+    if (state.selectedTariff && state.selectedTariff.mode === mode && state.selectedTariff.credits === credits) {
+        state.selectedTariff = null;
+        btn.classList.remove('selected');
+        const payBtn = document.getElementById(payBtnId);
+        if (payBtn) payBtn.style.display = 'none';
+        if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        return;
+    }
     state.selectedTariff = { mode, credits };
     if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
     btn.parentElement.querySelectorAll('.persona-buy-btn').forEach(b => {
         b.classList.toggle('selected', Number(b.dataset.credits) === credits);
     });
-    // Deselect buttons in other sections (for all-tariffs page)
+    // Сбросить selection и скрыть pay-btn ДРУГИХ секций (на all-tariffs page).
     const sectionsContainer = document.getElementById('tariffs-page-sections');
     if (sectionsContainer) {
         sectionsContainer.querySelectorAll('.persona-buy-btn.selected').forEach(b => {
             if (b.parentElement !== btn.parentElement) b.classList.remove('selected');
+        });
+        sectionsContainer.querySelectorAll('.persona-buy-pay-btn').forEach(b => {
+            if (b.id !== payBtnId) b.style.display = 'none';
         });
     }
     const payBtn = document.getElementById(payBtnId);
@@ -1929,9 +2146,9 @@ function openAllTariffsScreen() {
     const singleButtons = document.getElementById('tariffs-page-buttons');
     if (singleButtons) singleButtons.innerHTML = '';
     document.getElementById('tariffs-page-info').textContent = '';
-    const payBtnId = 'tariffs-page-pay-btn';
-    const payBtn = document.getElementById(payBtnId);
-    if (payBtn) { payBtn.style.display = 'none'; payBtn.disabled = false; }
+    // Глобальный pay-btn скрываем — в multi-section экране у каждой секции свой pay-btn СРАЗУ ПОД табами.
+    const globalPayBtn = document.getElementById('tariffs-page-pay-btn');
+    if (globalPayBtn) { globalPayBtn.style.display = 'none'; globalPayBtn.disabled = false; }
 
     let html = '';
 
@@ -1948,6 +2165,7 @@ function openAllTariffsScreen() {
             Ниже — тарифы на пополнение.
         </div>
         <div class="persona-buy-footer-buttons" id="all-fast-buttons"></div>
+        <button class="persona-buy-pay-btn" id="all-fast-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
     </div>`;
 
     // Section 2: Photosets
@@ -1966,6 +2184,7 @@ function openAllTariffsScreen() {
         html += `<div class="tariff-subsection">
             <div class="tariff-subsection-label">Создание модели + кредиты</div>
             <div class="persona-buy-footer-buttons" id="all-create-buttons"></div>
+            <button class="persona-buy-pay-btn" id="all-create-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
         </div>
         <div class="tariff-text tariff-text-spaced">
             После создания модели следующие заказы будут <strong>существенно дешевле</strong> — останется только выбрать новый сет и получить готовую серию фото.
@@ -1979,17 +2198,18 @@ function openAllTariffsScreen() {
         html += `<div class="tariff-subsection">
             <div class="tariff-subsection-label">Пополнение кредитов</div>
             <div class="persona-buy-footer-buttons" id="all-topup-buttons"></div>
+            <button class="persona-buy-pay-btn" id="all-topup-pay-btn" style="display:none" onclick="buyTariffPage()">Оплатить</button>
         </div>`;
     }
 
     html += `</div>`;
     sections.innerHTML = html;
 
-    // Render tariff pills
-    _renderTariffButtonsInto('all-fast-buttons', payBtnId, 'fast', state.tariffs.fast || []);
+    // Render tariff pills — каждая секция использует СВОЙ pay-btn, кнопка появляется сразу под табами.
+    _renderTariffButtonsInto('all-fast-buttons', 'all-fast-pay-btn', 'fast', state.tariffs.fast || []);
     if (!state.hasPersona) {
-        _renderTariffButtonsInto('all-create-buttons', payBtnId, 'persona_create', state.tariffs.persona_create || []);
-        _renderTariffButtonsInto('all-topup-buttons-preview', payBtnId, 'persona_topup', state.tariffs.persona_topup || []);
+        _renderTariffButtonsInto('all-create-buttons', 'all-create-pay-btn', 'persona_create', state.tariffs.persona_create || []);
+        _renderTariffButtonsInto('all-topup-buttons-preview', 'all-fast-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
         // Disable preview topup buttons
         const previewContainer = document.getElementById('all-topup-buttons-preview');
         if (previewContainer) {
@@ -1999,7 +2219,7 @@ function openAllTariffsScreen() {
             });
         }
     } else {
-        _renderTariffButtonsInto('all-topup-buttons', payBtnId, 'persona_topup', state.tariffs.persona_topup || []);
+        _renderTariffButtonsInto('all-topup-buttons', 'all-topup-pay-btn', 'persona_topup', state.tariffs.persona_topup || []);
     }
     showScreen('tariffs-page');
 }
@@ -2121,6 +2341,47 @@ function openLightbox(url) {
 function closeLightbox() {
     const lb = document.getElementById('lightbox');
     if (lb) lb.style.display = 'none';
+    const overlay = document.getElementById('lightbox-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function openPersonaInfoModal() {
+    const m = document.getElementById('persona-info-modal');
+    if (m) m.style.display = 'flex';
+}
+function closePersonaInfoModal() {
+    const m = document.getElementById('persona-info-modal');
+    if (m) m.style.display = 'none';
+}
+
+function openPersonaPendingModal() {
+    const m = document.getElementById('persona-pending-modal');
+    if (m) m.style.display = 'flex';
+    state._personaPendingShown = true;
+}
+function closePersonaPendingModal() {
+    const m = document.getElementById('persona-pending-modal');
+    if (m) m.style.display = 'none';
+    if (tg?.close) tg.close();
+}
+
+function openStylePreviewLightbox(style) {
+    const previewUrl = style.image_url || (style.preview_urls && style.preview_urls[0]) || '';
+    if (!previewUrl) return;
+    const lb = document.getElementById('lightbox');
+    const img = document.getElementById('lightbox-img');
+    const overlay = document.getElementById('lightbox-overlay');
+    const nameEl = document.getElementById('lightbox-style-name');
+    const costEl = document.getElementById('lightbox-style-cost');
+    if (!lb || !img) return;
+    img.src = previewUrl;
+    if (overlay && nameEl && costEl) {
+        nameEl.textContent = (style.emoji || '') + ' ' + style.label;
+        costEl.textContent = 'Стоимость — ⚡ 1 кредит';
+        overlay.style.display = '';
+    }
+    lb.style.display = 'flex';
+    trackEvent('v2_style_preview_nocredits', { style_id: style.id });
 }
 
 // === Drag & Drop ===
