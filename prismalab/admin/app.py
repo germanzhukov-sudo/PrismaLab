@@ -1052,6 +1052,27 @@ async def persona_style_delete(request: Request):
     return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?deleted=1", status_code=303)
 
 
+@require_auth
+async def persona_styles_bulk_credits(request: Request):
+    """Bulk-update credit_cost для всех persona-стилей разом из списка."""
+    store = get_store()
+    form = await request.form()
+    updated = 0
+    for key in list(form.keys()):
+        if not key.startswith("credit_cost_"):
+            continue
+        try:
+            sid = int(key[len("credit_cost_"):])
+            cc = int(form.get(key, 4) or 4)
+            if cc < 1:
+                cc = 1
+            store.update_persona_style(sid, credit_cost=cc)
+            updated += 1
+        except (ValueError, TypeError):
+            continue
+    return RedirectResponse(url=f"{ADMIN_BASE}/persona-styles?saved=1", status_code=303)
+
+
 # ========== Экспресс-стили ==========
 
 @require_auth
@@ -1468,6 +1489,7 @@ routes = [
     Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
     Route("/admin/persona-styles/{style_id:int}/move/{direction}", persona_style_move, methods=["POST"]),
     Route("/admin/persona-styles/{style_id:int}/delete", persona_style_delete, methods=["POST"]),
+    Route("/admin/persona-styles/bulk-credits", persona_styles_bulk_credits, methods=["POST"]),
     Route("/admin/express-styles", express_styles_page, methods=["GET"]),
     Route("/admin/express-styles/new", express_style_form, methods=["GET"]),
     Route("/admin/express-styles/{style_id:int}/edit", express_style_form, methods=["GET"]),
