@@ -7,6 +7,10 @@ services:
       - "8080:8080"
     volumes:
       - prismalab_data:/app/data
+    # Обходим блокировку одного IP из DNS-пула api.telegram.org на RU-провайдере.
+    # DNS выдаёт 149.154.166.110 (заблокирован), остальные IP работают.
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
     environment:
       # SQLite в volume; при DATABASE_URL используется PostgreSQL (Supabase)
       - PRISMALAB_DB_PATH=/app/data/prismalab.db
@@ -28,6 +32,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
     command: ["python", "-m", "prismalab.support_bot"]
 
 volumes:
