@@ -94,9 +94,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args = context.args
     if args and args[0] == "persona_batch":
         _clear_persona_flow_state(context)
-        pending_json = store.get_pending_persona_batch(user_id)
+        # Task 5a: атомарный claim (get+clear за один DB-запрос) — устраняет race
+        # между этим handler'ом и api_persona_generate cleanup.
+        pending_json = store.claim_and_clear_pending_persona_batch(user_id)
         if pending_json:
-            store.clear_pending_persona_batch(user_id)
             try:
                 styles_list = json.loads(pending_json)
             except (json.JSONDecodeError, TypeError):

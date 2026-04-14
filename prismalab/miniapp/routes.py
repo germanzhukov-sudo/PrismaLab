@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -28,6 +29,48 @@ from prismalab.tariffs import get_all_tariffs, get_pack_sell_price, get_price, g
 logger = logging.getLogger("prismalab.miniapp")
 
 BASE_DIR = Path(__file__).parent
+
+# ── Task 8: TTL cache для featured_styles в /api/auth ──────────────────
+# packs уже закешированы в services/photosets.py (_PACK_CACHE_TTL=3600).
+# Здесь кэшируем только DB-запросы featured styles (get_persona_styles + get_all_style_previews_map),
+# которые прогоняются на КАЖДОМ auth-вызове и через ngrok в dev дают +300-500мс.
+_FEATURED_STYLES_CACHE = {"data": None, "ts": 0.0}
+_FEATURED_STYLES_CACHE_TTL = 300  # 5 минут — админ-изменения stиlей видны через ≤5 мин
+
+
+def _get_featured_styles_cached(store) -> list[dict]:
+    """TTL-кэш для featured styles DB-queries. Переиспользует ту же логику, что была inline в api_auth."""
+    now = time.time()
+    if _FEATURED_STYLES_CACHE["data"] is not None and (now - _FEATURED_STYLES_CACHE["ts"]) < _FEATURED_STYLES_CACHE_TTL:
+        return _FEATURED_STYLES_CACHE["data"]
+
+    featured_titles = [
+        "Вечерний гламур", "Свадебный образ", "Студийный дым", "Клеопатра",
+        "Бордовый бархат", "Лавандовый шёлк", "Кофе в отеле", "Драматический свет",
+        "Дождливое окно",
+    ]
+    result: list[dict] = []
+    try:
+        all_styles = store.get_persona_styles(active_only=True)
+        previews_map = store.get_all_style_previews_map()
+        title_to_style = {str(s.get("title") or "").strip(): s for s in all_styles}
+        for title in featured_titles:
+            s = title_to_style.get(title)
+            if not s:
+                continue
+            sid = int(s["id"])
+            urls = previews_map.get(sid) or []
+            url = urls[0] if urls else str(s.get("image_url") or "").strip()
+            if url:
+                result.append({"id": sid, "title": title, "image_url": url})
+    except Exception as e:
+        logger.warning("Failed to load featured styles: %s", e)
+        # При ошибке возвращаем пустой список, но НЕ кэшируем — на следующем вызове попробуем снова
+        return []
+
+    _FEATURED_STYLES_CACHE["data"] = result
+    _FEATURED_STYLES_CACHE["ts"] = now
+    return result
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 BOT_TOKEN = os.getenv("PRISMALAB_BOT_TOKEN", "")
@@ -157,28 +200,8 @@ async def api_auth(request: Request):
         tariffs = {}
 
     # Featured express styles for main screen preview rail
-    featured_styles = []
-    try:
-        featured_titles = [
-            "Вечерний гламур", "Свадебный образ", "Студийный дым", "Клеопатра",
-            "Бордовый бархат", "Лавандовый шёлк", "Кофе в отеле", "Драматический свет",
-            "Дождливое окно",
-        ]
-        # No gender filter — featured styles are universal showcase
-        all_styles = store.get_persona_styles(active_only=True)
-        previews_map = store.get_all_style_previews_map()
-        title_to_style = {str(s.get("title") or "").strip(): s for s in all_styles}
-        for title in featured_titles:
-            s = title_to_style.get(title)
-            if not s:
-                continue
-            sid = int(s["id"])
-            urls = previews_map.get(sid) or []
-            url = urls[0] if urls else str(s.get("image_url") or "").strip()
-            if url:
-                featured_styles.append({"id": sid, "title": title, "image_url": url})
-    except Exception as e:
-        logger.warning("Failed to load featured styles: %s", e)
+    # Task 8: переиспользуем кэш вместо каждого раза читать БД
+    featured_styles = _get_featured_styles_cached(store)
 
     # Featured custom prompt examples for main screen preview rail
     # Images uploaded to Supabase Storage, URLs hardcoded (static curated content)
@@ -895,7 +918,13 @@ async def api_fast_buy(request: Request):
 
 
 async def api_persona_generate(request: Request):
-    """Сохраняет батч стилей для генерации и возвращает deeplink в бот."""
+    """Сохраняет батч стилей для генерации и возвращает deeplink в бот.
+
+    Новый контракт (Task 5): кредиты резервируются АТОМАРНО при успешном ответе.
+    Если сохранение батча упало — откат резерва.
+    Если у юзера уже есть pre_reserved pending — возвращаем старый и создаём новый.
+    Если pending legacy — восстанавливаем и возвращаем 409.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -920,6 +949,65 @@ async def api_persona_generate(request: Request):
     if not has_persona:
         return JSONResponse({"error": "No persona"}, status_code=400)
 
+    # === Task 5a шаг 1: cleanup старого pending (idempotent retry + race-safe) ===
+    try:
+        old_json = store.claim_and_clear_pending_persona_batch(user_id)
+    except Exception as e:
+        logger.exception("api_persona_generate: claim_and_clear failed user=%s: %s", user_id, e)
+        return JSONResponse({"error": "Server error (claim)"}, status_code=500)
+
+    if old_json:
+        try:
+            old_items = json.loads(old_json)
+            is_pre_reserved = isinstance(old_items, list) and any(
+                isinstance(it, dict) and it.get("pre_reserved") for it in old_items
+            )
+            if is_pre_reserved:
+                # Новый путь: возвращаем деньги, продолжаем с новым reserve
+                old_total = sum(
+                    int(it.get("credit_cost", 0))
+                    for it in old_items if isinstance(it, dict)
+                )
+                if old_total > 0:
+                    store.refund_persona_credits(user_id, old_total)
+                    logger.info(
+                        "api_persona_generate: refunded stale pre_reserved batch user=%s credits=%s",
+                        user_id, old_total,
+                    )
+                # Обновляем профиль — после refund баланс изменился
+                profile = store.get_user(user_id)
+            else:
+                # LEGACY pending: восстанавливаем и отдаём 409
+                try:
+                    store.set_pending_persona_batch(user_id, old_json)
+                except Exception as restore_err:
+                    logger.critical(
+                        "api_persona_generate: LEGACY BATCH LOST user=%s batch=%s err=%s",
+                        user_id, old_json, restore_err, exc_info=True,
+                    )
+                    return JSONResponse({"error": "Server error restoring legacy batch"}, status_code=500)
+                logger.info("api_persona_generate: restored legacy pending batch user=%s", user_id)
+                return JSONResponse(
+                    {"error": "Previous batch pending. Open bot to complete."},
+                    status_code=409,
+                )
+        except json.JSONDecodeError as e:
+            # Неизвестный формат — восстанавливаем как есть, отдаём 409
+            try:
+                store.set_pending_persona_batch(user_id, old_json)
+            except Exception as restore_err:
+                logger.critical(
+                    "api_persona_generate: UNKNOWN BATCH LOST user=%s batch=%s err=%s",
+                    user_id, old_json, restore_err, exc_info=True,
+                )
+                return JSONResponse({"error": "Server error"}, status_code=500)
+            logger.warning(
+                "api_persona_generate: failed to parse old batch user=%s: %s — restored",
+                user_id, e,
+            )
+            return JSONResponse({"error": "Previous batch pending"}, status_code=409)
+
+    # === Проверка баланса (после возможного refund старого) ===
     credits = getattr(profile, "persona_credits_remaining", 0) or 0
     if credits <= 0:
         return JSONResponse({"error": "No credits"}, status_code=402)
@@ -945,19 +1033,47 @@ async def api_persona_generate(request: Request):
             "title": db_style.get("title", slug),
             "credit_cost": cost,
             "prompt": db_style.get("prompt", ""),
+            "pre_reserved": True,   # Task 5: pre-reserved flag (навигация-compat: это дополнительный ключ)
         })
         total_cost += cost
 
     if not batch:
         return JSONResponse({"error": "No valid styles in batch"}, status_code=400)
 
-    store.set_pending_persona_batch(user_id, json.dumps(batch))
-    logger.info("Persona batch saved for user %s: %d styles", user_id, len(batch))
+    # === Task 5a шаг 2: атомарный reserve + save с rollback ===
+    if not store.reserve_persona_credits(user_id, total_cost):
+        return JSONResponse({"error": "Insufficient credits"}, status_code=402)
+
+    try:
+        store.set_pending_persona_batch(user_id, json.dumps(batch))
+    except Exception as e:
+        logger.exception("api_persona_generate: save_batch failed user=%s, refunding", user_id)
+        try:
+            store.refund_persona_credits(user_id, total_cost)
+        except Exception as refund_err:
+            logger.critical(
+                "api_persona_generate: REFUND FAILED user=%s credits=%s err=%s",
+                user_id, total_cost, refund_err, exc_info=True,
+            )
+        return JSONResponse({"error": "Failed to save batch"}, status_code=500)
+
+    logger.info(
+        "Persona batch saved for user %s: %d styles, reserved=%s",
+        user_id, len(batch), total_cost,
+    )
+
+    # === Task 5a шаг 3: возвращаем остаток баланса ===
+    remaining = (store.get_user(user_id).persona_credits_remaining or 0)
 
     # Deeplink в бот
     bot_username = get_bot_username()
     bot_link = f"https://t.me/{bot_username}?start=persona_batch" if bot_username else ""
-    return JSONResponse({"ok": True, "count": len(batch), "bot_link": bot_link})
+    return JSONResponse({
+        "ok": True,
+        "count": len(batch),
+        "bot_link": bot_link,
+        "credits_balance": remaining,
+    })
 
 
 # ========== Аналитика ==========
@@ -1024,6 +1140,8 @@ ALLOWED_TRACK_EVENTS = {
     "v2_style_create_persona",
     "v2_photoset_style_select",
     "v2_photoset_batch",
+    # No-credits style preview
+    "v2_style_preview_nocredits",
     # V2 All tariffs
     "v2_all_tariffs",
     # V2 Custom generation
@@ -1326,7 +1444,19 @@ async def api_v2_pack_buy_credits(request: Request):
                 )
             )
         except Exception as e:
-            logger.warning("pack_buy_credits: failed to start generation: %s", e)
+            # Task 5d: sync-fail refund safety net — если не смогли даже поставить таску,
+            # возвращаем деньги и отдаём 500. Фоновые ошибки генерации не покрыты (follow-up).
+            logger.exception("pack_buy_credits: failed to start generation user=%s pack=%s: %s",
+                             user_id, pack_id, e)
+            try:
+                store.refund_persona_credits(user_id, credit_cost)
+            except Exception:
+                logger.critical("pack_buy_credits: REFUND FAILED user=%s credits=%s",
+                                user_id, credit_cost, exc_info=True)
+            return JSONResponse(
+                {"error": "Failed to start pack generation", "credits_balance": store.get_user(user_id).persona_credits_remaining},
+                status_code=500,
+            )
 
     updated_profile = store.get_user(user_id)
     return JSONResponse({

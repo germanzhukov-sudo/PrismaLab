@@ -538,7 +538,16 @@ async def _run_style_job(
     skip_post_message: bool = False,
     num_images: int = 1,
     credits_to_spend: int = 1,
-) -> None:
+) -> bool:
+    """
+    Запускает генерацию одного стиля. Возвращает True, если хоть одна картинка
+    была УСПЕШНО отправлена юзеру (т.е. юзер получил результат), иначе False.
+
+    Существующие callsite (fast_photo, regular handlers) return value игнорируют —
+    обратная совместимость сохраняется. Новый контракт нужен для persona-batch refund
+    логики в `handlers/persona.py::_run_persona_batch` (Task 5b).
+    """
+    generated_any = False
     try:
         use_test_prompt = test_prompt is not None
         if use_test_prompt:
@@ -565,7 +574,7 @@ async def _run_style_job(
                 if is_persona_style and context:
                     extra["reply_markup"] = _persona_app_keyboard()
                 await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-                return
+                return False
 
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         refs: list[bytes] = []
@@ -584,7 +593,7 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
 
         # Только Astria (Replicate удалён)
         if not settings.astria_api_key:
@@ -593,7 +602,7 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
         # Проверяем, есть ли у пользователя FaceID или LoRA tune
         user_profile = store.get_user(user_id)
         astria_tune_id = user_profile.astria_tune_id if user_profile else None
@@ -615,7 +624,7 @@ async def _run_style_job(
             if is_persona_style and context:
                 extra["reply_markup"] = _persona_app_keyboard()
             await bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=err_msg, **extra)
-            return
+            return False
         if use_lora:
             # LoRA генерация: используем <lora:{tune_id}:strength> в промпте
             # Inference на базовой модели Flux1.dev (1504944)
@@ -800,6 +809,7 @@ async def _run_style_job(
                         bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
                         media.append(InputMediaDocument(media=bio, caption=persona_caption if idx == 0 else None))
                     await bot.send_media_group(chat_id=chat_id, media=media)
+                    generated_any = True  # Task 5b: хоть что-то улетело юзеру
                 except Exception as album_err:
                     logger.warning("sendMediaGroup failed, sending individually: %s", album_err)
                     # Fallback: отправляем поштучно
@@ -809,6 +819,7 @@ async def _run_style_job(
                             bio.name = f"{settings.app_name}_{style.id}_{idx+1}.png"
                             await _safe_send_document(bot=bot, chat_id=chat_id, document=bio,
                                                       caption=persona_caption if idx == 0 else "")
+                            generated_any = True  # Task 5b: одна из fallback-картинок улетела
                         except Exception:
                             logger.warning("Fallback send failed for image %d", idx + 1)
         else:
@@ -823,6 +834,7 @@ async def _run_style_job(
             tune_type_label = "LoRA" if use_lora else "FaceID"
             persona_caption = f"Персона: «{style.title}»" if is_persona_style else f"Готово ({tune_type_label}): «{style.title}»"
             await _safe_send_document(bot=bot, chat_id=chat_id, document=bio, caption=persona_caption)
+            generated_any = True  # Task 5b: single-image отправлена
             _result_bytes_list = [out_bytes]
 
         # Логируем успешную генерацию для аналитики
@@ -863,7 +875,7 @@ async def _run_style_job(
                 text="Готово. Хочешь другой стиль?",
                 reply_markup=_start_keyboard(profile),
             )
-        return
+        return generated_any
 
     except AstriaError as e:
         logger.warning("Astria error: %s", e)
@@ -877,6 +889,7 @@ async def _run_style_job(
             )
         else:
             await _safe_edit_status(bot, chat_id, status_message_id, text=err_msg)
+        return generated_any  # Task 5b: если что-то успели отправить — True; иначе False
     except Exception as e:
         logger.error("Ошибка PrismaLab job: %s", e, exc_info=True)
         gen_type = "persona" if is_persona_style else "express"
@@ -896,6 +909,7 @@ async def _run_style_job(
                 await _safe_edit_status(bot, chat_id, status_message_id, text=err_text)
         except Exception:
             pass
+        return generated_any  # Task 5b
 
 
 async def handle_kie_test_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

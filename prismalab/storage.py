@@ -925,6 +925,66 @@ class PrismaLabStore:
             (int(user_id),),
         )
 
+    def claim_and_clear_pending_persona_batch(self, user_id: int) -> str | None:
+        """Атомарно считать pending_persona_batch и очистить его.
+
+        Используется двумя сторонами для устранения race:
+        - `routes.api_persona_generate` при cleanup перед новым reserve
+        - `handlers.navigation` при claim'е батча ботом по /start persona_batch deeplink
+
+        PG: SELECT ... FOR UPDATE в транзакции берёт row-lock. Параллельный вызов
+        блокируется до commit'а первого. После commit первого — второй читает NULL
+        и возвращает None. Двух обработчиков одного батча быть не может.
+
+        SQLite: BEGIN IMMEDIATE даёт эксклюзивную блокировку БД на время транзакции.
+
+        Возвращает старое значение pending_persona_batch, если оно было не NULL; иначе None.
+        """
+        with self._connect() as conn:
+            try:
+                if self._use_pg:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"SELECT pending_persona_batch FROM {self._users_table} "
+                            f"WHERE user_id = %s FOR UPDATE",
+                            (int(user_id),),
+                        )
+                        row = cur.fetchone()
+                        old = row[0] if row and row[0] is not None else None
+                        if old is not None:
+                            cur.execute(
+                                f"UPDATE {self._users_table} "
+                                f"SET pending_persona_batch = NULL, updated_at = CURRENT_TIMESTAMP "
+                                f"WHERE user_id = %s",
+                                (int(user_id),),
+                            )
+                    conn.commit()
+                    return old
+                else:
+                    cur = conn.cursor()
+                    cur.execute("BEGIN IMMEDIATE")
+                    cur.execute(
+                        f"SELECT pending_persona_batch FROM {self._users_table} WHERE user_id = ?",
+                        (int(user_id),),
+                    )
+                    row = cur.fetchone()
+                    old = _row_get(row, "pending_persona_batch") if row else None
+                    if old:
+                        cur.execute(
+                            f"UPDATE {self._users_table} "
+                            f"SET pending_persona_batch = NULL, updated_at = CURRENT_TIMESTAMP "
+                            f"WHERE user_id = ?",
+                            (int(user_id),),
+                        )
+                    conn.commit()
+                    return old
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+
     def set_subject_gender(self, user_id: int, gender: str) -> None:
         if gender not in ("male", "female"):
             return

@@ -77,7 +77,12 @@ import prismalab.bot as _bot  # noqa: E402
 
 
 async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, styles_list: list) -> None:
-    """Запускает батч-генерацию стилей персоны."""
+    """Запускает батч-генерацию стилей персоны.
+
+    Task 5b: поддержка pre_reserved батчей от api_persona_generate:
+    - Кредиты уже зарезервированы в API — НЕ проверяем баланс, НЕ режем батч, НЕ списываем повторно.
+    - После каждого стиля: если `_run_style_job` вернул False (не сгенерировано) — refund credit_cost.
+    """
     profile = _bot.store.get_user(user_id)
     has_persona = bool(
         getattr(profile, "astria_lora_tune_id", None)
@@ -87,17 +92,25 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text("Для генерации нужна Персона. Нажмите /newpersona.")
         return
 
-    credits = profile.persona_credits_remaining
-    if credits <= 0:
-        await update.message.reply_text("У вас 0 кредитов Персоны. Докупите кредиты в Mini App.")
-        return
+    # Task 5b: detect pre_reserved batch (новый контракт от api_persona_generate)
+    batch_pre_reserved = bool(styles_list) and isinstance(styles_list[0], dict) and styles_list[0].get("pre_reserved")
 
-    batch = styles_list[:credits]
+    credits = profile.persona_credits_remaining
+    if not batch_pre_reserved:
+        # Legacy path — прежнее поведение (баланс ещё не списан, резка под остаток)
+        if credits <= 0:
+            await update.message.reply_text("У вас 0 кредитов Персоны. Докупите кредиты в Mini App.")
+            return
+        batch = styles_list[:credits]
+    else:
+        # Pre-reserved: кредиты уже зарезервированы, берём батч как есть
+        batch = list(styles_list)
     total = len(batch)
 
     _bot.store.log_event(user_id, "persona_generate_batch", {
         "styles_count": total,
         "styles": [{"slug": s.get("slug"), "title": s.get("title")} for s in batch],
+        "pre_reserved": batch_pre_reserved,
     })
 
     gender = profile.subject_gender or context.user_data.get(USERDATA_SUBJECT_GENDER) or "female"
@@ -111,14 +124,15 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
             # Промпт из БД (обогащён API endpoint), фоллбэк на словарь
             prompt = style_data.get("prompt") or _bot._persona_style_prompt(slug, title)
 
-            # Проверяем кредиты перед каждой генерацией (по credit_cost, не по 1)
-            current_profile = _bot.store.get_user(user_id)
-            if current_profile.persona_credits_remaining < credit_cost:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"Кредиты закончились после {i-1}/{total} фото."
-                )
-                break
+            # Task 5b: для pre_reserved — НЕ проверяем баланс (уже зарезервировано)
+            if not batch_pre_reserved:
+                current_profile = _bot.store.get_user(user_id)
+                if current_profile.persona_credits_remaining < credit_cost:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"Кредиты закончились после {i-1}/{total} фото."
+                    )
+                    break
 
             gen_lock = await _acquire_user_generation_lock(user_id)
             if gen_lock is None:
@@ -129,6 +143,14 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         chat_id=user_id,
                         text=f"⏳ Не удалось запустить «{title}» — предыдущая ещё выполняется. Пропускаю."
                     )
+                    # Task 5b: refund для pre_reserved (слот не использован)
+                    if batch_pre_reserved:
+                        try:
+                            _bot.store.refund_persona_credits(user_id, credit_cost)
+                            logger.warning("Refund pre_reserved (lock failed) user=%s slug=%s cost=%s",
+                                           user_id, slug, credit_cost)
+                        except Exception:
+                            logger.exception("Refund failed user=%s", user_id)
                     continue
 
             status_msg = await context.bot.send_message(
@@ -138,7 +160,9 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
             )
 
             try:
-                await _bot._run_style_job(
+                # Task 5b: для pre_reserved передаём credits_to_spend=0 (не списывать повторно)
+                style_credits_to_spend = 0 if batch_pre_reserved else credit_cost
+                generated = await _bot._run_style_job(
                     bot=context.bot,
                     chat_id=user_id,
                     photo_file_ids=[],
@@ -156,10 +180,26 @@ async def _run_persona_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     context=context,
                     skip_post_message=True,
                     num_images=4,
-                    credits_to_spend=credit_cost,
+                    credits_to_spend=style_credits_to_spend,
                 )
+                # Task 5b: для pre_reserved — refund, если фото не было отправлено
+                if batch_pre_reserved and not generated:
+                    try:
+                        _bot.store.refund_persona_credits(user_id, credit_cost)
+                        logger.warning("Refund pre_reserved (not generated) user=%s slug=%s cost=%s",
+                                       user_id, slug, credit_cost)
+                    except Exception:
+                        logger.exception("Refund failed user=%s", user_id)
             except Exception as e:
                 logger.error("Batch gen error user %s style %s: %s", user_id, slug, e, exc_info=True)
+                # Task 5b: raised exception → считаем "не сгенерировано" → refund
+                if batch_pre_reserved:
+                    try:
+                        _bot.store.refund_persona_credits(user_id, credit_cost)
+                        logger.warning("Refund pre_reserved (exception) user=%s slug=%s cost=%s",
+                                       user_id, slug, credit_cost)
+                    except Exception:
+                        logger.exception("Refund failed user=%s", user_id)
                 try:
                     await context.bot.send_message(chat_id=user_id, text=f"Ошибка при «{title}». Продолжаю...")
                 except Exception:
