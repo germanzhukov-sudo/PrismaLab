@@ -889,11 +889,10 @@ function renderExpressStyles() {
         <div class="style-card fade-in" style="animation-delay:${i * 0.05}s" onclick="selectExpressStyle(${JSON.stringify(style).replace(/"/g, '&quot;')})">
             ${hasImage
                 ? `<img class="style-card-image" src="${style.image_url}" alt="" loading="lazy">`
-                : `<div class="style-card-bg" style="background:${gradients[i % gradients.length]}"></div>
-                   <div class="style-card-emoji">${style.emoji || '🎨'}</div>`
+                : `<div class="style-card-bg" style="background:${gradients[i % gradients.length]}"></div>`
             }
             <div class="style-card-info">
-                <div class="style-card-name">${style.emoji || ''} ${style.label}</div>
+                <div class="style-card-name">${style.label}</div>
             </div>
         </div>`;
     }).join('');
@@ -1284,17 +1283,13 @@ function renderV3Styles(styles) {
             card.style.backgroundPosition = 'center';
         } else {
             card.style.background = GRADIENTS[i % GRADIENTS.length];
-            const emojiDiv = document.createElement('div');
-            emojiDiv.className = 'style-emoji';
-            emojiDiv.textContent = s.emoji || '🎨';
-            card.appendChild(emojiDiv);
         }
 
         const info = document.createElement('div');
         info.className = 'style-card-info';
         const label = document.createElement('span');
         label.className = 'style-label';
-        label.textContent = (s.emoji || '') + ' ' + s.label;
+        label.textContent = s.label;
         info.appendChild(label);
         card.appendChild(info);
         grid.appendChild(card);
@@ -1324,7 +1319,7 @@ function selectV3Style(style) {
     resetScreenScroll('express-upload'); // детали стиля — открываем с верха
     state.selectedExpressStyle = style;
     if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-    document.getElementById('express-selected-style').textContent = `${style.emoji || ''} ${style.label}`;
+    document.getElementById('express-selected-style').textContent = style.label;
 
     // Show selected style preview image
     const stylePreview = document.getElementById('upload-style-preview');
@@ -2376,7 +2371,7 @@ function openStylePreviewLightbox(style) {
     if (!lb || !img) return;
     img.src = previewUrl;
     if (overlay && nameEl && costEl) {
-        nameEl.textContent = (style.emoji || '') + ' ' + style.label;
+        nameEl.textContent = style.label;
         costEl.textContent = 'Стоимость — ⚡ 1 кредит';
         overlay.style.display = '';
     }

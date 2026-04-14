@@ -83,13 +83,11 @@
                         {% if s.image_url %}
                         <img src="{{ s.image_url }}" alt="" style="width: 45px; height: 45px; object-fit: cover; border-radius: 8px;">
                         {% else %}
-                        <div style="width: 45px; height: 45px; background: #eee; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-                            <span>{{ s.emoji or '🎨' }}</span>
-                        </div>
+                        <div style="width: 45px; height: 45px; background: #eee; border-radius: 8px;"></div>
                         {% endif %}
                     </td>
                     <td>
-                        <strong>{{ s.emoji }} {{ s.title }}</strong>
+                        <strong>{{ s.title }}</strong>
                         <br><small class="text-muted font-monospace">{{ s.slug }}</small>
                     </td>
                     <td>

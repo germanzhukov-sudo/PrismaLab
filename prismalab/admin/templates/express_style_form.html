@@ -24,17 +24,11 @@
                     {% endif %}
 
                     <div class="row">
-                        <div class="col-md-8 mb-3">
+                        <div class="col-md-10 mb-3">
                             <label class="form-label">Название</label>
                             <input type="text" class="form-control" name="title"
                                    value="{{ style.title if style else '' }}"
                                    placeholder="Вечерний гламур" required>
-                        </div>
-                        <div class="col-md-2 mb-3">
-                            <label class="form-label">Эмодзи</label>
-                            <input type="text" class="form-control text-center" name="emoji"
-                                   value="{{ style.emoji if style else '' }}"
-                                   placeholder="✨" maxlength="4" style="font-size: 1.3em;">
                         </div>
                         <div class="col-md-2 mb-3">
                             <label class="form-label">Порядок</label>
