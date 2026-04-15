@@ -567,6 +567,35 @@ def test_set_persona_style_costs_bulk(store):
     assert float(store.get_persona_style(s2)["cost_usd"]) == 1.75
 
 
+def test_set_persona_style_costs_bulk_with_credit_cost(store):
+    """Bulk update поддерживает credit_cost + cost_usd в одном item и отдельно."""
+    s1 = store.create_persona_style(slug="bulkc1", title="BC1", gender="female", image_url="")
+    s2 = store.create_persona_style(slug="bulkc2", title="BC2", gender="male", image_url="")
+    s3 = store.create_persona_style(slug="bulkc3", title="BC3", gender="female", image_url="")
+
+    # До — дефолтный credit_cost=4
+    assert int(store.get_persona_style(s1)["credit_cost"]) == 4
+
+    store.set_persona_style_costs_bulk([
+        {"style_id": s1, "cost_usd": 0.30, "credit_cost": 6},  # оба поля
+        {"style_id": s2, "credit_cost": 8},                     # только кредиты
+        {"style_id": s3, "cost_usd": 0.99},                     # только себестоимость
+    ])
+
+    style1 = store.get_persona_style(s1)
+    style2 = store.get_persona_style(s2)
+    style3 = store.get_persona_style(s3)
+
+    assert float(style1["cost_usd"]) == 0.30
+    assert int(style1["credit_cost"]) == 6
+    assert int(style2["credit_cost"]) == 8
+    # cost_usd у s2 не трогали — остался дефолтный 0
+    assert float(style2["cost_usd"]) == 0.0
+    assert float(style3["cost_usd"]) == 0.99
+    # credit_cost у s3 не трогали — остался 4
+    assert int(style3["credit_cost"]) == 4
+
+
 @patch("prismalab.miniapp.routes.validate_init_data", return_value=FAKE_USER)
 def test_auth_returns_discount_badge(mock_auth, client, store):
     """Auth API returns discount_badge from admin_settings."""

@@ -3086,9 +3086,21 @@ class PrismaLabStore:
                 return result
 
     def set_persona_style_costs_bulk(self, items: list[dict]) -> None:
-        """Batch update cost_usd for persona styles. items: [{style_id, cost_usd}]."""
+        """Batch update cost_usd и/или credit_cost для persona-стилей.
+
+        items: список словарей формата {style_id, cost_usd?, credit_cost?}.
+        Поля опциональные — обновляется только то, что передано. Если передан
+        только credit_cost, cost_usd не трогается, и наоборот.
+        """
         for item in items:
-            self.update_persona_style(int(item["style_id"]), cost_usd=float(item.get("cost_usd", 0)))
+            updates: dict = {}
+            if "cost_usd" in item and item["cost_usd"] is not None:
+                updates["cost_usd"] = float(item["cost_usd"])
+            if "credit_cost" in item and item["credit_cost"] is not None:
+                updates["credit_cost"] = int(item["credit_cost"])
+            if not updates:
+                continue
+            self.update_persona_style(int(item["style_id"]), **updates)
 
     # ========================================
     # Express Styles (экспресс-фото стили из БД)

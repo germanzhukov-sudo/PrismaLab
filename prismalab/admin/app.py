@@ -653,12 +653,31 @@ async def photosets_unified_post(request: Request):
     save_type = form.get("save_type", "packs")
 
     if save_type == "styles":
-        items = []
+        # Собираем апдейты по style_id: cost_usd и credit_cost в одном item.
+        items_map: dict[int, dict] = {}
         for key, val in form.multi_items():
-            if key.startswith("style_cost_") and val.strip():
-                style_id = int(key.replace("style_cost_", ""))
-                items.append({"style_id": style_id, "cost_usd": float(val)})
-        store.set_persona_style_costs_bulk(items)
+            if not isinstance(val, str):
+                continue
+            val = val.strip()
+            if not val:
+                continue
+            if key.startswith("style_cost_"):
+                try:
+                    sid = int(key[len("style_cost_"):])
+                    items_map.setdefault(sid, {"style_id": sid})["cost_usd"] = float(val)
+                except (ValueError, TypeError):
+                    continue
+            elif key.startswith("credit_cost_"):
+                try:
+                    sid = int(key[len("credit_cost_"):])
+                    cc = int(val)
+                    if cc < 1:
+                        cc = 1
+                    items_map.setdefault(sid, {"style_id": sid})["credit_cost"] = cc
+                except (ValueError, TypeError):
+                    continue
+        if items_map:
+            store.set_persona_style_costs_bulk(list(items_map.values()))
         return RedirectResponse(url=f"{ADMIN_BASE}/photosets?tab=styles&saved=1", status_code=303)
     else:
         offers = _load_pack_offers()
