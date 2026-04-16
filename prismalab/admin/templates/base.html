@@ -274,6 +274,9 @@
                     <a class="nav-link {% if '/settings' in request.url.path and '/pricing' not in request.url.path %}active{% endif %}" href="{{ admin_base }}/settings">
                         <i class="bi bi-gear"></i> Настройки
                     </a>
+                    <a class="nav-link {% if '/calculator' in request.url.path %}active{% endif %}" href="{{ admin_base }}/calculator">
+                        <i class="bi bi-calculator"></i> Калькулятор
+                    </a>
                 </nav>
                 <div class="user-admin mt-auto">
                     <i class="bi bi-person-circle"></i> {{ admin.display_name }}

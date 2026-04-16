@@ -442,6 +442,16 @@ async def api_chart_data(request: Request):
 
 
 @require_auth
+async def calculator_page(request: Request):
+    """Калькулятор прайсинга (stateless, всё на клиенте)."""
+    return templates.TemplateResponse("calculator.html", {
+        "request": request,
+        "admin": request.state.admin,
+        "admin_base": ADMIN_BASE,
+    })
+
+
+@require_auth
 async def settings_page(request: Request):
     """Страница настроек себестоимости."""
     store = get_store()
@@ -1503,6 +1513,7 @@ routes = [
     Route("/admin/pricing", pricing_post, methods=["POST"]),
     Route("/admin/settings", settings_page, methods=["GET"]),
     Route("/admin/settings", settings_post, methods=["POST"]),
+    Route("/admin/calculator", calculator_page, methods=["GET"]),
     Route("/admin/persona-styles/new", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/{style_id:int}/edit", persona_style_form, methods=["GET"]),
     Route("/admin/persona-styles/save", persona_style_save, methods=["POST"]),
