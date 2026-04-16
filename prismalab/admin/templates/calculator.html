@@ -30,6 +30,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+{% raw %}
 <script type="text/babel">
 const { useState, useMemo, useCallback } = React;
 
@@ -466,4 +467,5 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('calculator-root'));
 root.render(<App />);
 </script>
+{% endraw %}
 {% endblock %}
