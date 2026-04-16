@@ -20,7 +20,7 @@ logger = logging.getLogger("prismalab.miniapp.services.photosets")
 
 # Дефолтные паки — единый источник в pack_offers.py
 from prismalab.pack_offers import _DEFAULT_PACK_OFFERS as DEFAULT_PACKS, _pack_offers
-from prismalab.tariffs import get_pack_sell_price
+from prismalab.tariffs import get_pack_price_overrides, get_pack_sell_price
 
 PACK_ID_CATEGORIES: dict[int, str] = {
     p["id"]: p.get("category", "female") for p in DEFAULT_PACKS
@@ -502,6 +502,9 @@ async def get_packs_list(*, astria_api_key: str, store=None) -> list[dict]:
             if isinstance(data, dict) and pack_id:
                 gallery_index[pack_id] = {**(gallery_index.get(pack_id) or {}), **data}
 
+    # Batch: загрузить все price overrides одним SQL-запросом (1 DB call вместо 41)
+    _price_overrides = get_pack_price_overrides(store) if store is not None else {}
+
     result = []
     for offer in offers:
         pack_id = int(offer["id"])
@@ -523,10 +526,11 @@ async def get_packs_list(*, astria_api_key: str, store=None) -> list[dict]:
             cover_url = str(pack_data.get("cover_url") or "").strip()
             if cover_url:
                 preview_urls = [cover_url]
-        # Цена: tariffs override → env → default
-        pack_price = offer["price_rub"]
-        if store is not None:
-            pack_price = get_pack_sell_price(store, int(offer["id"]), pack_price)
+        # Цена: batch override → env → default
+        pack_price = float(offer["price_rub"])
+        override = _price_overrides.get(pack_id)
+        if override is not None:
+            pack_price = override
 
         cc = int(offer.get("credit_cost", expected_images))
         result.append({
