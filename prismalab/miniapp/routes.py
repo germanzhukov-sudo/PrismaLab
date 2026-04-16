@@ -233,7 +233,7 @@ async def api_auth(request: Request):
         # кеша мгновенно. Если холодный (старт, warm ещё не завершился) — [].
         # Background warm в payment.py заполнит кеш при старте сервера.
         if is_pack_cache_warm():
-            packs_list = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store)
+            packs_list = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=None)
         else:
             packs_list = []
         title_to_pack = {str(p.get("title") or "").strip(): p for p in packs_list}
