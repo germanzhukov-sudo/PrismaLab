@@ -69,6 +69,7 @@ const state = {
     photosetsCreditsPreview: 0,
     photosetsFilter: new Set(),
     photosetsLoaded: false,
+    expressCatalogLoaded: false,
     photosetsLoadingPromise: null,
     // Tab switcher
     activeMainTab: 'express',
@@ -1177,6 +1178,12 @@ function filterHistory(mode) {
 // === EXPRESS V3 FLOW ===
 
 async function loadExpressCatalog(keepFilters) {
+    // Кеш: если каталог уже загружен и не смена фильтров — показываем из DOM
+    if (!keepFilters && state.expressCatalogLoaded) {
+        showScreen('express-catalog');
+        updateBalanceDisplays();
+        return;
+    }
     if (!keepFilters) showScreen('express-catalog');
     const grid = document.getElementById('v3-styles-grid');
     if (!keepFilters) {
@@ -1216,6 +1223,7 @@ async function loadExpressCatalog(keepFilters) {
         const el = document.getElementById('v3-credits-count');
         if (el) el.textContent = bal;
         renderScreenFooters('express-catalog');
+        state.expressCatalogLoaded = true;
     } catch (e) {
         console.error('Load catalog error:', e);
         grid.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';

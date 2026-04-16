@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
@@ -227,7 +229,16 @@ async def api_auth(request: Request):
             "Сияющая сказка", "Studio Noir",
         ]
         from .services.photosets import get_packs_list
-        packs_list = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store)
+        # Non-blocking: если кеш тёплый — мгновенно; если холодный — макс 2 сек,
+        # потом отдаём пустой featured_packs (background warm заполнит кеш).
+        try:
+            packs_list = await asyncio.wait_for(
+                get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store),
+                timeout=2.0,
+            )
+        except asyncio.TimeoutError:
+            logger.info("Pack list timed out in auth (cache cold), returning empty featured_packs")
+            packs_list = []
         title_to_pack = {str(p.get("title") or "").strip(): p for p in packs_list}
         for title in featured_pack_titles:
             p = title_to_pack.get(title)
@@ -1953,9 +1964,37 @@ routes = [
 ]
 
 
+def _cache_control_middleware(app):
+    """Middleware: Cache-Control на статику (/app/static/*).
+
+    Файлы уже имеют cache busters (?v=77) в шаблоне — при деплое
+    меняется версия, старый кеш инвалидируется.
+    """
+    async def middleware(scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/app/static/"):
+            async def _send_with_cache(message):
+                if message["type"] == "http.response.start":
+                    headers = dict(message.get("headers", []))
+                    new_headers = list(message.get("headers", []))
+                    new_headers.append((b"cache-control", b"public, max-age=31536000, immutable"))
+                    message = {**message, "headers": new_headers}
+                await send(message)
+            await app(scope, receive, _send_with_cache)
+        else:
+            await app(scope, receive, send)
+    return middleware
+
+
 def create_miniapp(store=None):
     """Создаёт Starlette-приложение Mini App."""
     if store:
         set_store(store)
-    app = Starlette(routes=routes)
+    app = Starlette(
+        routes=routes,
+        middleware=[
+            Middleware(GZipMiddleware, minimum_size=500),
+        ],
+    )
+    # Wrap: Cache-Control на статику (ASGI middleware поверх Starlette)
+    app = _cache_control_middleware(app)
     return app

@@ -937,6 +937,25 @@ def run_webhook_server(bot: Any, store: Any, application: Any = None, bot_userna
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
+
+        # Background warm: прогреваем кеш Astria pack data при старте,
+        # чтобы первый /api/auth не ждал 10-20 сек HTTP fan-out к Astria API.
+        try:
+            from prismalab.miniapp.services.photosets import get_packs_list
+            astria_key = os.getenv("PRISMALAB_ASTRIA_API_KEY", "")
+
+            async def _warm_pack_cache():
+                try:
+                    await get_packs_list(astria_api_key=astria_key, store=store)
+                    logger.info("Astria pack cache warmed at startup")
+                except Exception as e:
+                    logger.warning("Failed to warm pack cache: %s", e)
+
+            if astria_key:
+                asyncio.create_task(_warm_pack_cache())
+        except ImportError:
+            pass
+
         while True:
             await asyncio.sleep(3600)
 
