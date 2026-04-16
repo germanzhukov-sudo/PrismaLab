@@ -228,16 +228,13 @@ async def api_auth(request: Request):
             "Алиса в стране чудес", "Обложка модельного агентства",
             "Сияющая сказка", "Studio Noir",
         ]
-        from .services.photosets import get_packs_list
-        # Non-blocking: если кеш тёплый — мгновенно; если холодный — макс 2 сек,
-        # потом отдаём пустой featured_packs (background warm заполнит кеш).
-        try:
-            packs_list = await asyncio.wait_for(
-                get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store),
-                timeout=2.0,
-            )
-        except asyncio.TimeoutError:
-            logger.info("Pack list timed out in auth (cache cold), returning empty featured_packs")
+        from .services.photosets import get_packs_list, is_pack_cache_warm
+        # Auth НИКОГДА не ждёт Astria API. Если кеш тёплый — данные берутся из
+        # кеша мгновенно. Если холодный (старт, warm ещё не завершился) — [].
+        # Background warm в payment.py заполнит кеш при старте сервера.
+        if is_pack_cache_warm():
+            packs_list = await get_packs_list(astria_api_key=ASTRIA_API_KEY, store=store)
+        else:
             packs_list = []
         title_to_pack = {str(p.get("title") or "").strip(): p for p in packs_list}
         for title in featured_pack_titles:

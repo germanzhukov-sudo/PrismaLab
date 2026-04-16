@@ -100,6 +100,18 @@ def clear_caches() -> None:
     _gallery_cache["ts"] = 0.0
 
 
+def is_pack_cache_warm() -> bool:
+    """Проверяет, прогрет ли кеш gallery packs (без HTTP).
+
+    Используется в /api/auth чтобы не блокировать ответ на Astria API.
+    """
+    ts = float(_gallery_cache.get("ts") or 0.0)
+    if ts <= 0.0:
+        return False
+    packs = _gallery_cache.get("packs")
+    return isinstance(packs, dict) and len(packs) > 0
+
+
 # ── Офферы ─────────────────────────────────────────────────────────────
 
 def load_pack_offers() -> list[dict]:

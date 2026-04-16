@@ -1178,10 +1178,15 @@ function filterHistory(mode) {
 // === EXPRESS V3 FLOW ===
 
 async function loadExpressCatalog(keepFilters) {
-    // Кеш: если каталог уже загружен и не смена фильтров — показываем из DOM
+    // Кеш: если каталог уже загружен и не смена фильтров — показываем из DOM.
+    // Обновляем баланс из актуального state (локальные списания после генерации).
     if (!keepFilters && state.expressCatalogLoaded) {
         showScreen('express-catalog');
         updateBalanceDisplays();
+        const cachedBal = state.expressCredits.free_used ? state.expressCredits.fast : (state.expressCredits.fast + 1);
+        const credEl = document.getElementById('v3-credits-count');
+        if (credEl) credEl.textContent = cachedBal;
+        renderScreenFooters('express-catalog');
         return;
     }
     if (!keepFilters) showScreen('express-catalog');
