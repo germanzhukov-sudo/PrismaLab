@@ -72,26 +72,27 @@
 
                     <div class="mb-3">
                         <label class="form-label">Превью (до 4 фото)</label>
-                        {% if previews %}
-                        <div class="row g-2 mb-2">
-                            {% for url in previews %}
-                            <div class="col-3">
-                                <div class="position-relative">
-                                    <img src="{{ url }}" alt="preview {{ loop.index }}"
-                                         style="width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px;">
-                                    <div class="form-check position-absolute top-0 end-0 m-1">
-                                        <input class="form-check-input" type="checkbox"
-                                               name="keep_preview_{{ loop.index0 }}" value="1" checked
-                                               title="Оставить">
-                                    </div>
+                        <div class="row g-2 mb-2" id="slots-grid">
+                            {% for i in range(4) %}
+                            <div class="col-3" data-slot-idx="{{ i }}">
+                                <div class="slot-card position-relative"
+                                     style="aspect-ratio: 2/3; border-radius: 8px; overflow: hidden; border: 2px dashed #dee2e6; background: #f8f9fa; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                                    {% if i < previews|length %}
+                                    <img src="{{ previews[i] }}" data-slot-preview style="width: 100%; height: 100%; object-fit: cover; border-radius: 6px;">
+                                    <button type="button" data-slot-remove
+                                            style="position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border: none; border-radius: 50%; background: rgba(220,53,69,0.95); color: white; font-size: 16px; line-height: 1; cursor: pointer; padding: 0;">&times;</button>
+                                    {% else %}
+                                    <span data-slot-plus style="font-size: 36px; color: #adb5bd; line-height: 1;">+</span>
+                                    {% endif %}
                                 </div>
+                                <input type="file" name="images" accept="image/*" data-slot-input style="display: none;">
+                                {% if i < previews|length %}
+                                <input type="hidden" name="keep_preview_{{ i }}" value="1" data-slot-keep>
+                                {% endif %}
                             </div>
                             {% endfor %}
                         </div>
-                        <small class="text-muted d-block mb-2">Снимите галочку, чтобы удалить фото.</small>
-                        {% endif %}
-                        <input type="file" class="form-control" name="images" accept="image/*" multiple>
-                        <small class="text-muted">JPG/PNG, до {{ 4 - (previews|length if previews else 0) }} файлов. Рекомендуемый размер 400x600px.</small>
+                        <small class="text-muted">JPG/PNG, до 4 файлов. Клик по «+» — выбрать фото, крестик — убрать. Рекомендуемый размер 400x600px.</small>
                     </div>
 
                     <div class="mb-3">
@@ -124,4 +125,62 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const grid = document.getElementById('slots-grid');
+    if (!grid) return;
+
+    function setEmpty(slot) {
+        const card = slot.querySelector('.slot-card');
+        const input = slot.querySelector('input[data-slot-input]');
+        const keep = slot.querySelector('input[data-slot-keep]');
+        card.innerHTML = '<span data-slot-plus style="font-size: 36px; color: #adb5bd; line-height: 1;">+</span>';
+        input.value = '';
+        if (keep) keep.remove();
+    }
+
+    function setImage(slot, src) {
+        const card = slot.querySelector('.slot-card');
+        card.innerHTML =
+            '<img data-slot-preview src="' + src + '" style="width:100%;height:100%;object-fit:cover;border-radius:6px;">' +
+            '<button type="button" data-slot-remove style="position:absolute;top:6px;right:6px;width:26px;height:26px;border:none;border-radius:50%;background:rgba(220,53,69,0.95);color:white;font-size:16px;line-height:1;cursor:pointer;padding:0;">&times;</button>';
+    }
+
+    grid.addEventListener('click', function(e) {
+        const slot = e.target.closest('[data-slot-idx]');
+        if (!slot) return;
+
+        // Крестик — убрать фото
+        if (e.target.matches('[data-slot-remove]')) {
+            e.preventDefault();
+            setEmpty(slot);
+            return;
+        }
+
+        // Клик по пустому слоту (или плюсику) — открыть file picker
+        if (e.target.matches('[data-slot-plus]') || e.target.classList.contains('slot-card')) {
+            const card = slot.querySelector('.slot-card');
+            // Только если слот пустой (нет img)
+            if (!card.querySelector('img')) {
+                slot.querySelector('input[data-slot-input]').click();
+            }
+        }
+    });
+
+    // Выбор файла в любом из инпутов
+    grid.querySelectorAll('input[data-slot-input]').forEach(function(input) {
+        input.addEventListener('change', function() {
+            const file = this.files && this.files[0];
+            if (!file) return;
+            const slot = this.closest('[data-slot-idx]');
+            const reader = new FileReader();
+            reader.onload = function(ev) { setImage(slot, ev.target.result); };
+            reader.readAsDataURL(file);
+        });
+    });
+})();
+</script>
 {% endblock %}
