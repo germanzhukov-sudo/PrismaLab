@@ -97,8 +97,15 @@ class PrismaLabStore:
         if self._use_pg:
             from psycopg2.pool import ThreadedConnectionPool
             db_url = _pg_url_with_ssl(DATABASE_URL)
+            # TCP keepalive: ОС шлёт пакеты каждые 30с, dead connection
+            # обнаруживается за ~60с вместо ожидания TCP RST (минуты).
             self._pg_pool = ThreadedConnectionPool(
-                minconn=1, maxconn=50, dsn=db_url
+                minconn=1, maxconn=50, dsn=db_url,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=5,
+                connect_timeout=10,
             )
             logger.info("База данных: PostgreSQL (Supabase)")
         else:
@@ -112,7 +119,27 @@ class PrismaLabStore:
         return conn
 
     def _connect_pg(self):
-        """Возвращает контекст-менеджер: при выходе соединение возвращается в пул."""
+        """Возвращает контекст-менеджер: при выходе соединение возвращается в пул.
+
+        Pre-ping: если connection из пула мёртвый (idle timeout на стороне
+        Supabase/PgBouncer), делаем SELECT 1; если падает — выкидываем
+        connection и берём новый. Добавляет ~1мс к запросу, но гарантирует
+        что первый запрос после idle не падает в 5-7сек TCP re-handshake.
+        """
+        import psycopg2
+        for _ in range(2):
+            conn = self._pg_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return _PooledConnection(self._pg_pool, conn)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                # Мёртвый connection — выкидываем из пула, берём новый на след итерации
+                try:
+                    self._pg_pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+        # Если второй раз не получилось — отдаём как есть, пусть рушится в вызывающем коде с нормальным exception
         conn = self._pg_pool.getconn()
         return _PooledConnection(self._pg_pool, conn)
 
